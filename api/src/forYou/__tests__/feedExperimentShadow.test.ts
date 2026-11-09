@@ -42,28 +42,33 @@ const served = (over: Partial<FeedExperiment> = {}): FeedExperiment => ({
 	...over,
 })
 const metric = (name: string) => new RegExp(`${name}\\} (\\d+)`).exec(renderFeedExperimentMetrics())?.[1]
-const settle = () => new Promise((r) => setTimeout(r, 0))
+
+const timeout = Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})
+const MEMBER = "11111111-2222-4333-8444-555555555555"
 
 function make(
-	rows: () => Promise<GeoCardRow[]>,
+	rows: (entityId: string) => Promise<GeoCardRow[]>,
 	over: {
 		space?: string | null
 		enabled?: boolean
-		intervalMs?: number
-		maxInFlight?: number
-		now?: () => number
+		experiment?: (userId: string) => Promise<FeedExperiment | null>
+		member?: string | null
 	} = {},
 ) {
 	const warn = vi.fn()
-	const geoDb: GeoDbCardClient = {readCard: vi.fn(rows)}
+	const geoDb: GeoDbCardClient = {readCard: vi.fn(({entityId}) => rows(entityId))}
+	const readExperiment = vi.fn((_db: unknown, userId: string) => (over.experiment ?? (async () => served()))(userId))
 	const shadow = createFeedExperimentShadow({
-		config: {enabled: over.enabled ?? true, maxInFlight: over.maxInFlight ?? 2, intervalMs: over.intervalMs ?? 0},
+		config: {enabled: over.enabled ?? true, intervalMs: 1000},
+		db: {execute: vi.fn()},
 		geoDb,
 		systemSpaceOf: async () => (over.space === undefined ? "a".repeat(32) : over.space),
 		log: {warn},
-		now: over.now,
+		readExperiment,
+		sampleMember: async () => (over.member === undefined ? null : over.member),
+		randomUserId: () => USER,
 	})
-	return {shadow, geoDb, warn}
+	return {shadow, geoDb, warn, readExperiment}
 }
 
 beforeEach(() => __resetFeedExperimentMetricsForTests())
@@ -151,99 +156,114 @@ describe("experimentDiffs", () => {
 })
 
 describe("shadow", () => {
-	it("is silent and empty until mounted, and off does nothing", async () => {
+	it("is silent and empty until mounted, and off starts no timer", async () => {
 		expect(renderFeedExperimentMetrics()).toBe("")
+		const spy = vi.spyOn(globalThis, "setInterval")
 		const {shadow, geoDb} = make(async () => card(), {enabled: false})
-		shadow.compare(served(), USER)
-		await settle()
+		shadow.start()()
+		expect(spy).not.toHaveBeenCalled()
 		expect(geoDb.readCard).not.toHaveBeenCalled()
 		expect(metric('result="match"')).toBe("0")
+		spy.mockRestore()
 	})
-	it("counts a match and a mismatch, reading the served experiment's record", async () => {
+	it("counts a match and a mismatch for a sampled hash user, reading the active experiment's record", async () => {
 		const a = make(async () => card())
-		a.shadow.compare(served(), USER)
-		await settle()
+		await a.shadow.runOnce()
 		expect(metric('result="match"')).toBe("1")
+		expect(a.readExperiment).toHaveBeenCalledWith(expect.anything(), USER)
 		expect(a.geoDb.readCard).toHaveBeenCalledWith({
 			geoSpaceId: "a".repeat(32),
 			entityId: feedExperimentRecordId("exp-1"),
 		})
 		const b = make(async () => card({armB: "best"}))
-		b.shadow.compare(served(), USER)
-		await settle()
+		await b.shadow.runOnce()
 		expect(metric('result="mismatch"')).toBe("1")
 		expect(b.warn).toHaveBeenCalled()
 	})
+	it("compares nothing when no experiment is active", async () => {
+		const a = make(async () => card(), {experiment: async () => null})
+		await a.shadow.runOnce()
+		expect(a.geoDb.readCard).not.toHaveBeenCalled()
+		expect(metric('result="match"')).toBe("0")
+	})
 	it("counts unsupported for a missing Space, a missing record and an ambiguous one", async () => {
-		make(async () => card(), {space: null}).shadow.compare(served(), USER)
-		make(async () => []).shadow.compare(served(), USER)
-		make(async () => card().filter((r) => r.prop !== COL.salt)).shadow.compare(served(), USER)
-		await settle()
+		await make(async () => card(), {space: null}).shadow.runOnce()
+		await make(async () => []).shadow.runOnce()
+		await make(async () => card().filter((r) => r.prop !== COL.salt)).shadow.runOnce()
 		expect(metric('result="unsupported"')).toBe("3")
 		for (const r of ["system_space_missing", "record_missing", "ambiguous_record"])
 			expect(metric(`reason="${r}"`)).toBe("1")
 	})
-	it("compares a member's value with the member record, not the hash", async () => {
-		const reads = (member: GeoCardRow[]) => {
-			const geoDb: GeoDbCardClient = {
-				readCard: vi.fn(async ({entityId}) =>
-					entityId === feedExperimentMemberRecordId("exp-1", USER) ? member : card(),
-				),
-			}
-			const shadow = createFeedExperimentShadow({
-				config: {enabled: true, maxInFlight: 2, intervalMs: 0},
-				geoDb,
-				systemSpaceOf: async () => "a".repeat(32),
-				log: {warn: vi.fn()},
+	it("also samples a member and compares its value with the member record, not the hash", async () => {
+		const reads = (member: GeoCardRow[]) =>
+			make(async (entityId) => (entityId === feedExperimentMemberRecordId("exp-1", MEMBER) ? member : card()), {
+				member: MEMBER,
+				// The served value disagrees with the hash on purpose: a member's value wins.
+				experiment: async (userId) =>
+					userId === MEMBER ? served({assignment: "member", interleaved: !memberHash}) : served(),
 			})
-			return {shadow, geoDb}
-		}
-		// The served value disagrees with the hash on purpose: a member's value wins.
-		const memberServed = served({assignment: "member", interleaved: !interleaved})
-		const a = reads([{prop: MCOL.interleaved, raw: String(!interleaved)}])
-		a.shadow.compare(memberServed, USER)
-		await settle()
-		expect(metric('result="match"')).toBe("1")
-		expect(a.geoDb.readCard).toHaveBeenCalledTimes(2)
-		reads([{prop: MCOL.interleaved, raw: String(interleaved)}]).shadow.compare(memberServed, USER)
-		await settle()
+		const memberHash = hashInterleaved(SALT, MEMBER, Number(SHARE))
+		const a = reads([{prop: MCOL.interleaved, raw: String(!memberHash)}])
+		await a.shadow.runOnce()
+		// the hash user and the member both match
+		expect(metric('result="match"')).toBe("2")
+		expect(a.geoDb.readCard).toHaveBeenCalledTimes(3)
+		await reads([{prop: MCOL.interleaved, raw: String(memberHash)}]).shadow.runOnce()
 		expect(metric('result="mismatch"')).toBe("1")
-		reads([]).shadow.compare(memberServed, USER)
-		await settle()
+		await reads([]).shadow.runOnce()
 		expect(metric('reason="member_record_missing"')).toBe("1")
-		// A hash-assigned user reads only the experiment record.
-		const h = reads([])
-		h.shadow.compare(served(), USER)
-		await settle()
-		expect(h.geoDb.readCard).toHaveBeenCalledTimes(1)
 	})
-	it("counts a failed read without throwing", async () => {
-		make(async () => {
+	it("counts a geo-db failure as failed, a Postgres one as reference_timeout or reference_failed", async () => {
+		await make(async () => {
 			throw new GeoDbError("timeout", "down")
-		}).shadow.compare(served(), USER)
-		await settle()
+		}).shadow.runOnce()
+		expect(metric('result="failed"')).toBe("1")
+		const slow = make(async () => card(), {
+			experiment: async () => {
+				throw timeout
+			},
+		})
+		await slow.shadow.runOnce()
+		expect(metric('result="reference_timeout"')).toBe("1")
+		expect(slow.geoDb.readCard).not.toHaveBeenCalled()
+		await make(async () => card(), {
+			experiment: async () => {
+				throw new Error("connection refused")
+			},
+		}).shadow.runOnce()
+		expect(metric('result="reference_failed"')).toBe("1")
 		expect(metric('result="failed"')).toBe("1")
 	})
-	it("compares at most once an interval, and drops past maxInFlight", async () => {
-		let t = 0
-		const a = make(async () => card(), {intervalMs: 1000, now: () => t})
-		a.shadow.compare(served(), USER)
-		a.shadow.compare(served(), USER)
-		await settle()
-		expect(a.geoDb.readCard).toHaveBeenCalledTimes(1)
-		t = 1000
-		a.shadow.compare(served(), USER)
-		await settle()
-		expect(a.geoDb.readCard).toHaveBeenCalledTimes(2)
-		const b = make(() => new Promise<GeoCardRow[]>(() => {}), {maxInFlight: 1})
-		b.shadow.compare(served(), USER)
-		await settle()
-		b.shadow.compare(served(), USER)
-		expect(metric('reason="busy"')).toBe("1")
+	it("runs on the timer without a request, never overlaps itself, and stops", async () => {
+		vi.useFakeTimers()
+		try {
+			let release: (rows: GeoCardRow[]) => void = () => {}
+			const a = make(
+				() =>
+					new Promise<GeoCardRow[]>((r) => {
+						release = r
+					}),
+			)
+			const stop = a.shadow.start()
+			await vi.advanceTimersByTimeAsync(1000)
+			expect(a.geoDb.readCard).toHaveBeenCalledTimes(1)
+			await vi.advanceTimersByTimeAsync(2000)
+			expect(a.geoDb.readCard).toHaveBeenCalledTimes(1)
+			expect(metric('reason="busy"')).toBe("2")
+			release(card())
+			await vi.advanceTimersByTimeAsync(0)
+			expect(metric('result="match"')).toBe("1")
+			stop()
+			await vi.advanceTimersByTimeAsync(5000)
+			expect(a.geoDb.readCard).toHaveBeenCalledTimes(1)
+		} finally {
+			vi.useRealTimers()
+		}
 	})
-	it("reads its flag off by default", () => {
+	it("reads its flag off by default, and a five-minute interval", () => {
 		expect(readFeedExperimentShadowConfig({}).enabled).toBe(false)
 		expect(readFeedExperimentShadowConfig({GEODB_FEED_EXPERIMENT_SHADOW: "1"}).enabled).toBe(true)
 		expect(readFeedExperimentShadowConfig({GEODB_ENTITY_RANKING_CONFIG_SHADOW: "1"}).enabled).toBe(false)
+		expect(readFeedExperimentShadowConfig({}).intervalMs).toBe(300_000)
 	})
 })

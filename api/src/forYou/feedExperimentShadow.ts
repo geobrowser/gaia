@@ -3,21 +3,27 @@
  *
  * `personalization.feed_experiment_for_user` (plpgsql, api/drizzle/0102) picks the active experiment and the user's
  * arm; `readExperiment` (queries.ts) is its one TypeScript caller. The geodb-feeder mirrors `feed_experiments` into
- * the `config` system Space, one record per experiment id (GEODB_FEED_EXPERIMENTS backfill). When the flag is on, the
- * For you route reads the record of the experiment it served, in the background, and counts whether geo-db agrees:
- * the record is active, holds the same two arms and, for a user assigned by hash (not a member), recomputes the same
- * `interleaved` from the record's salt and share. For a member (`assignment === "member"`) it reads the
- * `feed_experiment_members` record (keyed experiment, user) and compares its `interleaved` with the served one; a missing
- * member record counts as unsupported (`member_record_missing`). It does not check that a hash-assigned user has no member
- * record (an absent record cannot tell "not a member" from "not backfilled"). `gaia_api_feed_experiment_shadow_total{result}`. It never changes, delays or fails a response:
- * bounded by `maxInFlight`, throttled to one comparison per `intervalMs`, and every error is swallowed into a counter.
+ * the `config` system Space, one record per experiment id (GEODB_FEED_EXPERIMENTS backfill). When the flag is on, a
+ * background sampler (`createIntervalSampler`, every GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS, default five minutes) asks
+ * Postgres which experiment a user is in, as the route does, and counts whether geo-db agrees: the record is active, holds
+ * the same two arms and, for a user assigned by hash (not a member), recomputes the same `interleaved` from the record's
+ * salt and share. Each pass samples a random UUID (the hash path: the function only hashes it) and, when the members table
+ * has rows, one random member: its `interleaved` is compared with the `feed_experiment_members` record (keyed experiment,
+ * user); a missing member record counts as unsupported (`member_record_missing`). It does not check that a hash-assigned user
+ * has no member record (an absent record cannot tell "not a member" from "not backfilled"). No active experiment means
+ * nothing to compare. `gaia_api_feed_experiment_shadow_total{result}`. It used to run inside /for-you requests, throttled
+ * per pod; it now costs a request nothing. Never changes a response; every error is swallowed into a counter: `failed` is
+ * geo-db's, `reference_timeout` / `reference_failed` are the Postgres read's (referenceSide.ts).
  */
 import {createHash} from "node:crypto"
+import {sql} from "drizzle-orm"
 import type {GeoCardRow} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
+import {createIntervalSampler, type IntervalSampler, readIntervalSamplerConfig} from "../geodb/intervalSampler"
+import {failureResult, viaReference} from "../geodb/referenceSide"
 import {idPart, recordEntityId, textPart} from "../proposals/governance/recordKey"
 import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
-import type {FeedExperiment} from "./queries"
+import {type Database, type FeedExperiment, readExperiment} from "./queries"
 
 /** The feeder's pins (geodb-feeder/src/recordKinds.ts, feedExperiment); a test holds them to that file. */
 export const FEED_EXPERIMENT_KIND = "285dde3545964ab28ee580344b816704"
@@ -82,23 +88,13 @@ export function hashInterleaved(salt: string, userId: string, share: number): bo
 	return bucket / 4294967296 < share
 }
 
-export type FeedExperimentShadowConfig = {enabled: boolean; maxInFlight: number; intervalMs: number}
-
-const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
-	const n = Number(raw)
-	return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback
-}
+export type FeedExperimentShadowConfig = {enabled: boolean; intervalMs: number}
 
 export function readFeedExperimentShadowConfig(env: Record<string, string | undefined>): FeedExperimentShadowConfig {
-	const flag = env.GEODB_FEED_EXPERIMENT_SHADOW?.trim().toLowerCase()
-	return {
-		enabled: flag === "1" || flag === "on" || flag === "true",
-		maxInFlight: wholeNumber(env.GEODB_FEED_EXPERIMENT_SHADOW_MAX_IN_FLIGHT, 2, 16),
-		intervalMs: wholeNumber(env.GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS, 10_000, 3_600_000),
-	}
+	return readIntervalSamplerConfig(env, "GEODB_FEED_EXPERIMENT_SHADOW", "GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS")
 }
 
-export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
+export const RESULTS = ["match", "mismatch", "unsupported", "failed", "reference_timeout", "reference_failed"] as const
 export const UNSUPPORTED_REASONS = [
 	"system_space_missing",
 	"record_missing",
@@ -120,7 +116,7 @@ const bump = (map: Map<string, number>, key: string): void => {
 export function renderFeedExperimentMetrics(): string {
 	if (!active) return ""
 	const lines = [
-		"# HELP gaia_api_feed_experiment_shadow_total The feed experiment geo-db holds (active, arms, hash assignment) against the one the For you route served from Postgres, by result: match, mismatch, unsupported (geo-db cannot answer) or failed (geo-db read failed).",
+		"# HELP gaia_api_feed_experiment_shadow_total The feed experiment geo-db holds (active, arms, hash assignment) against the one the For you route served from Postgres, by result: match, mismatch, unsupported (geo-db cannot answer) failed (geo-db read failed), reference_timeout (the Postgres read hit its statement timeout) or reference_failed (any other Postgres error).",
 		"# TYPE gaia_api_feed_experiment_shadow_total counter",
 	]
 	for (const r of RESULTS) lines.push(`gaia_api_feed_experiment_shadow_total{result="${r}"} ${results.get(r) ?? 0}`)
@@ -155,44 +151,64 @@ export function experimentDiffs(served: FeedExperiment, held: HeldExperiment, us
 	return diffs
 }
 
-export type FeedExperimentShadow = {compare(served: FeedExperiment, userId: string): void}
+export type FeedExperimentShadow = IntervalSampler
+
+/** A random user of `feed_experiment_members`, or null when the table is empty. */
+export async function sampleMemberUserId(db: Database): Promise<string | null> {
+	const result = await db.execute(
+		sql`SELECT user_id::text AS user_id FROM personalization.feed_experiment_members ORDER BY random() LIMIT 1`,
+	)
+	const id = ((result as {rows?: Record<string, unknown>[]}).rows ?? [])[0]?.user_id
+	return typeof id === "string" ? id : null
+}
 
 export function createFeedExperimentShadow(deps: {
 	config: FeedExperimentShadowConfig
+	db: Database
 	geoDb: GeoDbCardClient
 	systemSpaceOf: AnySystemSpaceLookup
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
-	now?: () => number
+	/** The Postgres references; the route's own `readExperiment` and a random-member read unless a test supplies them. */
+	readExperiment?: (db: Database, userId: string) => Promise<FeedExperiment | null>
+	sampleMember?: (db: Database) => Promise<string | null>
+	randomUserId?: () => string
 }): FeedExperimentShadow {
-	const {config, geoDb, systemSpaceOf, log} = deps
-	const now = deps.now ?? Date.now
+	const {config, db, geoDb, systemSpaceOf, log} = deps
+	const read = deps.readExperiment ?? readExperiment
+	const sampleMember = deps.sampleMember ?? sampleMemberUserId
+	const randomUserId = deps.randomUserId ?? (() => crypto.randomUUID())
 	active = true
-	let inFlight = 0
-	let lastAt = Number.NEGATIVE_INFINITY
 	let logged = 0
 
-	async function run(served: FeedExperiment, userId: string) {
-		try {
-			const geoSpaceId = await systemSpaceOf("config")
-			if (!geoSpaceId) throw new Unsupported("system_space_missing")
-			const held = decodeExperiment(
-				await geoDb.readCard({geoSpaceId, entityId: feedExperimentRecordId(served.id)}),
+	async function compare(served: FeedExperiment, userId: string) {
+		const geoSpaceId = await systemSpaceOf("config")
+		if (!geoSpaceId) throw new Unsupported("system_space_missing")
+		const held = decodeExperiment(await geoDb.readCard({geoSpaceId, entityId: feedExperimentRecordId(served.id)}))
+		if (held === null) throw new Unsupported("record_missing")
+		const diffs = experimentDiffs(served, held, userId)
+		// A member's value comes from feed_experiment_members, which wins over the hash: compare it with the member record.
+		if (served.assignment === "member") {
+			const member = decodeMemberInterleaved(
+				await geoDb.readCard({geoSpaceId, entityId: feedExperimentMemberRecordId(served.id, userId)}),
 			)
-			if (held === null) throw new Unsupported("record_missing")
-			const diffs = experimentDiffs(served, held, userId)
-			// A member's value comes from feed_experiment_members, which wins over the hash: compare it with the member record.
-			if (served.assignment === "member") {
-				const member = decodeMemberInterleaved(
-					await geoDb.readCard({geoSpaceId, entityId: feedExperimentMemberRecordId(served.id, userId)}),
-				)
-				if (member === null) throw new Unsupported("member_record_missing")
-				if (member !== served.interleaved) diffs.push("member_interleaved")
-			}
-			bump(results, diffs.length === 0 ? "match" : "mismatch")
-			if (diffs.length > 0 && logged < 20) {
-				logged++
-				log.warn("feed experiment shadow mismatch", {experiment: served.id, fields: diffs})
-			}
+			if (member === null) throw new Unsupported("member_record_missing")
+			if (member !== served.interleaved) diffs.push("member_interleaved")
+		}
+		bump(results, diffs.length === 0 ? "match" : "mismatch")
+		if (diffs.length > 0 && logged < 20) {
+			logged++
+			log.warn("feed experiment shadow mismatch", {experiment: served.id, fields: diffs})
+		}
+	}
+
+	/** One sampled user: the reference from Postgres, then the comparison. Counts its own outcome. */
+	async function one(userIdOf: () => Promise<string | null>) {
+		try {
+			const userId = await viaReference(userIdOf())
+			if (userId === null) return
+			const served = await viaReference(read(db, userId))
+			if (served === null) return
+			await compare(served, userId)
 		} catch (error) {
 			if (error instanceof Unsupported) {
 				bump(results, "unsupported")
@@ -201,29 +217,28 @@ export function createFeedExperimentShadow(deps: {
 				bump(results, "unsupported")
 				bump(unsupported, "ambiguous_record")
 			} else {
-				bump(results, "failed")
-				if (!(error instanceof GeoDbError)) log.warn("feed experiment shadow failed", {error: String(error)})
+				const result = failureResult(error)
+				bump(results, result)
+				if (result !== "failed" || !(error instanceof GeoDbError))
+					log.warn("feed experiment shadow failed", {result, error: String(error)})
 			}
 		}
 	}
 
-	return {
-		compare(served, userId) {
-			if (!config.enabled) return
-			const t = now()
-			if (t - lastAt < config.intervalMs) return
-			lastAt = t
-			if (inFlight >= config.maxInFlight) {
-				bump(results, "unsupported")
-				bump(unsupported, "busy")
-				return
-			}
-			inFlight++
-			void run(served, userId)
-				.catch(() => {})
-				.finally(() => {
-					inFlight--
-				})
-		},
+	async function pass() {
+		await one(async () => randomUserId())
+		await one(() => sampleMember(db))
 	}
+
+	return createIntervalSampler({
+		enabled: config.enabled,
+		intervalMs: config.intervalMs,
+		pass,
+		onBusy: () => {
+			bump(results, "unsupported")
+			bump(unsupported, "busy")
+		},
+		log,
+		label: "feed experiment shadow",
+	})
 }

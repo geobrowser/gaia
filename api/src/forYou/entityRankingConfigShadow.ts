@@ -4,16 +4,20 @@
  * The ranking plpgsql functions read `entity_ranking_config` inside Postgres, which cannot read geo-db, so they are not
  * shadowed. The one TypeScript reader is `readSettings` (queries.ts), which serves `tau_seconds` to the For you route.
  * The geodb-feeder mirrors the table's one row into the `config` system Space (GEODB_ENTITY_RANKING_CONFIG backfill).
- * When the flag is on, the For you route reads the record back after it has read the settings, in the background, and
- * counts whether the record's `tau_seconds` equals the one it served: `gaia_api_entity_ranking_config_shadow_total{result}`.
- * The other 30 columns are checked by the feeder's gate (entityRankingConfigGate.ts), not live. It never changes, delays
- * or fails a response: bounded by `maxInFlight`, throttled to one comparison per `intervalMs` (the row changes by
- * migration or operator SQL only), and every error is swallowed into a counter.
+ * When the flag is on, a background sampler (`createIntervalSampler`, every GEODB_ENTITY_RANKING_CONFIG_SHADOW_INTERVAL_MS,
+ * default five minutes) reads the settings from Postgres the way the route does, reads the record from geo-db and counts
+ * whether `tau_seconds` is equal: `gaia_api_entity_ranking_config_shadow_total{result}`. The other 30 columns are checked by
+ * the feeder's gate (entityRankingConfigGate.ts), not live. It used to run inside /for-you requests, throttled per pod, and
+ * so gave next to no samples; it now costs a request nothing. Never changes a response; every error is swallowed into a
+ * counter: `failed` is geo-db's, `reference_timeout` / `reference_failed` are the Postgres read's (referenceSide.ts).
  */
 import type {GeoCardRow} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
+import {createIntervalSampler, type IntervalSampler, readIntervalSamplerConfig} from "../geodb/intervalSampler"
+import {failureResult, viaReference} from "../geodb/referenceSide"
 import {intPart, recordEntityId} from "../proposals/governance/recordKey"
 import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
+import {type Database, type ForYouSettings, readSettings} from "./queries"
 
 /** The feeder's pins (geodb-feeder/src/recordKinds.ts, entityRankingConfig); a test holds them to that file. */
 export const ENTITY_RANKING_CONFIG_KIND = "ee4e36fde6334be9b6d45085b5f6fb34"
@@ -39,25 +43,19 @@ export function decodeTauSeconds(rows: GeoCardRow[]): number | null {
 	return n
 }
 
-export type EntityRankingConfigShadowConfig = {enabled: boolean; maxInFlight: number; intervalMs: number}
-
-const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
-	const n = Number(raw)
-	return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback
-}
+export type EntityRankingConfigShadowConfig = {enabled: boolean; intervalMs: number}
 
 export function readEntityRankingConfigShadowConfig(
 	env: Record<string, string | undefined>,
 ): EntityRankingConfigShadowConfig {
-	const flag = env.GEODB_ENTITY_RANKING_CONFIG_SHADOW?.trim().toLowerCase()
-	return {
-		enabled: flag === "1" || flag === "on" || flag === "true",
-		maxInFlight: wholeNumber(env.GEODB_ENTITY_RANKING_CONFIG_SHADOW_MAX_IN_FLIGHT, 2, 16),
-		intervalMs: wholeNumber(env.GEODB_ENTITY_RANKING_CONFIG_SHADOW_INTERVAL_MS, 10_000, 3_600_000),
-	}
+	return readIntervalSamplerConfig(
+		env,
+		"GEODB_ENTITY_RANKING_CONFIG_SHADOW",
+		"GEODB_ENTITY_RANKING_CONFIG_SHADOW_INTERVAL_MS",
+	)
 }
 
-export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
+export const RESULTS = ["match", "mismatch", "unsupported", "failed", "reference_timeout", "reference_failed"] as const
 export const UNSUPPORTED_REASONS = ["system_space_missing", "record_missing", "ambiguous_record", "busy"] as const
 export type Result = (typeof RESULTS)[number]
 export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
@@ -73,7 +71,7 @@ const bump = (map: Map<string, number>, key: string): void => {
 export function renderEntityRankingConfigMetrics(): string {
 	if (!active) return ""
 	const lines = [
-		"# HELP gaia_api_entity_ranking_config_shadow_total The entity_ranking_config tau_seconds geo-db holds against the one the For you route served from Postgres, by result: match, mismatch, unsupported (geo-db cannot answer) or failed (geo-db read failed).",
+		"# HELP gaia_api_entity_ranking_config_shadow_total The entity_ranking_config tau_seconds geo-db holds against the one the For you route served from Postgres, by result: match, mismatch, unsupported (geo-db cannot answer) failed (geo-db read failed), reference_timeout (the Postgres read hit its statement timeout) or reference_failed (any other Postgres error).",
 		"# TYPE gaia_api_entity_ranking_config_shadow_total counter",
 	]
 	for (const r of RESULTS)
@@ -99,24 +97,25 @@ class Unsupported extends Error {
 	}
 }
 
-export type EntityRankingConfigShadow = {compare(servedTauSeconds: number): void}
+export type EntityRankingConfigShadow = IntervalSampler
 
 export function createEntityRankingConfigShadow(deps: {
 	config: EntityRankingConfigShadowConfig
+	db: Database
 	geoDb: GeoDbCardClient
 	systemSpaceOf: AnySystemSpaceLookup
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
-	now?: () => number
+	/** The Postgres reference; the route's own `readSettings` unless a test supplies one. */
+	readSettings?: (db: Database) => Promise<ForYouSettings>
 }): EntityRankingConfigShadow {
-	const {config, geoDb, systemSpaceOf, log} = deps
-	const now = deps.now ?? Date.now
+	const {config, db, geoDb, systemSpaceOf, log} = deps
+	const read = deps.readSettings ?? readSettings
 	active = true
-	let inFlight = 0
-	let lastAt = Number.NEGATIVE_INFINITY
 	let logged = 0
 
-	async function run(served: number) {
+	async function pass() {
 		try {
+			const served = (await viaReference(read(db))).tauSeconds
 			const geoSpaceId = await systemSpaceOf("config")
 			if (!geoSpaceId) throw new Unsupported("system_space_missing")
 			const held = decodeTauSeconds(await geoDb.readCard({geoSpaceId, entityId: entityRankingConfigRecordId()}))
@@ -135,30 +134,23 @@ export function createEntityRankingConfigShadow(deps: {
 				bump(results, "unsupported")
 				bump(unsupported, "ambiguous_record")
 			} else {
-				bump(results, "failed")
-				if (!(error instanceof GeoDbError))
-					log.warn("entity-ranking config shadow failed", {error: String(error)})
+				const result = failureResult(error)
+				bump(results, result)
+				if (result !== "failed" || !(error instanceof GeoDbError))
+					log.warn("entity-ranking config shadow failed", {result, error: String(error)})
 			}
 		}
 	}
 
-	return {
-		compare(served) {
-			if (!config.enabled) return
-			const t = now()
-			if (t - lastAt < config.intervalMs) return
-			lastAt = t
-			if (inFlight >= config.maxInFlight) {
-				bump(results, "unsupported")
-				bump(unsupported, "busy")
-				return
-			}
-			inFlight++
-			void run(served)
-				.catch(() => {})
-				.finally(() => {
-					inFlight--
-				})
+	return createIntervalSampler({
+		enabled: config.enabled,
+		intervalMs: config.intervalMs,
+		pass,
+		onBusy: () => {
+			bump(results, "unsupported")
+			bump(unsupported, "busy")
 		},
-	}
+		log,
+		label: "entity-ranking config shadow",
+	})
 }

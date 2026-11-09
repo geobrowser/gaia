@@ -287,39 +287,43 @@ log.info("Proposals routes enabled")
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
 // GAIA_INTERNAL_TOKEN is set, so without it /internal/* does not exist (404). Every request must
 // carry the token; see src/forYou/router.ts. A short token is refused rather than mounted.
-// GEODB_FOR_YOU_CONFIG_SHADOW (off by default) also reads the keyed for_you_config record from geo-db after the For you
-// route reads its settings and counts whether it equals them (gaia_api_for_you_config_shadow_total). Never changes a response.
+// GEODB_FOR_YOU_CONFIG_SHADOW (off by default) starts a timer (default every five minutes) that reads the For you settings from
+// Postgres and the keyed for_you_config record from geo-db and counts whether they are equal (gaia_api_for_you_config_shadow_total).
+// Background only: a /for-you request does nothing for it. Never changes a response.
 const forYouConfigShadowConfig = readForYouConfigShadowConfig(process.env)
-const forYouConfigShadow = forYouConfigShadowConfig.enabled
-	? createForYouConfigShadow({
-			config: forYouConfigShadowConfig,
-			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
-			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
-			log,
-		})
-	: null
-// GEODB_ENTITY_RANKING_CONFIG_SHADOW (off by default) does the same for the tau_seconds the route served from
+if (forYouConfigShadowConfig.enabled) {
+	createForYouConfigShadow({
+		config: forYouConfigShadowConfig,
+		db,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
+}
+// GEODB_ENTITY_RANKING_CONFIG_SHADOW (off by default) does the same for the tau_seconds the route serves from
 // entity_ranking_config (gaia_api_entity_ranking_config_shadow_total). Never changes a response.
 const entityRankingConfigShadowConfig = readEntityRankingConfigShadowConfig(process.env)
-const entityRankingConfigShadow = entityRankingConfigShadowConfig.enabled
-	? createEntityRankingConfigShadow({
-			config: entityRankingConfigShadowConfig,
-			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
-			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
-			log,
-		})
-	: null
-// GEODB_FEED_EXPERIMENT_SHADOW (off by default) compares the feed experiment the route served with geo-db's record of it
+if (entityRankingConfigShadowConfig.enabled) {
+	createEntityRankingConfigShadow({
+		config: entityRankingConfigShadowConfig,
+		db,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
+}
+// GEODB_FEED_EXPERIMENT_SHADOW (off by default) compares the feed experiment Postgres assigns a sampled user with geo-db's record of it
 // (gaia_api_feed_experiment_shadow_total). Never changes a response.
 const feedExperimentShadowConfig = readFeedExperimentShadowConfig(process.env)
-const feedExperimentShadow = feedExperimentShadowConfig.enabled
-	? createFeedExperimentShadow({
-			config: feedExperimentShadowConfig,
-			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
-			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
-			log,
-		})
-	: null
+if (feedExperimentShadowConfig.enabled) {
+	createFeedExperimentShadow({
+		config: feedExperimentShadowConfig,
+		db,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
+}
 // GEODB_ACCOUNT_WEIGHTS_SHADOW (off by default) compares pair-fit candidates' account weight with geo-db's derived collection 5
 // (gaia_api_account_weights_shadow_total), sampled and throttled, in the background. Never changes a response.
 const accountWeightsShadowConfig = readAccountWeightsShadowConfig(process.env)
@@ -454,9 +458,6 @@ const internalRoutes = mountInternalRoutes(
 	app,
 	db,
 	process.env.GAIA_INTERNAL_TOKEN,
-	forYouConfigShadow,
-	entityRankingConfigShadow,
-	feedExperimentShadow,
 	accountWeightsShadow,
 	userVotesShadow,
 )

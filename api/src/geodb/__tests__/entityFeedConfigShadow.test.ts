@@ -236,6 +236,30 @@ describe("shadow", () => {
 		expect(metric('table="entity_type_exclusions",result="mismatch"')).toBe("1")
 		expect(metric('table="entity_feed_blocklist",result="failed"')).toBe("1")
 	})
+	it("counts a Postgres sample failure as reference_timeout or reference_failed, not failed", async () => {
+		const readers = {typeWeight: vi.fn(), typeExclusion: vi.fn(), feedBlock: vi.fn()}
+		const errors = [
+			Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"}),
+			new Error("connection refused"),
+			new Error("connection refused"),
+		]
+		let n = 0
+		const shadow = createEntityFeedConfigShadow({
+			config: allOn,
+			db: {} as Database,
+			readers,
+			log: {warn: vi.fn()},
+			sampleRows: async () => {
+				throw errors[n++]
+			},
+		})
+		await shadow.runOnce()
+		expect(metric('table="entity_type_weights",result="reference_timeout"')).toBe("1")
+		expect(metric('table="entity_type_exclusions",result="reference_failed"')).toBe("1")
+		expect(metric('table="entity_feed_blocklist",result="reference_failed"')).toBe("1")
+		expect(metric('table="entity_type_weights",result="failed"')).toBe("0")
+		expect(readers.typeWeight).not.toHaveBeenCalled()
+	})
 	it("does nothing when every flag is off", async () => {
 		const typeWeight = vi.fn()
 		const off = {

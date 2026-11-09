@@ -17,7 +17,9 @@
  *  - mismatch: the record holds a different value, or two values for one column;
  *  - missing: geo-db has no record for a row Postgres has (the backfill Job was not run, or the row is newer than it);
  *  - unsupported: the `config` system Space is not in the system-space map;
- *  - failed: a read failed.
+ *  - failed: a geo-db read failed;
+ *  - reference_timeout / reference_failed: the Postgres sample read hit its statement timeout, or failed otherwise (referenceSide.ts).
+ * The timer is `createIntervalSampler` (geodb/intervalSampler.ts), shared with the other config shadows.
  * Blind spot: only rows Postgres has are sampled, so a record geo-db keeps after the row was deleted from Postgres is not
  * seen (the feeder's gate reports that). Logs counts only, never a key.
  */
@@ -28,6 +30,8 @@ import {idPart, recordEntityId} from "../proposals/governance/recordKey"
 import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
 import type {GeoCardRow} from "./card"
 import {type GeoDbCardClient, GeoDbError} from "./client"
+import {createIntervalSampler, DEFAULT_SAMPLER_INTERVAL_MS, type IntervalSampler} from "./intervalSampler"
+import {failureResult, viaReference} from "./referenceSide"
 
 /** The feeder's pins (geodb-feeder/src/recordKinds.ts); `__tests__/entityFeedConfigShadow.test.ts` holds them to that file. */
 export const ENTITY_TYPE_WEIGHT_KIND = "96a0897a18d240db9ce98df56649e1a6"
@@ -122,7 +126,15 @@ export function createEntityFeedConfigReaders(deps: {
 
 export const TABLES = ["entity_type_weights", "entity_type_exclusions", "entity_feed_blocklist"] as const
 export type Table = (typeof TABLES)[number]
-export const RESULTS = ["match", "mismatch", "missing", "unsupported", "failed"] as const
+export const RESULTS = [
+	"match",
+	"mismatch",
+	"missing",
+	"unsupported",
+	"failed",
+	"reference_timeout",
+	"reference_failed",
+] as const
 export type Result = (typeof RESULTS)[number]
 
 export type EntityFeedConfigShadowConfig = {
@@ -152,7 +164,11 @@ export function readEntityFeedConfigShadowConfig(
 			entity_type_exclusions: on(FLAGS.entity_type_exclusions),
 			entity_feed_blocklist: on(FLAGS.entity_feed_blocklist),
 		},
-		intervalMs: wholeNumberEnv(env.GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS, 60_000, 86_400_000),
+		intervalMs: wholeNumberEnv(
+			env.GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS,
+			DEFAULT_SAMPLER_INTERVAL_MS,
+			86_400_000,
+		),
 		sample: wholeNumberEnv(env.GEODB_ENTITY_FEED_CONFIG_SHADOW_SAMPLE, 20, 200),
 	}
 }
@@ -191,7 +207,7 @@ const bump = (table: Table, result: Result): void => {
 export function renderEntityFeedConfigShadowMetrics(): string {
 	if (active.size === 0) return ""
 	const lines = [
-		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), unsupported (no config Space) or failed (a read failed).",
+		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), unsupported (no config Space) failed (a geo-db read failed), reference_timeout or reference_failed (the Postgres sample read).",
 		"# TYPE gaia_api_entity_feed_config_shadow_total counter",
 	]
 	for (const t of TABLES)
@@ -240,12 +256,7 @@ export async function sampleConfigRows(db: Database, table: Table, limit: number
 	)
 }
 
-export type EntityFeedConfigShadow = {
-	/** One sampling pass over the enabled tables. Resolves when done; never throws. */
-	runOnce(): Promise<void>
-	/** Start the periodic pass; returns the stop function. The timer does not keep the process alive. */
-	start(): () => void
-}
+export type EntityFeedConfigShadow = IntervalSampler
 
 export function createEntityFeedConfigShadow(deps: {
 	config: EntityFeedConfigShadowConfig
@@ -257,7 +268,6 @@ export function createEntityFeedConfigShadow(deps: {
 	const {config, db, readers, log} = deps
 	const sampleRows = deps.sampleRows ?? sampleConfigRows
 	active = new Set(TABLES.filter((t) => config.enabled[t]))
-	let running = false
 	let logged = 0
 
 	const held = (row: ConfigRow) =>
@@ -270,9 +280,9 @@ export function createEntityFeedConfigShadow(deps: {
 	async function pass(table: Table): Promise<void> {
 		let sampled: ConfigRow[]
 		try {
-			sampled = await sampleRows(db, table, config.sample)
+			sampled = await viaReference(sampleRows(db, table, config.sample))
 		} catch (error) {
-			bump(table, "failed")
+			bump(table, failureResult(error))
 			log.warn("entity feed config shadow sample failed", {table, error: String(error)})
 			return
 		}
@@ -296,23 +306,13 @@ export function createEntityFeedConfigShadow(deps: {
 		}
 	}
 
-	async function runOnce(): Promise<void> {
-		if (running) return
-		running = true
-		try {
+	return createIntervalSampler({
+		enabled: TABLES.some((t) => config.enabled[t]),
+		intervalMs: config.intervalMs,
+		pass: async () => {
 			for (const t of TABLES) if (config.enabled[t]) await pass(t)
-		} finally {
-			running = false
-		}
-	}
-
-	return {
-		runOnce,
-		start() {
-			if (!TABLES.some((t) => config.enabled[t])) return () => {}
-			const timer = setInterval(() => void runOnce().catch(() => {}), config.intervalMs)
-			timer.unref?.()
-			return () => clearInterval(timer)
 		},
-	}
+		log,
+		label: "entity feed config shadow",
+	})
 }

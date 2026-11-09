@@ -208,8 +208,18 @@ describe("createConfigRevisionShadow", () => {
 	it("counts a Postgres failure and logs it", async () => {
 		const {shadow, warn} = make(["a"], [new Error("pg down")])
 		await shadow.runOnce()
-		expect(metric("failed")).toBe("1")
+		expect(metric("reference_failed")).toBe("1")
+		expect(metric("failed")).toBe("0")
 		expect(warn).toHaveBeenCalledTimes(1)
+	})
+	it("counts a Postgres statement timeout as reference_timeout", async () => {
+		const {shadow} = make(
+			["a"],
+			[Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})],
+		)
+		await shadow.runOnce()
+		expect(metric("reference_timeout")).toBe("1")
+		expect(metric("failed")).toBe("0")
 	})
 	it("does not start a timer when the flag is off", () => {
 		const shadow = createConfigRevisionShadow({
