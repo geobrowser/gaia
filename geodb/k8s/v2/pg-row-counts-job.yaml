@@ -70,7 +70,7 @@ spec:
             - -e
             - |
               const {Client} = require("pg");
-              const c = new Client({connectionString: process.env.DATABASE_URL, statement_timeout: 120000});
+              const c = new Client({connectionString: process.env.DATABASE_URL});
               const tables = [
                 ["ranks.ranking_scores", "ranks.ranking_scores"],
                 ["personalization.external_interest_signals", "personalization.external_interest_signals"],
@@ -80,6 +80,7 @@ spec:
               (async () => {
                 await c.connect();
                 await c.query("BEGIN READ ONLY");
+                await c.query("SET LOCAL statement_timeout = 120000");
                 for (const [label, rel] of tables) {
                   try {
                     const est = await c.query("SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass($1)", [rel]);
@@ -88,7 +89,7 @@ spec:
                     console.log(label, "count", n.rows[0].n);
                   } catch (e) {
                     console.log(label, "error", e.message);
-                    await c.query("ROLLBACK"); await c.query("BEGIN READ ONLY");
+                    await c.query("ROLLBACK"); await c.query("BEGIN READ ONLY"); await c.query("SET LOCAL statement_timeout = 120000");
                   }
                 }
                 try {
