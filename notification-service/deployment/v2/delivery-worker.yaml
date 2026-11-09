@@ -67,7 +67,7 @@ spec:
           # final from the commit "client: work pipe takes claim, complete, retry and fail"); bump
           # this tag to an image built from there before the flag is turned on. An older client
           # answers those verbs `want enter|note|...`, which the reader counts as a claim error.
-          image: registry.digitalocean.com/geo/geodb:6b34f9feda
+          image: registry.digitalocean.com/geo/geodb:2eab4e170c
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the shadow stays disabled even if the flag is turned on.
