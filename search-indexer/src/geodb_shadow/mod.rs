@@ -413,8 +413,10 @@ pub async fn compare_empty_in_space(
 /// documents Postgres resolved it to, the owners of its statement in geo-db, over every mapped Space.
 ///
 /// geo-db's statement read answers active statements only, while Postgres also answers from
-/// `relation_versions` once the relation is deleted, so a deleted relation shows as
-/// `missing_in_geodb`. The deleted half needs a version-log read (GAP5-VERSION-LOG) to twin.
+/// `relation_versions` once the relation is deleted. The caller therefore passes only the documents
+/// Postgres resolved from the live `relations` table; a deleted relation has none and is expected
+/// to be absent from geo-db too. The deleted half needs a version-log read (GAP5-VERSION-LOG) to
+/// twin.
 pub async fn compare_docs_for_relations(
     reader: &dyn GeoDbReader,
     spaces: &Spaces,
@@ -591,7 +593,9 @@ impl GeoDbShadow {
         });
     }
 
-    /// After `docs_for_relations(relation_ids)` answered `docs`.
+    /// After `docs_for_relations(relation_ids)` answered; `docs` must be the live rows only (from
+    /// `relations`, not `relation_versions`). A relation with no live row is expected to be absent
+    /// from geo-db's active-statement read too, so it compares as agreement.
     pub fn observe_docs_for_relations(
         self: &Arc<Self>,
         relation_ids: &[Uuid],
@@ -767,12 +771,19 @@ mod tests {
         let spaces = map(&[1, 2]);
         let sample = vec![
             (r1, vec![(a, sp(1))]), // live, agrees
-            (r2, vec![(a, sp(1))]), // deleted: only relation_versions has it
+            (r2, vec![(a, sp(1))]), // live in Postgres, absent in geo-db
             (r3, vec![(a, sp(2))]), // owner differs
         ];
         let o = compare_docs_for_relations(&f, &spaces, &sample).await;
         assert_eq!((o.matched, o.mismatched), (1, 2));
         assert_eq!((o.missing, o.extra), (2, 1));
+    }
+
+    #[tokio::test]
+    async fn a_deleted_relation_has_no_live_doc_and_agrees_with_an_empty_geodb() {
+        let o =
+            compare_docs_for_relations(&Fixture::default(), &map(&[1]), &[(u(12), vec![])]).await;
+        assert_eq!((o.matched, o.mismatched), (1, 0));
     }
 
     #[tokio::test]
