@@ -429,6 +429,13 @@ spec:
             # (DerivedScores): gaia_api_entity_columns_shadow_total{column,result}. Background only; reads stay on Postgres.
             - name: GEODB_ENTITY_COLUMNS_SHADOW
               value: "1"
+            # The group B ranked reads' twins (api/src/geodb/rankedReads) run on Postgres rows and held to geo-db's derived
+            # collections: gaia_api_ranked_reads_shadow_total. ON; background only, reads stay on Postgres. Every pod loads
+            # Postgres rows each pass, so the interval is 15 min (default 5 min) and the Space count stays at its default 5.
+            - name: GEODB_RANKED_READS_SHADOW
+              value: "1"
+            - name: GEODB_RANKED_READS_SHADOW_INTERVAL_MS
+              value: "900000"
             # Sample entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres (_SAMPLE per table,
             # default 20, every _INTERVAL_MS, default 60 s) and hold each to its record in geo-db's config Space
             # (gaia_api_entity_feed_config_shadow_total{table,result}). One flag per table, all off; background only. Needs the
