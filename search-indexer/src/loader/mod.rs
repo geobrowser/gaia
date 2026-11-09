@@ -280,7 +280,7 @@ impl SearchLoader {
         }
 
         // Process all operations in a single bulk call, maintaining order
-        let operations: Vec<EntityOperation> = self.pending_operations.drain(..).collect();
+        let operations: Vec<EntityOperation> = std::mem::take(&mut self.pending_operations);
         let count = operations.len();
 
         info!(ops = count, "loader.batch.start — sending to OpenSearch");
