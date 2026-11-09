@@ -16,6 +16,13 @@
  *   Public Space, so it is counted `unsupported{scoped}` and not read. An offset page is compared: geo-db is read for
  *   the first `offset + limit` rows (at most 100; past that it is `unsupported{deep_page}`) and the rows from `offset` on
  *   are the ones compared.
+ * - geo-db lists versions only of Spaces that hold the entity live (serve doc, `EntityVersions`: "an entity every
+ *   statement of which a Space has removed lists none of that Space's versions"), while Postgres history also lists
+ *   the edits that created and removed its values and relations. So an entity whose statements were all removed
+ *   answers total 0 in geo-db and several rows in Postgres. That is not a feeder gap and not a read bug, and counting
+ *   it as `mismatch{count}` hides the real ones. When geo-db says total 0 and a page was served, the shadow asks
+ *   Postgres (`hasLiveStatements`) whether the entity has any live value or relation: none means `unsupported{removed}`;
+ *   some (or the question failing) stays a `count` mismatch, which is then a feeder gap or a read bug.
  * - The page compared is the served one: `served.length` must equal `min(max(geo total - offset, 0), limit)`, and the
  *   geo rows from `offset` on must be the served edits.
  * - Edit-id equality between gaia's `edit_versions.edit_id` and geo-db's sealing EditId is not verified: a store where
@@ -24,7 +31,7 @@
  *
  * `gaia_api_versions_shadow_total{result}`: match, mismatch, unsupported (geo-db cannot answer) or failed (a read
  * failed). `..._mismatch_total{field}`: count, edit_ids, order, author, author_unrecorded (a mismatch can name several).
- * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), busy (pool or in-flight bound), client (a geodb-client older than
+ * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), removed (see below), busy (pool or in-flight bound), client (a geodb-client older than
  * geo-db 25360b28c6, which has no `entity-versions` line), server (a node before wire revision 12). `..._skipped_total{reason}`:
  * sample (not the 1-in-N picked) or rate (over the per-minute cap). After a `client` or `server` answer the shadow stops
  * asking for `PROBE_COOLDOWN_MS`, so an old client loses one pipe worker per cooldown, not one per sample.
@@ -61,7 +68,7 @@ export function readEntityVersionsShadowConfig(env: Record<string, string | unde
 
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
 export const MISMATCH_FIELDS = ["count", "edit_ids", "order", "author", "author_unrecorded"] as const
-export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server"] as const
+export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server", "removed"] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Result = (typeof RESULTS)[number]
 type MismatchField = (typeof MISMATCH_FIELDS)[number]
@@ -175,6 +182,8 @@ export function createEntityVersionsShadow(deps: {
 	geoDb: GeoDbCardClient
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
 	now?: () => number
+	/** Whether Postgres holds any live value or outgoing relation of the entity (decides `removed` on a geo-db total of 0). */
+	hasLiveStatements?: (entityId: string) => Promise<boolean>
 }): EntityVersionsShadow {
 	const {config, geoDb, log} = deps
 	const now = deps.now ?? Date.now
@@ -194,6 +203,10 @@ export function createEntityVersionsShadow(deps: {
 				first: Math.min(served.offset + Math.max(served.limit, 1), MAX_FIRST),
 			})
 			const fields = compareVersions(served, rows)
+			if (rows.length === 0 && served.versions.length > 0 && deps.hasLiveStatements) {
+				const live = await deps.hasLiveStatements(served.entityId).catch(() => true)
+				if (!live) return recordUnsupported("removed")
+			}
 			bump(results, fields.length === 0 ? "match" : "mismatch")
 			for (const f of fields) bump(mismatches, f)
 			if (fields.length > 0 && logged < 20) {

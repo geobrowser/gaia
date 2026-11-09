@@ -93,6 +93,7 @@ import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
+import {entityHasLiveStatements} from "./src/versioned/queries"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
 type AppEnv = {
@@ -256,6 +257,7 @@ if (entityVersionsShadowConfig.enabled) {
 		config: entityVersionsShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
+		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
 	})
 }
 
