@@ -1,6 +1,7 @@
 """ScoringDataWriter module for persisting calculated scores to PostgreSQL."""
 
 import logging
+import os
 import time
 from datetime import datetime
 
@@ -28,10 +29,16 @@ def _changed_up_to(table: str, keys: set | None, after_hex: str) -> bool:
     return any(key_bytes(e) + key_bytes(sp) <= after for e, sp in keys)
 
 
+def pg_writes_enabled(env: "os._Environ[str] | dict[str, str] | None" = None) -> bool:
+    """``SCORING_WRITER_PG_WRITES``: default on (today's behaviour); 0/false/off/no switches every Postgres write off."""
+    value = (env if env is not None else os.environ).get("SCORING_WRITER_PG_WRITES", "1")
+    return value.strip().lower() not in ("0", "false", "off", "no")
+
+
 class ScoringDataWriter:
     """Persists calculated scores to PostgreSQL using batch upserts."""
 
-    def __init__(self, connection_string: str, derived: DerivedMirror | None = None):
+    def __init__(self, connection_string: str, derived: DerivedMirror | None = None, pg_writes: bool | None = None):
         """Initialize the ScoringDataWriter with a database connection string.
 
         Args:
@@ -41,6 +48,8 @@ class ScoringDataWriter:
         """
         self._connection_string = connection_string
         self._derived = derived
+        # None reads SCORING_WRITER_PG_WRITES. Off: no connection and no statement, the mirror still runs.
+        self._pg_writes = pg_writes_enabled() if pg_writes is None else pg_writes
 
     def write_all(self, entities: list[Entity], spaces: list[Space]) -> None:
         """Write all score types in a single atomic transaction.
@@ -54,6 +63,11 @@ class ScoringDataWriter:
         Raises:
             psycopg.Error: If any database operation fails (all changes are rolled back).
         """
+        if not self._pg_writes:
+            logger.warning("SCORING_WRITER_PG_WRITES is off: no Postgres writes; mirroring to geo-db only")
+            # No tables means no score_mirror_state reads or writes; every row is sent each run.
+            self._mirror_to_geodb(entities, spaces, {}, [], {})
+            return
         now = datetime.now()
         total_perspectives = sum(len(e.perspectives) for e in entities)
         mirror = self._derived
