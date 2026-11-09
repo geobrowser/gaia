@@ -1991,7 +1991,7 @@ fn create_test_orchestrator_with_relation_map(
 fn temp_relation_map() -> (Arc<RelationMap>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let config = RelationMapConfig {
-        db_path: dir.path().join("test_relation_map.sqlite"),
+        db_path: dir.path().join("test_relation_map.redb"),
         cache_size: 10_000,
     };
     let rm = Arc::new(RelationMap::open(config).expect("open relation map"));
@@ -2124,7 +2124,7 @@ async fn test_relation_map_survives_reopen() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let config = RelationMapConfig {
-        db_path: dir.path().join("test_relation_map.sqlite"),
+        db_path: dir.path().join("test_relation_map.redb"),
         cache_size: 10_000,
     };
 
@@ -2151,7 +2151,7 @@ async fn test_relation_map_survives_reopen() {
 async fn test_relation_map_recovers_from_corruption() {
     // Verify that a corrupt SQLite file is detected and recreated.
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("test_relation_map.sqlite");
+    let db_path = dir.path().join("test_relation_map.redb");
     let config = RelationMapConfig {
         db_path: db_path.clone(),
         cache_size: 10_000,
@@ -2166,7 +2166,7 @@ async fn test_relation_map_recovers_from_corruption() {
         rm.needs_rebuild(),
         "Should flag for rebuild after corruption"
     );
-    assert_eq!(rm.sqlite_count(), 0, "Recreated DB should be empty");
+    assert_eq!(rm.store_count(), 0, "Recreated DB should be empty");
 
     // Should still function normally after recovery
     let rid = Uuid::new_v4();
@@ -2216,9 +2216,9 @@ async fn test_relation_map_entry_retained_on_loader_failure() {
     // Unit-level verification: insert, then verify remove() works
     let rid2 = Uuid::new_v4();
     rm.insert(rid2, entity_id, space_id);
-    assert_eq!(rm.sqlite_count(), 1, "Should have one entry");
+    assert_eq!(rm.store_count(), 1, "Should have one entry");
     rm.remove(&rid2);
-    assert_eq!(rm.sqlite_count(), 0, "Should be empty after remove");
+    assert_eq!(rm.store_count(), 0, "Should be empty after remove");
 }
 
 #[tokio::test]
@@ -2255,7 +2255,7 @@ async fn test_relation_map_entry_in_sqlite_after_successful_delete() {
         "LRU cache should not have the entry after successful delete"
     );
     assert_eq!(
-        rm.sqlite_count(),
+        rm.store_count(),
         0,
         "SQLite should be empty after successful delete"
     );
