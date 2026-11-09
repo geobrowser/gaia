@@ -835,7 +835,7 @@ describe("form labels and the topic sampler", () => {
 			config: {enabled: true, intervalMs: 1, topics: 2},
 			source: src,
 			reader: {
-				typeCounts: async (_c, _g, walked) => ({
+				typeCounts: async (_c: unknown, _g: unknown, walked: string[]) => ({
 					walked: 1,
 					counts: walked.map((w) => (w === hex(NEWS) ? 2 : 0)),
 				}),
