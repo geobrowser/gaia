@@ -57,7 +57,7 @@ export async function handleMessage(
 	await applyIntents(
 		deps,
 		space,
-		{...meta, space: spaceId, edit: editId},
+		{...meta, space: spaceId, edit: editId, idempotent: true},
 		intents,
 		deps.chunk,
 		from,

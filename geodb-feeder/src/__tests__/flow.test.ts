@@ -2,7 +2,7 @@ import {mkdirSync, mkdtempSync, readFileSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
-import {applyIntents} from "../apply.js"
+import {applyIntents, chunkKey} from "../apply.js"
 import {classify} from "../geodb.js"
 import {type Decode, handleMessage} from "../handle.js"
 import {createMetrics} from "../metrics.js"
@@ -247,6 +247,41 @@ describe("handleMessage", () => {
 		expect(fake.applied).toHaveLength(1)
 		expect(fake.applied[0]).toContain(".add")
 		expect(store.hasStatement(hex(3))).toBe(true)
+	})
+
+	it("sends each chunk under a key, so a chunk redelivered after a crash before its progress was saved is not a second version", async () => {
+		const store = new Store(tmp())
+		// A geo-db that keeps one version per idempotency key, as the engine does (a retry answers the first receipt).
+		const versions = new Map<string, string>()
+		const fake = fakeDb((zon) => {
+			const key = /\.key = "([0-9a-f]{32})"/.exec(zon)?.[1]
+			if (key) versions.set(key, zon)
+			else versions.set(`unkeyed-${versions.size}`, zon)
+			return ok
+		})
+		const d = {...deps(store, fake), chunk: 2}
+		const keyOf = (zon: string) => /\.key = "([0-9a-f]{32})"/.exec(zon)?.[1]
+		await handleMessage(d, 0, message("5"))
+		expect(fake.applied).toHaveLength(2)
+		expect(new Set(fake.applied.map(keyOf)).size).toBe(2) // two chunks, two keys
+		expect(fake.applied.every((z) => keyOf(z)?.[12] === "4")).toBe(true) // UUIDv4-shaped
+		// The crash: both chunks committed in geo-db; the progress, the journals and the done mark never reached disk,
+		// so the redelivery starts from a state that has none of them.
+		const again = new Store(tmp())
+		await handleMessage({...deps(again, fake), chunk: 2}, 0, message("5"))
+		expect(fake.applied).toHaveLength(4)
+		expect(fake.applied.slice(2).map(keyOf)).toEqual(fake.applied.slice(0, 2).map(keyOf))
+		expect(versions.size).toBe(2) // not 4: the redelivery added no version
+	})
+
+	it("derives a different key for a different message, range or content", () => {
+		const m = {space: GAIA, partition: 0, offset: "5", edit: "e1", idempotent: true}
+		const k = chunkKey(m, 0, 2, ["a", "b"])
+		expect(chunkKey(m, 0, 2, ["a", "b"])).toBe(k)
+		expect(chunkKey({...m, edit: "e2"}, 0, 2, ["a", "b"])).not.toBe(k)
+		expect(chunkKey(m, 0, 1, ["a", "b"])).not.toBe(k)
+		expect(chunkKey(m, 0, 2, ["a", "c"])).not.toBe(k)
+		expect(chunkKey({space: GAIA, partition: 0, offset: "5", idempotent: true}, 0, 2, ["a", "b"])).not.toBe(k)
 	})
 
 	it("dead-letters an undecodable message and moves on", async () => {
