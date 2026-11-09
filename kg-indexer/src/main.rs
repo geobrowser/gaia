@@ -471,6 +471,10 @@ async fn async_main() -> Result<(), IndexerError> {
                 _ = interval.tick() => {
                     tick_count += 1;
 
+                    if !tally_storage.pg_writes() {
+                        metrics::pg_write_skipped(metrics::PgWriteSite::TallyTick);
+                        continue;
+                    }
                     match tally_storage.process_tally_queue(tally_batch_size).await {
                         Ok(0) => {
                             // No proposals to process, nothing to log
@@ -1360,6 +1364,11 @@ async fn process_message(
     use models::relations::RelationOp;
     use models::values::ValueChangeType;
 
+    if !storage.pg_writes() {
+        metrics::pg_write_skipped(metrics::PgWriteSite::Message);
+        return Ok(0);
+    }
+
     let mut tx = storage.begin_with_timeout().await?;
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *tx)
@@ -1690,6 +1699,25 @@ struct ProcessBlockResult {
     db_tx_duration_ms: u128,
 }
 
+/// Commit the Kafka offset of every event in a block; returns how many commits failed.
+fn commit_event_offsets(events: &[BufferedEvent], consumer: &KafkaConsumer) -> u64 {
+    let mut commit_failures = 0;
+    for event in events {
+        if let Err(e) = consumer.commit_message(&event.topic, event.partition, event.offset) {
+            commit_failures += 1;
+            error!(
+                topic = %event.topic,
+                partition = event.partition,
+                offset = event.offset,
+                event_id = event.event_id.as_deref().unwrap_or(""),
+                error = %e,
+                "Failed to commit offset"
+            );
+        }
+    }
+    commit_failures
+}
+
 async fn process_block(
     events: &[BufferedEvent],
     storage: &Storage,
@@ -1703,6 +1731,18 @@ async fn process_block(
         return Ok(ProcessBlockResult {
             ops: 0,
             commit_failures: 0,
+            db_tx_duration_ms: 0,
+        });
+    }
+
+    if !storage.pg_writes() {
+        // Skip and advance: no Postgres statement, but the offsets still commit so the stream
+        // moves on. Only safe once geo-db is the record (see KG_INDEXER_PG_WRITES).
+        metrics::pg_write_skipped(metrics::PgWriteSite::Block);
+        let commit_failures = commit_event_offsets(events, consumer);
+        return Ok(ProcessBlockResult {
+            ops: 0,
+            commit_failures,
             db_tx_duration_ms: 0,
         });
     }
@@ -2273,20 +2313,7 @@ async fn process_block(
     );
     let _kafka_commit_guard = kafka_commit_span.enter();
 
-    let mut commit_failures = 0;
-    for event in events {
-        if let Err(e) = consumer.commit_message(&event.topic, event.partition, event.offset) {
-            commit_failures += 1;
-            error!(
-                topic = %event.topic,
-                partition = event.partition,
-                offset = event.offset,
-                event_id = event.event_id.as_deref().unwrap_or(""),
-                error = %e,
-                "Failed to commit offset"
-            );
-        }
-    }
+    let commit_failures = commit_event_offsets(events, consumer);
 
     if commit_failures > 0 {
         kafka_commit_span.record("otel.status_code", "ERROR");
@@ -2716,5 +2743,73 @@ mod tests {
         }
         assert_eq!(buffer.summary_timestamps.len(), 1);
         assert_eq!(buffer.processed_position(), Some((1_000, Some(1_000))));
+    }
+
+    #[test]
+    fn pg_writes_flag_defaults_on() {
+        use crate::storage::pg_writes_enabled_from;
+        assert!(pg_writes_enabled_from(None));
+        assert!(pg_writes_enabled_from(Some("")));
+        assert!(pg_writes_enabled_from(Some("garbage")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!pg_writes_enabled_from(Some(off)), "{off}");
+        }
+    }
+
+    /// No database: a lazy pool points at a local listener that counts TCP accepts. A
+    /// statement needs a connection, so zero accepts means zero statements.
+    #[test]
+    fn pg_writes_off_message_issues_no_statements_and_counts_skips() {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        ::metrics::with_local_recorder(&recorder, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let port = listener.local_addr().unwrap().port();
+                    let accepted = Arc::new(AtomicUsize::new(0));
+                    let seen = accepted.clone();
+                    tokio::spawn(async move {
+                        while let Ok((sock, _)) = listener.accept().await {
+                            seen.fetch_add(1, Ordering::SeqCst);
+                            drop(sock);
+                        }
+                    });
+                    let mk = |on: bool| {
+                        let pool = sqlx::postgres::PgPoolOptions::new()
+                            .acquire_timeout(Duration::from_secs(2))
+                            .connect_lazy(&format!("postgres://u:p@127.0.0.1:{port}/db"))
+                            .unwrap();
+                        Storage::from_pool(pool).with_pg_writes(on)
+                    };
+                    let msg = || KgMessage::Edit(Default::default());
+
+                    let ops = process_message(msg(), &mk(false), None).await.unwrap();
+                    assert_eq!(ops, 0);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    assert_eq!(
+                        accepted.load(Ordering::SeqCst),
+                        0,
+                        "a statement reached Postgres"
+                    );
+
+                    // Control: with the flag on the same call does try to connect.
+                    assert!(process_message(msg(), &mk(true), None).await.is_err());
+                    assert!(
+                        accepted.load(Ordering::SeqCst) > 0,
+                        "control saw no connection"
+                    );
+                });
+        });
+        let rendered = handle.render();
+        let line = "kg_indexer_pg_writes_skipped_total{site=\"message\"} 1";
+        assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
     }
 }
