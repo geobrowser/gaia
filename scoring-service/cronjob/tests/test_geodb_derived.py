@@ -570,3 +570,98 @@ for l in sys.stdin:
         del env["GEODB_DERIVED_SESSION_REFRESH_S"]
         m = DerivedMirror.from_env(env)
         assert (m.session_refresh, m.retries) == (240.0, 3)
+
+
+def _env(**extra) -> dict:
+    return {"GEODB_DERIVED_MIRROR": "1", "GEODB_KEY_PATH": "k", "GEODB_BINDING_PATH": "b", **extra}
+
+
+def _rows(n: int) -> list[DerivedRow]:
+    return [DerivedRow(2, 0, 1.0, i.to_bytes(2, "big"), b"") for i in range(n)]
+
+
+class TestPacing:
+    def test_default_is_unpaced(self) -> None:
+        m = DerivedMirror.from_env(_env())
+        assert m.max_rows_per_s == 0.0
+        assert m.batch_rows == BATCH_MAX
+
+    def test_env_sets_rate_and_batch_rows(self) -> None:
+        m = DerivedMirror.from_env(_env(GEODB_DERIVED_MAX_ROWS_PER_S="200", GEODB_DERIVED_BATCH_ROWS="32"))
+        assert m.max_rows_per_s == 200.0
+        assert m.batch_rows == 32
+
+    @pytest.mark.parametrize("raw", ["", "abc", "-5", "0", "nan", "inf"])
+    def test_bad_rate_means_unlimited(self, raw) -> None:
+        assert DerivedMirror.from_env(_env(GEODB_DERIVED_MAX_ROWS_PER_S=raw)).max_rows_per_s == 0.0
+
+    def test_batch_rows_is_clamped(self) -> None:
+        assert DerivedMirror(["x"], batch_rows=0).batch_rows == 1
+        assert DerivedMirror(["x"], batch_rows=10_000).batch_rows == BATCH_MAX
+
+    def test_smaller_batches_when_set(self, tmp_path) -> None:
+        argv, log = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=40)
+        m.put("t", _rows(100))
+        heads = [l for l in log.read_text().splitlines() if l.startswith("putn")]
+        assert heads == ["putn\t40", "putn\t40", "putn\t20"]
+        m.close()
+
+    def test_unpaced_never_sleeps(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True)
+        with patch("src.geodb_derived.time.sleep") as sleep:
+            m.put("t", _rows(600))
+        sleep.assert_not_called()
+        m.close()
+
+    def test_each_batch_takes_at_least_rows_over_rate(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=100, max_rows_per_s=1000.0)
+        waits: list[float] = []
+        with patch("src.geodb_derived.time.sleep", side_effect=waits.append):
+            m.put("t", _rows(250))
+        # 100, 100 and 50 rows at 1000 rows/s: 0.1 s, 0.1 s, 0.05 s, less the real send time.
+        assert len(waits) == 3
+        assert all(0 < w <= 0.1 for w in waits[:2]) and 0 < waits[2] <= 0.05
+        assert m.stats["puts"] == 250
+        m.close()
+
+    def test_a_slow_answer_gets_no_extra_wait(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=100, max_rows_per_s=1e9)
+        with patch("src.geodb_derived.time.sleep") as sleep:
+            m.put("t", _rows(100))
+        sleep.assert_not_called()  # the send already took longer than 100 / 1e9 s
+        m.close()
+
+    def test_paced_wait_is_not_counted_against_the_budget(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=50, max_rows_per_s=100.0, budget=0.6)
+        # Real sleeps: 4 batches of 50 rows at 100 rows/s take about 2 s, over the 0.6 s budget.
+        m.put("t", _rows(200))
+        assert m.stats["dropped"] == 0
+        assert m.stats["puts"] == 200
+        m.close()
+
+    def test_a_table_suffix_overrides_the_plain_setting(self) -> None:
+        m = DerivedMirror.from_env(
+            _env(
+                GEODB_DERIVED_MAX_ROWS_PER_S="500",
+                GEODB_DERIVED_MAX_ROWS_PER_S_GLOBAL_SCORES="100",
+                GEODB_DERIVED_BATCH_ROWS_GLOBAL_SCORES="16",
+            )
+        )
+        assert m.table_rates == {"global_scores": 100.0, "local_scores": 500.0, "space_scores": 500.0}
+        assert m.table_batch_rows["global_scores"] == 16
+        assert m.table_batch_rows["local_scores"] == BATCH_MAX
+
+    def test_only_the_named_table_is_paced(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=100, table_rates={"global_scores": 1000.0})
+        with patch("src.geodb_derived.time.sleep") as sleep:
+            m.put("local_scores", _rows(200))
+            sleep.assert_not_called()
+            m.put("global_scores", _rows(200))
+            assert sleep.call_count == 2
+        m.close()

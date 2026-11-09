@@ -36,6 +36,16 @@ ends the table.
 ``GEODB_DERIVED_MIRROR_TABLES`` (comma separated, e.g. ``global_scores,space_scores``) picks which tables are
 mirrored. Unset or empty mirrors all three, as before. A name that is not one of the three is ignored with a
 warning; if none is valid, nothing is mirrored (the cap is a reason to fail closed).
+
+Pacing. The held pipe sends one request at a time and waits for its answer, so the mirror already
+runs as fast as geo-db answers, and a full table rewrite keeps the serve's write path busy for as
+long as it lasts. Two knobs, both off by default (behaviour is unchanged unless set):
+``GEODB_DERIVED_MAX_ROWS_PER_S`` (a number; 0 or unset is unlimited) makes each request take at least
+``rows / rate`` seconds, with no catching up after a slow one, and ``GEODB_DERIVED_BATCH_ROWS`` (1 to
+256; default 256) sets the rows in a batch request, so a smaller write holds the serve for less
+time. Either may be set for one table with a suffix, e.g. ``GEODB_DERIVED_MAX_ROWS_PER_S_GLOBAL_SCORES``
+(the table name upper-cased), which wins over the plain name for that table. Time spent waiting for the pace is not counted against ``GEODB_DERIVED_BUDGET_MS``: the budget
+bounds the time spent sending, so a slower pace does not drop the rows a faster one would have sent.
 """
 
 import logging
@@ -219,8 +229,16 @@ class DerivedMirror:
         session_refresh: float = DEFAULT_SESSION_REFRESH_S,
         retries: int = DEFAULT_RETRIES,
         retry_delay: float = DEFAULT_RETRY_DELAY,
+        max_rows_per_s: float = 0.0,
+        batch_rows: int = BATCH_MAX,
+        table_rates: Mapping[str, float] | None = None,
+        table_batch_rows: Mapping[str, int] | None = None,
     ):
         self.argv = argv
+        self.max_rows_per_s = _rate(max_rows_per_s)
+        self.batch_rows = _batch_rows(batch_rows)
+        self.table_rates = {t: _rate(v) for t, v in (table_rates or {}).items()}
+        self.table_batch_rows = {t: _batch_rows(v) for t, v in (table_batch_rows or {}).items()}
         self.session_refresh = session_refresh
         self.retries = retries
         self.retry_delay = retry_delay
@@ -261,6 +279,14 @@ class DerivedMirror:
             return None
         refresh = _env_number(env, "GEODB_DERIVED_SESSION_REFRESH_S", DEFAULT_SESSION_REFRESH_S, float)
         retries = max(0, _env_number(env, "GEODB_DERIVED_RETRIES", DEFAULT_RETRIES, int))
+        rate = _env_number(env, "GEODB_DERIVED_MAX_ROWS_PER_S", 0.0, float)
+        batch_rows = _env_number(env, "GEODB_DERIVED_BATCH_ROWS", BATCH_MAX, int)
+        table_rates = {
+            t: _env_number(env, f"GEODB_DERIVED_MAX_ROWS_PER_S_{t.upper()}", rate, float) for t in TABLES
+        }
+        table_batch_rows = {
+            t: _env_number(env, f"GEODB_DERIVED_BATCH_ROWS_{t.upper()}", batch_rows, int) for t in TABLES
+        }
         return cls(
             [env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "derived", "pipe"],
             budget=ms / 1000,
@@ -268,6 +294,10 @@ class DerivedMirror:
             tables=tables,
             session_refresh=refresh,
             retries=retries,
+            max_rows_per_s=rate,
+            batch_rows=batch_rows,
+            table_rates=table_rates,
+            table_batch_rows=table_batch_rows,
         )
 
     # -- public ---------------------------------------------------------------------------
@@ -307,11 +337,13 @@ class DerivedMirror:
     def _send(self, table: str, lines: Iterable[str]) -> int:
         start = time.monotonic()
         sent = 0
-        size = BATCH_MAX if self.batch else CHUNK
+        size = self.table_batch_rows.get(table, self.batch_rows) if self.batch else CHUNK
+        rate = self.table_rates.get(table, self.max_rows_per_s)
         reconnects = 0
+        paused = 0.0  # seconds spent waiting for the pace; not counted against the budget
         it = iter(lines)
         while chunk := list(islice(it, size)):
-            if sent > 0 and time.monotonic() - start > self.budget:
+            if sent > 0 and time.monotonic() - start - paused > self.budget:
                 dropped = len(chunk) + sum(1 for _ in it)
                 self.stats["dropped"] += dropped
                 logger.warning(
@@ -321,6 +353,7 @@ class DerivedMirror:
                 )
                 break
             reqs = [batch_request(chunk)] if self.batch and len(chunk) > 1 else chunk
+            chunk_start = time.monotonic()
             try:
                 reconnects = self._request_chunk(table, reqs, reconnects)
             except _CoolingDown:
@@ -333,6 +366,11 @@ class DerivedMirror:
                 self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
                 break
             sent += len(chunk)
+            if rate:
+                wait = len(chunk) / rate - (time.monotonic() - chunk_start)
+                if wait > 0:
+                    time.sleep(wait)
+                    paused += wait
         return sent
 
     def _request_chunk(self, table: str, reqs: list[str], reconnects: int) -> int:
@@ -465,6 +503,15 @@ def _retryable(error: Exception) -> bool:
     if text.startswith("refused:"):
         return "CapabilityTokenExpired" in text
     return True
+
+
+def _rate(value: float) -> float:
+    """``value`` when it is a positive finite number, else 0 (unlimited)."""
+    return value if math.isfinite(value) and value > 0 else 0.0
+
+
+def _batch_rows(value: int) -> int:
+    return min(max(1, int(value)), BATCH_MAX)
 
 
 def _env_number(env: Mapping[str, str], name: str, default, kind):
