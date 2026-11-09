@@ -214,6 +214,10 @@ spec:
                   value: "1"
                 - name: GEODB_FEED_RUNS_KEY_PATH
                   value: /etc/geodb/cursor-key/cursor.key
+                # Kubernetes Lease exclusion between the jobs that share a lock (plan 10.21 section 10.3). Off:
+                # needs the job-lease Role (ranking-indexer/k8s/v2/job-lease-rbac.yaml) applied first. 1 = take the lease or exit 0.
+                - name: GEODB_JOB_LEASE
+                  value: "0"
                 - name: RUST_LOG
                   value: "feed_signals_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:
@@ -310,6 +314,10 @@ spec:
                     secretKeyRef:
                       name: api-secrets
                       key: DATABASE_URL
+                # Kubernetes Lease exclusion between the jobs that share a lock (plan 10.21 section 10.3). Off:
+                # needs the job-lease Role (ranking-indexer/k8s/v2/job-lease-rbac.yaml) applied first. 1 = take the lease or exit 0.
+                - name: GEODB_JOB_LEASE
+                  value: "0"
                 - name: RUST_LOG
                   value: "feed_signals_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:

@@ -103,6 +103,8 @@ pub async fn sweep(
         .bind(as_of)
         .fetch_one(&mut *tx)
         .await?;
+    // Fence (GEODB_JOB_LEASE): refuse to commit unless this run still holds the job lease.
+    crate::job_lease::fence().await?;
     tx.commit().await?;
     Ok(SweepOutcome::from_row(dirty_users, signal_rows, since))
 }
@@ -128,6 +130,8 @@ pub async fn refit(
         .bind(cooccurrence_rows)
         .fetch_one(&mut *tx)
         .await?;
+    // Fence (GEODB_JOB_LEASE): refuse to commit unless this run still holds the job lease.
+    crate::job_lease::fence().await?;
     tx.commit().await?;
     Ok(RefitReport {
         cooccurrence_rows,

@@ -327,6 +327,25 @@ async fn main() -> Result<(), IndexerError> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // Job lease (GEODB_JOB_LEASE, default off): if another run holds it, exit 0 without writing.
+    // --check-freshness only reads, so it never takes the lease.
+    if !env::args().any(|a| a == "--check-freshness")
+        && matches!(
+            ranking_indexer::job_lease::guard(ranking_indexer::job_lease::KEY_FEED_SIGNALS, 0)
+                .await?,
+            ranking_indexer::job_lease::Guard::Busy
+        )
+    {
+        info!("job lease held by another run; exiting without writing");
+        return Ok(());
+    }
+    let result = run().await;
+    ranking_indexer::job_lease::finish().await;
+    result
+}
+
+async fn run() -> Result<(), IndexerError> {
     let options = parse_args(env::args().skip(1))?;
 
     let database_url = env::var("DATABASE_URL")
