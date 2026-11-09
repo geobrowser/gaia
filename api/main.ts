@@ -57,6 +57,11 @@ import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
 import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
+	createProposalDiffShadow,
+	type ProposalDiffShadow,
+	readProposalDiffShadowConfig,
+} from "./src/geodb/proposalDiffShadow"
+import {
 	createPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
@@ -213,6 +218,9 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+// GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
+// statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
+const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
 // GEODB_ENTITY_AT_VERSION_SHADOW (off by default) likewise compares a sampled `/versioned/entities/:id` snapshot and the v2 diff's
 // name enrichment with geo-db (gaia_api_entity_at_version_shadow_total).
 const entityAtVersionShadowRef: {current: EntityAtVersionShadow | null} = {current: null}
@@ -220,6 +228,7 @@ app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
 		versions: (served) => entityVersionsShadowRef.current?.versions(served),
+		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
 	}),
 )
@@ -272,6 +281,16 @@ if (entityVersionsShadowConfig.enabled) {
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
 		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
+	})
+}
+
+const proposalDiffShadowConfig = readProposalDiffShadowConfig(process.env)
+if (proposalDiffShadowConfig.enabled) {
+	proposalDiffShadowRef.current = createProposalDiffShadow({
+		config: proposalDiffShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
 	})
 }
 
