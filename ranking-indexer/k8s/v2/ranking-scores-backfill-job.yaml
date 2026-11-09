@@ -60,7 +60,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest.
-          image: registry.digitalocean.com/geo/geodb:93be2804b7
+          image: registry.digitalocean.com/geo/geodb:2eab4e170c
           imagePullPolicy: IfNotPresent
           command:
             - sh
