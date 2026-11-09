@@ -2,6 +2,7 @@ pub mod backfill_name_raw;
 pub mod create;
 pub mod delete;
 pub mod full_migration;
+pub mod geodb_check;
 pub mod get;
 pub mod list;
 pub mod reconcile_orphans;
