@@ -24,6 +24,7 @@ pub const EVENTS_FAILED: &str = "notification_indexer_events_failed_total";
 pub const NOTIFICATIONS_INSERTED: &str = "notification_indexer_notifications_inserted_total";
 pub const POLLER_ERRORS: &str = "notification_indexer_poller_errors_total";
 pub const WRITE_RETRIES: &str = "notification_indexer_write_retries_total";
+pub const PG_WRITES_SKIPPED: &str = "notification_indexer_pg_writes_skipped_total";
 pub const HALTED: &str = "notification_indexer_halted";
 
 /// Which Kafka consumer handled a message.
@@ -88,6 +89,33 @@ impl Poller {
     }
 }
 
+/// A Postgres write site skipped because `NOTIFICATION_INDEXER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    /// `notification_outbox` and `notification_deliveries` fan-out insert (one call per event).
+    OutboxInsert,
+    /// Outbox and delivery retention delete (one call per retention tick).
+    RetentionDelete,
+    /// `notification_poll_cursors` upsert.
+    PollCursorUpsert,
+}
+
+impl PgWriteSite {
+    const ALL: [PgWriteSite; 3] = [
+        PgWriteSite::OutboxInsert,
+        PgWriteSite::RetentionDelete,
+        PgWriteSite::PollCursorUpsert,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::OutboxInsert => "outbox_insert",
+            PgWriteSite::RetentionDelete => "retention_delete",
+            PgWriteSite::PollCursorUpsert => "poll_cursor_upsert",
+        }
+    }
+}
+
 /// Describe every counter and register it at zero.
 pub fn register() {
     metrics::describe_counter!(
@@ -119,6 +147,14 @@ pub fn register() {
         POLLER_ERRORS,
         "Database errors in the background pollers; each one skips the rest of that tick"
     );
+
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres write calls skipped because NOTIFICATION_INDEXER_PG_WRITES is off, by site"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
 
     for consumer in Consumer::ALL {
         metrics::counter!(EVENTS_PROCESSED, "consumer" => consumer.as_str()).absolute(0);
@@ -164,6 +200,10 @@ pub fn notifications_inserted(count: u64) {
     metrics::counter!(NOTIFICATIONS_INSERTED).increment(count);
 }
 
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
+}
+
 pub fn poller_error(poller: Poller) {
     metrics::counter!(POLLER_ERRORS, "poller" => poller.as_str()).increment(1);
 }
@@ -194,6 +234,7 @@ mod tests {
             "notification_indexer_poller_errors_total{poller=\"retention\"} 0",
             "notification_indexer_write_retries_total{consumer=\"governance\"} 0",
             "notification_indexer_halted{consumer=\"knowledge_edits\"} 0",
+            "notification_indexer_pg_writes_skipped_total{site=\"outbox_insert\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }
