@@ -74,7 +74,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
-          image: registry.digitalocean.com/geo/geodb:93be2804b7
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the mirror stays disabled even if the flag is turned on.
@@ -182,6 +182,12 @@ spec:
               value: /etc/geodb/reader/reader.key
             - name: GEODB_SPACE_MAP_PATH
               value: /etc/geodb/space-map/space-map.json
+            # Shadow read of the notification_poll cursors against geo-db's cursors collection (10), counted in
+            # notification_indexer_geodb_poll_cursor_shadow_total. Postgres stays the source. Reads with the
+            # reader key above (GEODB_KEY_PATH); collection 10 is not in the binding's derived_restricted list,
+            # so that key may read it. "0" = off; flipping it to "1" is a separate decision.
+            - name: NOTIFICATION_INDEXER_GEODB_POLL_CURSOR_SHADOW
+              value: "0"
             # Read app_webhooks from the mounted `app-webhooks` Secret instead of Postgres (ON since 2026-11-06).
             # Re-run scripts/export-app-webhooks.sh after any webhook change. To go back to the table,
             # comment these two lines out and redeploy.
