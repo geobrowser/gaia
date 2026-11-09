@@ -5,24 +5,26 @@
  * flag is on, a sampled request also reads the same entity's version log from geo-db (`entity-versions` pipe line, wire
  * revision 12) and counts whether the two agree on three things: how many versions there are, their order (newest
  * first, by edit id) and the author of each. It runs after the response is built, fire-and-forget, never awaited by the
- * request, and swallows every error: it never changes, delays or fails a response. Counts only: no id is logged.
+ * request, and swallows every error: it never changes, delays or fails a response. Metrics are counts only; a mismatch warn (first 20) logs the request identity (entity, Space, offset, limit) so a live mismatch can be diagnosed.
  *
  * What the two sides mean differs, and the comparison is as strict as the sides allow:
  * - geo-db's log orders by seal timestamp, then Space id, then version_seq, across every Public Space holding the entity
  *   (the cross-Space ordering rules are the serve doc's, docs/api/10-embedded-and-wire.md, `EntityVersions`; they are not
  *   re-derived here). Postgres orders by `version_key`. Where two edits share a seal time the sides may order them
  *   differently: that is an `order` mismatch to read against the serve doc, not necessarily a bug.
- * - Only the unscoped, first-page request is compared (no `spaceId`, offset 0): a Space-scoped or offset read would need
- *   the log filtered or paged the way Postgres does, so it is counted `unsupported{scoped|paged}` and not read.
- * - The page compared is the served one: `served.length` must equal `min(geo total, limit)`, and the first
- *   `served.length` geo rows must be the served edits.
+ * - Only the unscoped request is compared: a Space-scoped page is filtered to one Space while geo-db's log spans every
+ *   Public Space, so it is counted `unsupported{scoped}` and not read. An offset page is compared: geo-db is read for
+ *   the first `offset + limit` rows (at most 100; past that it is `unsupported{deep_page}`) and the rows from `offset` on
+ *   are the ones compared.
+ * - The page compared is the served one: `served.length` must equal `min(max(geo total - offset, 0), limit)`, and the
+ *   geo rows from `offset` on must be the served edits.
  * - Edit-id equality between gaia's `edit_versions.edit_id` and geo-db's sealing EditId is not verified: a store where
  *   they differ shows as `edit_ids` on every comparison. Authors: geo-db may hold none for a Public Space edit (ISS-121),
  *   counted apart as `author_unrecorded`.
  *
  * `gaia_api_versions_shadow_total{result}`: match, mismatch, unsupported (geo-db cannot answer) or failed (a read
  * failed). `..._mismatch_total{field}`: count, edit_ids, order, author, author_unrecorded (a mismatch can name several).
- * `..._unsupported_total{reason}`: scoped, paged, busy (pool or in-flight bound), client (a geodb-client older than
+ * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), busy (pool or in-flight bound), client (a geodb-client older than
  * geo-db 25360b28c6, which has no `entity-versions` line), server (a node before wire revision 12). `..._skipped_total{reason}`:
  * sample (not the 1-in-N picked) or rate (over the per-minute cap). After a `client` or `server` answer the shadow stops
  * asking for `PROBE_COOLDOWN_MS`, so an old client loses one pipe worker per cooldown, not one per sample.
@@ -59,12 +61,15 @@ export function readEntityVersionsShadowConfig(env: Record<string, string | unde
 
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
 export const MISMATCH_FIELDS = ["count", "edit_ids", "order", "author", "author_unrecorded"] as const
-export const UNSUPPORTED_REASONS = ["scoped", "paged", "busy", "client", "server"] as const
+export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server"] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Result = (typeof RESULTS)[number]
 type MismatchField = (typeof MISMATCH_FIELDS)[number]
 type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 type SkipReason = (typeof SKIP_REASONS)[number]
+
+/** Most rows one geo-db read returns; a page ending past it cannot be compared (`deep_page`). */
+const MAX_FIRST = 100
 
 /** How long to leave an old client or server alone after it said it cannot answer. */
 export const PROBE_COOLDOWN_MS = 10 * 60_000
@@ -139,8 +144,8 @@ export function compareVersions(served: ServedVersions, rows: readonly GeoVersio
 	const fields = new Set<MismatchField>()
 	const total = rows[0]?.total ?? 0
 	const n = served.versions.length
-	if (n !== Math.min(total, served.limit)) fields.add("count")
-	const geo = rows.slice(0, n)
+	if (n !== Math.min(Math.max(total - served.offset, 0), served.limit)) fields.add("count")
+	const geo = rows.slice(served.offset, served.offset + n)
 	const servedIds = served.versions.map((v) => v.editId)
 	const geoIds = geo.map((r) => r.editId)
 	const geoSet = new Set(geoIds)
@@ -186,7 +191,7 @@ export function createEntityVersionsShadow(deps: {
 			if (!geoDb.readEntityVersions) return recordUnsupported("client")
 			const rows = await geoDb.readEntityVersions({
 				entityId: served.entityId,
-				first: Math.min(Math.max(served.limit, 1), 100),
+				first: Math.min(served.offset + Math.max(served.limit, 1), MAX_FIRST),
 			})
 			const fields = compareVersions(served, rows)
 			bump(results, fields.length === 0 ? "match" : "mismatch")
@@ -195,6 +200,10 @@ export function createEntityVersionsShadow(deps: {
 				logged++
 				log.warn("versions shadow mismatch", {
 					fields,
+					entityId: served.entityId,
+					spaceId: served.spaceId,
+					offset: served.offset,
+					limit: served.limit,
 					served: served.versions.length,
 					total: rows[0]?.total ?? 0,
 				})
@@ -216,7 +225,7 @@ export function createEntityVersionsShadow(deps: {
 			if (!config.enabled) return
 			try {
 				if (served.spaceId !== undefined) return recordUnsupported("scoped")
-				if (served.offset > 0) return recordUnsupported("paged")
+				if (served.offset + Math.max(served.limit, 1) > MAX_FIRST) return recordUnsupported("deep_page")
 				if (seen++ % config.sampleEvery !== 0) return bump(skipped, "sample")
 				if (blocked && now() < blocked.until) return recordUnsupported(blocked.reason)
 				const t = now()

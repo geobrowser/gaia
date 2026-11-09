@@ -108,6 +108,16 @@ describe("compareVersions", () => {
 		expect(compareVersions(page, [geoRow(1, {authors: [conformingId("entity", legacy)]}, 1)])).toEqual([])
 	})
 
+	it("compares an offset page against the rows from the offset", () => {
+		const rows = [1, 2, 3, 4, 5].map((n) => geoRow(n, {}, 5))
+		expect(compareVersions(served({offset: 3, limit: 2}, [4, 5]), rows)).toEqual([])
+		// the first page's rows are not the offset page
+		expect(compareVersions(served({offset: 3, limit: 2}, [1, 2]), rows)).toContain("edit_ids")
+		// offset past the end: nothing served, nothing expected
+		expect(compareVersions(served({offset: 9, limit: 2}, []), rows)).toEqual([])
+		expect(compareVersions(served({offset: 3, limit: 2}, [4]), rows)).toContain("count")
+	})
+
 	it("matches two empty logs", () => {
 		expect(compareVersions(served({}, []), [])).toEqual([])
 	})
@@ -151,7 +161,7 @@ describe("createEntityVersionsShadow", () => {
 		expect(read).not.toHaveBeenCalled()
 	})
 
-	it("counts a match and a mismatch, logging counts only", async () => {
+	it("counts a match and a mismatch, logging the request identity", async () => {
 		const read = vi.fn(async () => [geoRow(1), geoRow(2), geoRow(3)])
 		const {shadow, warn} = setup(read)
 		shadow.versions(served())
@@ -163,18 +173,37 @@ describe("createEntityVersionsShadow", () => {
 		expect(result("mismatch")).toBe(1)
 		expect(mismatch("edit_ids")).toBe(0)
 		expect(mismatch("count")).toBe(1)
-		expect(JSON.stringify(warn.mock.calls)).not.toContain(ENTITY)
+		expect(warn).toHaveBeenCalledWith(
+			"versions shadow mismatch",
+			expect.objectContaining({entityId: ENTITY, spaceId: undefined, offset: 0, limit: 50, served: 2, total: 3}),
+		)
 	})
 
-	it("does not read a scoped or offset request", async () => {
+	it("does not read a scoped request", async () => {
 		const read = vi.fn(async () => [])
 		const {shadow} = setup(read)
 		shadow.versions(served({spaceId: SPACE}))
-		shadow.versions(served({offset: 50}))
 		await settle()
 		expect(read).not.toHaveBeenCalled()
 		expect(unsupported("scoped")).toBe(1)
-		expect(unsupported("paged")).toBe(1)
+	})
+
+	it("reads offset + limit rows for an offset page and compares the rows from the offset", async () => {
+		const read = vi.fn(async () => [1, 2, 3, 4, 5].map((n) => geoRow(n, {}, 5)))
+		const {shadow} = setup(read)
+		shadow.versions(served({offset: 2, limit: 2}, [3, 4]))
+		await settle()
+		expect(read).toHaveBeenCalledWith({entityId: ENTITY, first: 4})
+		expect(result("match")).toBe(1)
+	})
+
+	it("does not read a page ending past geo-db's 100-row cap", async () => {
+		const read = vi.fn(async () => [])
+		const {shadow} = setup(read)
+		shadow.versions(served({offset: 60, limit: 50}))
+		await settle()
+		expect(read).not.toHaveBeenCalled()
+		expect(unsupported("deep_page")).toBe(1)
 	})
 
 	it("compares one request in N", async () => {
