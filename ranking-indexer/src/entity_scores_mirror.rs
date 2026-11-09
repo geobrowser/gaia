@@ -57,6 +57,22 @@ pub fn rows_by_id_sql() -> String {
     format!("SELECT {COLUMNS} FROM public.entity_ranking_scores WHERE entity_id = ANY($1)")
 }
 
+/// The ids `public.refresh_debate_watch_scores()` hands to the scorer (migration 0114): every Debate with signals in the
+/// watch window, a non-zero stored `watch_score`, or a `created_at` inside the window. The hourly feed-signals sync runs
+/// it and re-scores these rows' watch term and `ranking_score` with no read-back, so the overlay drifted from them.
+pub const DEBATE_WATCH_IDS_SQL: &str = "SELECT DISTINCT ty.from_entity_id FROM public.relations ty \
+    WHERE ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid \
+    AND ty.to_entity_id = 'fd51f935-2063-4617-be39-7b672b23364c'::uuid \
+    AND (EXISTS (SELECT 1 FROM personalization.feed_item_signals_hourly f \
+                 WHERE f.item_id = ty.from_entity_id \
+                 AND f.hour >= now() - make_interval(days => (SELECT watch_window_days FROM public.entity_ranking_config WHERE id))) \
+         OR EXISTS (SELECT 1 FROM public.entity_ranking_scores s WHERE s.entity_id = ty.from_entity_id AND s.watch_score <> 0) \
+         OR EXISTS (SELECT 1 FROM public.entities e WHERE e.id = ty.from_entity_id AND e.created_at ~ '^[0-9]+$' \
+                    AND e.created_at::bigint >= extract(epoch FROM now() - make_interval(days => (SELECT watch_window_days FROM public.entity_ranking_config WHERE id)))))";
+
+/// Ids read per primary-key query when mirroring a set.
+pub const ID_CHUNK: usize = 5000;
+
 /// One row of `public.entity_ranking_scores`.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct ScoreRow {
@@ -207,6 +223,69 @@ pub async fn mirror(
     send(mirror, &touched, &rows).await
 }
 
+/// The debate ids the watch refresh will re-score, read before the sync. `None` when the mirror does not take this table.
+pub async fn debate_watch_prior(mirror: &DerivedMirror, pool: &PgPool) -> Option<HashSet<Uuid>> {
+    if !mirror.allows(TABLE) {
+        return None;
+    }
+    match sqlx::query_scalar::<_, Uuid>(DEBATE_WATCH_IDS_SQL)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(ids) => Some(ids.into_iter().collect()),
+        Err(e) => {
+            tracing::warn!(error = %e, "debate watch mirror skipped: before-state read failed");
+            None
+        }
+    }
+}
+
+/// The ids to mirror: those read before and those the selection yields now, sorted and split into chunks.
+pub fn id_chunks(before: &HashSet<Uuid>, now: &[Uuid], chunk: usize) -> Vec<Vec<Uuid>> {
+    let mut all: Vec<Uuid> = before.iter().chain(now.iter()).copied().collect();
+    all.sort();
+    all.dedup();
+    all.chunks(chunk.max(1)).map(<[Uuid]>::to_vec).collect()
+}
+
+/// After the watch refresh committed: read the rows of the ids it re-scored (before or now selected) by primary key and
+/// send them, chunk by chunk through the mirror's own pacing. A chunk that cannot be read is skipped, never deleted.
+/// Returns (puts, deletes) offered. Never fails the job.
+pub async fn mirror_debate_watch(
+    mirror: &DerivedMirror,
+    pool: &PgPool,
+    before: &HashSet<Uuid>,
+) -> (usize, usize) {
+    let now: Vec<Uuid> = match sqlx::query_scalar(DEBATE_WATCH_IDS_SQL)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(error = %e, "debate watch mirror: after-state read failed; mirroring the before set");
+            Vec::new()
+        }
+    };
+    let mut total = (0, 0);
+    for ids in id_chunks(before, &now, ID_CHUNK) {
+        let rows: Vec<ScoreRow> = match sqlx::query_as(&rows_by_id_sql())
+            .bind(&ids)
+            .fetch_all(pool)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "debate watch mirror: a chunk could not be read; its keys are not touched");
+                continue;
+            }
+        };
+        let touched: HashSet<Uuid> = ids.into_iter().collect();
+        let (p, d) = send(mirror, &touched, &rows).await;
+        total = (total.0 + p, total.1 + d);
+    }
+    total
+}
+
 async fn send(
     mirror: &DerivedMirror,
     touched: &HashSet<Uuid>,
@@ -343,6 +422,49 @@ mod tests {
         let p = plan(&touched, &[trending(1, 8.0), trending(2, 8.0)]);
         assert_eq!(p.puts.len(), 1);
         assert!(p.deletes.is_empty());
+    }
+
+    #[test]
+    fn id_chunks_union_sort_and_split() {
+        let before: HashSet<Uuid> = [3u8, 1].iter().map(|n| u(*n)).collect();
+        let now = vec![u(2), u(3), u(5)];
+        let chunks = id_chunks(&before, &now, 2);
+        assert_eq!(chunks, vec![vec![u(1), u(2)], vec![u(3), u(5)]]);
+        assert!(id_chunks(&HashSet::new(), &[], 2).is_empty());
+        assert_eq!(id_chunks(&before, &[], 0).len(), 2);
+    }
+
+    #[test]
+    fn a_debate_whose_watch_term_changed_is_put_and_one_that_zeroed_out_is_deleted() {
+        // 1 still carries a watch term (re-scored by the sync), 2 lost it and has no other engagement, 3 lost it but is voted on.
+        let watched = ScoreRow {
+            ranking_score: 12.0,
+            watch_score: 2.5,
+            ..quiet(1)
+        };
+        let voted = ScoreRow {
+            positive: 1,
+            ..quiet(3)
+        };
+        let touched: HashSet<Uuid> = [1u8, 2, 3].iter().map(|n| u(*n)).collect();
+        let p = plan(&touched, &[watched.clone(), quiet(2), voted]);
+        assert_eq!(p.puts.len(), 2);
+        assert_eq!(p.puts[0].value, watched.encode());
+        assert_eq!(p.deletes, vec![u(2).as_bytes().to_vec()]);
+    }
+
+    #[test]
+    fn the_debate_selection_is_the_refresh_functions() {
+        for needle in [
+            "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1",
+            "fd51f935-2063-4617-be39-7b672b23364c",
+            "feed_item_signals_hourly",
+            "s.watch_score <> 0",
+            "e.created_at ~ '^[0-9]+$'",
+            "watch_window_days",
+        ] {
+            assert!(DEBATE_WATCH_IDS_SQL.contains(needle), "{needle}");
+        }
     }
 
     #[test]

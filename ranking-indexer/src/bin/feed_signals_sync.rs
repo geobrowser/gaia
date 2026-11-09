@@ -212,6 +212,11 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
     } else {
         Vec::new()
     };
+    // The debates the watch refresh inside `apply` re-scores: their rows move with no read-back (collection 21 mirror).
+    let watch_before = match &mirror {
+        Some(m) => ranking_indexer::entity_scores_mirror::debate_watch_prior(m, pool).await,
+        None => None,
+    };
     let r = feed_signals::apply(
         pool,
         &cutoff.generation,
@@ -254,6 +259,12 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
             }
             Err(e) => warn!(error = %e, "feed signals mirror skipped: read failed"),
         }
+    }
+    // The re-scored debate rows into collection 21, after the commit; a read error skips the mirror, never the job.
+    if let (Some(mirror), Some(before)) = (&mirror, &watch_before) {
+        let (puts, deletes) =
+            ranking_indexer::entity_scores_mirror::mirror_debate_watch(mirror, pool, before).await;
+        info!(puts, deletes, "debate watch scores offered to geo-db");
     }
     if let Some(mirror) = &seen_mirror {
         // Read after the replace and the retention prune committed; a read error skips the mirror.
