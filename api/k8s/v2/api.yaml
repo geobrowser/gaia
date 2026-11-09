@@ -447,9 +447,9 @@ spec:
               value: "1"
             # The feed signal runs watermark twin: geo-db's mirrored newest succeeded feed_signal_runs row (cursors collection 10,
             # GEODB_FEED_RUNS_MIRROR in the feed-signals-sync CronJob) against Postgres' max(data_through) over the succeeded runs
-            # (_INTERVAL_MS, default 5 min): gaia_api_feed_runs_shadow_total{result}. OFF; `absent` until the mirror is on.
+            # (_INTERVAL_MS, default 5 min): gaia_api_feed_runs_shadow_total{result}. ON; `absent` until the feed-signals-sync mirror has run.
             - name: GEODB_FEED_RUNS_SHADOW
-              value: "0"
+              value: "1"
             # The per-user readers' twins: one sampled user's group in restricted collection 28 (with collection 23 and the
             # config Space's interest records) against user_topic_weights, and in collection 29 against feed_user_seen
             # (_INTERVAL_MS, default 5 min): gaia_api_private_readers_shadow_total{reader,result}, counts only. OFF; needs
