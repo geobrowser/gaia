@@ -52,6 +52,11 @@ import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
 import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
+	createProposalDiffShadow,
+	type ProposalDiffShadow,
+	readProposalDiffShadowConfig,
+} from "./src/geodb/proposalDiffShadow"
+import {
 	createPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
@@ -208,9 +213,15 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+// GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
+// statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
+const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
-	createVersionedRouter(db, runtime, {versions: (served) => entityVersionsShadowRef.current?.versions(served)}),
+	createVersionedRouter(db, runtime, {
+		versions: (served) => entityVersionsShadowRef.current?.versions(served),
+		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
+	}),
 )
 log.info("Versioned entity routes enabled")
 
@@ -258,6 +269,16 @@ if (entityVersionsShadowConfig.enabled) {
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
 		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
+	})
+}
+
+const proposalDiffShadowConfig = readProposalDiffShadowConfig(process.env)
+if (proposalDiffShadowConfig.enabled) {
+	proposalDiffShadowRef.current = createProposalDiffShadow({
+		config: proposalDiffShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
 	})
 }
 

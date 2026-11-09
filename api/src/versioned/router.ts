@@ -20,6 +20,7 @@ type AppEnv = {
 }
 
 import type {ServedVersions} from "../geodb/entityVersionsShadow"
+import type {ServedProposalDiff} from "../geodb/proposalDiffShadow"
 import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
@@ -313,7 +314,7 @@ export function createVersionedRouter(
 	db: Database,
 	runtime: AppRuntime,
 	/** GEODB_VERSIONS_SHADOW: compares a served `/entities/:id/versions` page with geo-db's log; never changes a response. */
-	shadow?: {versions(served: ServedVersions): void},
+	shadow?: {versions(served: ServedVersions): void; proposalDiff?(served: ServedProposalDiff): void},
 ) {
 	const router = new Hono<AppEnv>()
 
@@ -1189,7 +1190,16 @@ export function createVersionedRouter(
 						}
 					}
 				},
-				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
+				onRight: (diff: PaginatedProposalDiff) => {
+					// Fire and forget: the shadow runs after this, in the background, and swallows its own errors.
+					shadow?.proposalDiff?.({
+						route: "proposal",
+						spaceId: diff.spaceId,
+						mode: diff.proposalStatus === "active" ? "active" : "historical",
+						entities: diff.entities,
+					})
+					return c.json(diff)
+				},
 			})
 		},
 	)
@@ -1248,7 +1258,15 @@ export function createVersionedRouter(
 					const mapped = mapGroupedProposalError(error)
 					return c.json(mapped.body, mapped.status)
 				},
-				onRight: (diff: PaginatedGroupedProposalDiff) => c.json(diff),
+				onRight: (diff: PaginatedGroupedProposalDiff) => {
+					shadow?.proposalDiff?.({
+						route: "group",
+						spaceId: diff.spaceId,
+						mode: diff.mode,
+						entities: diff.entities,
+					})
+					return c.json(diff)
+				},
 			})
 		},
 	)

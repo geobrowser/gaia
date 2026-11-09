@@ -17,6 +17,7 @@ import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderPrivateReadersShadowMetrics} from "./geodb/privateReadersShadow"
+import {renderProposalDiffShadowMetrics} from "./geodb/proposalDiffShadow"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
@@ -170,6 +171,8 @@ function renderPrometheusMetrics(): string {
 		renderProfileShadowMetrics(),
 		// Entity version count, order and author from geo-db against the served /versioned/entities/:id/versions (GEODB_VERSIONS_SHADOW) — see geodb/entityVersionsShadow.ts.
 		renderEntityVersionsShadowMetrics(),
+		// Active proposal and proposal-group diff base statements checked against geo-db's cards (GEODB_PROPOSAL_DIFF_SHADOW) — see geodb/proposalDiffShadow.ts.
+		renderProposalDiffShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
 		renderForYouConfigMetrics(),
 		// entity_ranking_config tau_seconds from geo-db against the served one (GEODB_ENTITY_RANKING_CONFIG_SHADOW) — see forYou/entityRankingConfigShadow.ts.
