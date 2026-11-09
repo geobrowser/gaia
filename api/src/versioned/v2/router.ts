@@ -12,6 +12,7 @@ import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 import {bodyLimit} from "hono/body-limit"
+import type {ServedNames} from "../../geodb/entityAtVersionShadow"
 import {getProfilesBySpaceIds} from "../../profile/queries"
 import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
@@ -80,7 +81,12 @@ function resolveCreatorProfiles(
 	)
 }
 
-export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
+export function createVersionedV2Router(
+	db: Database,
+	runtime: AppRuntime,
+	/** GEODB_ENTITY_AT_VERSION_SHADOW: compares the names the diff's enrichment stamped with geo-db's; never changes a response. */
+	shadow?: {names(served: ServedNames): void},
+) {
 	const router = new Hono<AppEnv>()
 
 	/**
@@ -96,6 +102,7 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 		const rawSpaceId = c.req.query("spaceId")
 		const requestId = c.get("requestId") ?? "unknown"
 
+		let servedNames: ReadonlyMap<string, string> | null = null
 		const program = Effect.gen(function* () {
 			if (!isValidUuid(rawEntityId)) {
 				return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
@@ -168,7 +175,9 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 					toResolved.versionKey,
 					spaceId,
 				)
-				const namedDiff = yield* enrichNames(db, blockConfigDiff, spaceId)
+				const namedDiff = yield* enrichNames(db, blockConfigDiff, spaceId, (names) => {
+					servedNames = names
+				})
 				return yield* enrichWithMediaUrls(db, namedDiff, {
 					// In snapshot mode there is no before side, so the from key is unused;
 					// fall back to the to version key to keep the lookup well-formed.
@@ -230,7 +239,11 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
 			},
-			onRight: (response: DiffResponseV2) => c.json(response as unknown as Record<string, unknown>, 200),
+			onRight: (response: DiffResponseV2) => {
+				// Fire and forget (GEODB_ENTITY_AT_VERSION_SHADOW): after the response is built, swallows its own errors.
+				if (servedNames !== null && rawSpaceId) shadow?.names({spaceId: rawSpaceId, names: servedNames})
+				return c.json(response as unknown as Record<string, unknown>, 200)
+			},
 		})
 	})
 
