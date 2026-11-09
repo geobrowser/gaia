@@ -21,6 +21,19 @@ use crate::models::{
 #[derive(Clone)]
 pub struct Storage {
     pub pool: sqlx::Pool<Postgres>,
+    /// `KG_INDEXER_PG_WRITES`, default on. Off: the consumer issues no Postgres statement and
+    /// advances past each message (cutover switch, plan 10.22). Read by `main.rs`, which skips
+    /// whole blocks, messages and tally ticks; the `Storage` methods themselves do not check it.
+    pg_writes: bool,
+}
+
+/// Parse `KG_INDEXER_PG_WRITES`. Unset, empty or anything but an explicit off value means on,
+/// so a typo never silently stops the writes.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Per-connection `statement_timeout` for the indexer pool, in milliseconds.
@@ -67,7 +80,29 @@ impl Storage {
             .connect(database_url)
             .await?;
 
-        Ok(Storage { pool })
+        Ok(Storage::from_pool(pool))
+    }
+
+    /// Wrap an existing pool; the Postgres-writes switch comes from `KG_INDEXER_PG_WRITES`.
+    pub fn from_pool(pool: sqlx::Pool<Postgres>) -> Self {
+        Storage {
+            pool,
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("KG_INDEXER_PG_WRITES").ok().as_deref(),
+            ),
+        }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    #[allow(dead_code)] // used by tests; `main.rs` compiles this file as its own module
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+
+    /// False when `KG_INDEXER_PG_WRITES` is off.
+    pub fn pg_writes(&self) -> bool {
+        self.pg_writes
     }
 
     /// Begin a transaction with the indexer's statement-timeout budget applied
