@@ -652,8 +652,8 @@ not a move: Postgres stays the source (`readSettings` and `user_topic_weights` r
 nothing writes the table but migrations and operator SQL; the Job is the only writer, and a rerun after an operator edit
 writes the new values (a changed value closes the old statement; the record keeps one active value a column).
 
-The api compares it: `GEODB_FOR_YOU_CONFIG_SHADOW` (api, default `0`) reads the record after a For you request and counts
-`gaia_api_for_you_config_shadow_total{result=match|mismatch|unsupported|failed}`. It never changes a response.
+The api compares it: `GEODB_FOR_YOU_CONFIG_SHADOW` (api, default `0`) reads the record on a timer (a single-flight, unref'd sampler, `GEODB_FOR_YOU_CONFIG_SHADOW_INTERVAL_MS`, default 300 s; no per-request cost) and counts
+`gaia_api_for_you_config_shadow_total{result=match|mismatch|unsupported|failed|reference_timeout|reference_failed}` (the last two: the Postgres reference read timed out, SQLSTATE 57014, or failed; `failed` is the geo-db read). It never changes a response.
 
 Enable, each step only after the one before it is live:
 
@@ -681,8 +681,8 @@ participation, comment, topic, watch, trending) as a natural-key record in the `
 operator SQL, so there is no consumer: the Job is the only writer, and a rerun after an operator edit writes the new
 values (a changed value closes the old statement). `updated_at` is not mirrored.
 
-The api compares it: `GEODB_ENTITY_RANKING_CONFIG_SHADOW` (api, default `0`) reads the record after a For you request and
-counts `gaia_api_entity_ranking_config_shadow_total{result=match|mismatch|unsupported|failed}` for `tau_seconds`, the only
+The api compares it: `GEODB_ENTITY_RANKING_CONFIG_SHADOW` (api, default `0`) reads the record on a timer (`GEODB_ENTITY_RANKING_CONFIG_SHADOW_INTERVAL_MS`, default 300 s) and
+counts `gaia_api_entity_ranking_config_shadow_total{result=match|mismatch|unsupported|failed|reference_timeout|reference_failed}` for `tau_seconds`, the only
 value the api sees. It never changes a response. The other 30 columns are checked by the gate, not live.
 
 Enable, each step only after the one before it is live:
@@ -733,7 +733,7 @@ in the `config` system Space (`geodb-feeder/src/feedExperimentsKeyed.ts`; the pi
 experiment id). Fourth slice of the config tables (after §2c-config-interest). A mirror, not a move: Postgres stays the
 source. The reader is the plpgsql `personalization.feed_experiment_for_user` (api/drizzle 0102:184), called from
 `readExperiment` (api/src/forYou/queries.ts); the api has a flag-off shadow of it, `GEODB_FEED_EXPERIMENT_SHADOW`
-(`gaia_api_feed_experiment_shadow_total`), that checks the served experiment is active in geo-db with the same arms and, for a
+(`gaia_api_feed_experiment_shadow_total`; timer-driven, `GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS`, default 300 s; each pass checks a random UUID and one sampled member; results also include `reference_timeout` and `reference_failed`), that checks the served experiment is active in geo-db with the same arms and, for a
 hash-assigned user, recomputes `interleaved` from the record's salt and share. `created_at` is not mirrored; membership is
 §2c-config-experiment-members. Nothing writes the table but migrations and operator SQL, so
 there is no consumer: the Job is the only writer, and a rerun after an operator edit writes the new values. A note set to
@@ -801,7 +801,7 @@ Enable, each step only after the one before it is live:
 
 5. The api reader twins (api/src/geodb/entityFeedConfigShadow.ts), one flag per table, all `0` in `api/k8s/v2/api.yaml`:
    `GEODB_ENTITY_TYPE_WEIGHTS_SHADOW`, `GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW`
-   (`_SAMPLE`, default 20, and `GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS`, default 60 s, are shared). Each samples rows of
+   (`_SAMPLE`, default 20, and `GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS`, default 60 s, are shared; all config shadows run on the one helper in api/src/geodb/intervalSampler.ts, and a Postgres sample failure counts as `reference_timeout` or `reference_failed`). Each samples rows of
    its table from Postgres and reads the record back from the `config` Space:
    `gaia_api_entity_feed_config_shadow_total{table,result=match|mismatch|missing|unsupported|failed}`. `missing` means the
    backfill Job was not run (or the row is newer); `unsupported` means the `config` Space is not in the system-space map. The

@@ -43,7 +43,10 @@
  *  - digest_only: the digest moved and the counter did not (geo-db caught up after revision_only, or a backfill wrote values
  *    Postgres does not hold);
  *  - unsupported: the `config` system Space is not in the map, or one of the three singleton records is absent;
- *  - failed: a read failed.
+ *  - failed: a geo-db read failed;
+ *  - reference_timeout / reference_failed: the Postgres counter read hit its statement timeout, or failed otherwise
+ *    (referenceSide.ts); like any failed or unsupported pass, the next one is a baseline.
+ * The timer is `createIntervalSampler` (geodb/intervalSampler.ts), shared with the other config shadows.
  * Logs counts only, never a key or a value.
  */
 
@@ -57,6 +60,8 @@ import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
 import type {GeoCardRow} from "./card"
 import {type GeoDbCardClient, GeoDbError} from "./client"
 import {ConfigSpaceMissing} from "./entityFeedConfigShadow"
+import {createIntervalSampler, type IntervalSampler, readIntervalSamplerConfig} from "./intervalSampler"
+import {failureResult, viaReference} from "./referenceSide"
 
 /** The feeder's pins (geodb-feeder/src/recordKinds.ts); `__tests__/configRevisionShadow.test.ts` holds them to that file. */
 export const INTEREST_CONFIG_KIND = "e7ca641275a840bebb7ac20424a5deae"
@@ -115,12 +120,12 @@ export function createConfigRevisionReader(deps: {
 export type ConfigRevisionShadowConfig = {enabled: boolean; intervalMs: number}
 
 export function readConfigRevisionShadowConfig(env: Record<string, string | undefined>): ConfigRevisionShadowConfig {
-	const flag = env.GEODB_CONFIG_REVISION_SHADOW?.trim().toLowerCase()
-	const n = Number(env.GEODB_CONFIG_REVISION_SHADOW_INTERVAL_MS)
-	return {
-		enabled: flag === "1" || flag === "on" || flag === "true",
-		intervalMs: Number.isInteger(n) && n >= 1 ? Math.min(n, 86_400_000) : 30_000,
-	}
+	return readIntervalSamplerConfig(
+		env,
+		"GEODB_CONFIG_REVISION_SHADOW",
+		"GEODB_CONFIG_REVISION_SHADOW_INTERVAL_MS",
+		30_000,
+	)
 }
 
 export const RESULTS = [
@@ -131,6 +136,8 @@ export const RESULTS = [
 	"digest_only",
 	"unsupported",
 	"failed",
+	"reference_timeout",
+	"reference_failed",
 ] as const
 export type Result = (typeof RESULTS)[number]
 
@@ -152,7 +159,7 @@ const bump = (result: Result): void => {
 export function renderConfigRevisionShadowMetrics(): string {
 	if (!active) return ""
 	return [
-		"# HELP gaia_api_config_revision_shadow_total Whether the derived For you config digest from geo-db's config Space moved between passes exactly when Postgres' feed_config_revision did, by result: baseline, match_unchanged, match_changed, revision_only (counter moved, digest did not), digest_only (digest moved, counter did not), unsupported or failed.",
+		"# HELP gaia_api_config_revision_shadow_total Whether the derived For you config digest from geo-db's config Space moved between passes exactly when Postgres' feed_config_revision did, by result: baseline, match_unchanged, match_changed, revision_only (counter moved, digest did not), digest_only (digest moved, counter did not), unsupported, failed (geo-db) or reference_timeout / reference_failed (the Postgres counter read).",
 		"# TYPE gaia_api_config_revision_shadow_total counter",
 		...RESULTS.map((r) => `gaia_api_config_revision_shadow_total{result="${r}"} ${results.get(r) ?? 0}`),
 	].join("\n")
@@ -172,12 +179,7 @@ export async function readPostgresRevision(db: Database): Promise<number> {
 	return n
 }
 
-export type ConfigRevisionShadow = {
-	/** One pass. Resolves when done; never throws. */
-	runOnce(): Promise<void>
-	/** Start the periodic pass; returns the stop function. The timer does not keep the process alive. */
-	start(): () => void
-}
+export type ConfigRevisionShadow = IntervalSampler
 
 export function createConfigRevisionShadow(deps: {
 	config: ConfigRevisionShadowConfig
@@ -189,15 +191,12 @@ export function createConfigRevisionShadow(deps: {
 	const {config, db, reader, log} = deps
 	const readRevision = deps.readRevision ?? readPostgresRevision
 	active = true
-	let running = false
 	let last: {counter: number; digest: string} | null = null
 	let logged = 0
 
-	async function runOnce(): Promise<void> {
-		if (running) return
-		running = true
+	async function pass(): Promise<void> {
 		try {
-			const counter = await readRevision(db)
+			const counter = await viaReference(readRevision(db))
 			const {digest} = await reader.read()
 			if (last === null) bump("baseline")
 			else {
@@ -213,21 +212,19 @@ export function createConfigRevisionShadow(deps: {
 			last = null
 			if (error instanceof ConfigSpaceMissing || error instanceof ConfigRecordMissing) bump("unsupported")
 			else {
-				bump("failed")
-				if (!(error instanceof GeoDbError)) log.warn("config revision shadow failed", {error: String(error)})
+				const result = failureResult(error)
+				bump(result)
+				if (result !== "failed" || !(error instanceof GeoDbError))
+					log.warn("config revision shadow failed", {result, error: String(error)})
 			}
-		} finally {
-			running = false
 		}
 	}
 
-	return {
-		runOnce,
-		start() {
-			if (!config.enabled) return () => {}
-			const timer = setInterval(() => void runOnce().catch(() => {}), config.intervalMs)
-			timer.unref?.()
-			return () => clearInterval(timer)
-		},
-	}
+	return createIntervalSampler({
+		enabled: config.enabled,
+		intervalMs: config.intervalMs,
+		pass,
+		log,
+		label: "config revision shadow",
+	})
 }
