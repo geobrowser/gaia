@@ -123,6 +123,20 @@ impl MetaBlockShadow {
         true
     }
 
+    /// The block geo-db's copy of writer `id` names, read now (not sampled). `Ok(None)`: no row,
+    /// or a value that is not `<block>:<cursor>`. An error is a failed read, so a caller that
+    /// answers from geo-db can tell "no row" from "could not read".
+    pub async fn read_block(&self, id: &str) -> Result<Option<u64>, crate::MirrorError> {
+        let got = self
+            .reader
+            .get_many(self.collection, &[id.as_bytes().to_vec()])
+            .await?;
+        Ok(got
+            .first()
+            .and_then(|g| g.as_ref())
+            .and_then(|g| block_of(&g.value)))
+    }
+
     /// Reads writer `id`'s row and counts it against `pg`, the block the caller's Postgres read
     /// answered. `reader` names the caller in the metric. Skipped inside the sampling interval.
     /// Never fails the caller.
