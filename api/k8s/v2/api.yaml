@@ -358,11 +358,11 @@ spec:
             - name: GEODB_PROFILE_SHADOW
               value: "on"
             # Compares a sampled /versioned/entities/:id/versions response (version count, order, author) with geo-db's
-            # entity-versions log in the background (never changes the response). OFF ("0"): needs a geodb-client at or
-            # after geo-db 25360b28c6 (the `entity-versions` pipe line) and a serve at wire revision 12; an older client
-            # reports unsupported{client}. 1 in 10 requests, at most 30 a minute, 2 at once.
+            # entity-versions log in the background (never changes the response). ON: the client init above carries the
+            # `entity-versions` pipe line and serve is past wire revision 12; an older client reports unsupported{client}.
+            # 1 in 10 requests, at most 30 a minute, 2 at once. "0" turns it off.
             - name: GEODB_VERSIONS_SHADOW
-              value: "0"
+              value: "on"
             # A nested property, Type or relation-target name that geo-db prints as none because it is named in a Space
             # outside the read is settled from its Name in every Space (one batch read of at most 64 ids, under the
             # every-Space budget). A name no Space holds stays uncompared, never a mismatch. Shadow only (gaia#1257).
