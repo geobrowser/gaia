@@ -518,6 +518,7 @@ process.exit(1)
 		expect(cardDocument(ENTITY)).toBe(plain)
 		expect(cardDocument(ENTITY, {})).toBe(plain)
 		expect(cardDocument(ENTITY, {names: false})).toBe(plain)
+		expect(cardDocument(ENTITY, {relations: true})).toBe(plain.replace(" } } } }", ", .relations = true } } } }"))
 		expect(cardDocument(ENTITY, {names: true})).toBe(
 			`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${ENTITY}", .names = true } } } }`,
 		)

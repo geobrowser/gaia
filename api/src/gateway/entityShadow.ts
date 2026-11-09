@@ -83,6 +83,14 @@ import {
 	type NestedObjectName,
 	planNestedEntity,
 } from "./nestedEntity"
+import {
+	checkPropertyInfo,
+	checkRelationsMembership,
+	collectPropertyInfo,
+	type PropertyInfoPlan,
+	type PropertyInfos,
+	planPropertyInfo,
+} from "./propertyInfo"
 import type {ReadBudget} from "./readBudget"
 
 export const ENTITY_FIELD = "entity"
@@ -192,6 +200,8 @@ export type ListPlan = {
 	hasNext: {pageInfo: string; field: string} | null
 	/** The nested entity objects of the rows (`GEODB_NESTED_ENTITY_SHADOW`); absent when the rows select none. */
 	nestedEntities?: NestedEntityPlans
+	/** Where the property_info fields of the rows' `property` object sit (`GEODB_PROPERTY_INFO_SHADOW`); absent when none is selected. */
+	propertyInfo?: PropertyInfoPlan
 }
 
 /** What a card comparison needs of an entity selection: where its answers sit in an entity object. */
@@ -321,7 +331,12 @@ export const isCountOnly = (field: FieldNode): boolean =>
 	)
 
 /** The columns (and nested `{id}` objects) of a list's rows, with fragments inlined. */
-export type PlannedColumns = {columns: Record<string, string>; nested: Record<string, string>; names: ListPlan["names"]}
+export type PlannedColumns = {
+	columns: Record<string, string>
+	nested: Record<string, string>
+	names: ListPlan["names"]
+	propertyInfo?: PropertyInfoPlan
+}
 
 const NESTED_OBJECT_NAMES = ["toEntity", "fromEntity", "entity"]
 
@@ -335,6 +350,7 @@ export function planColumns(
 	const columns: Record<string, string> = {}
 	const nested: Record<string, string> = {}
 	const names: PlannedColumns["names"] = {}
+	let propertyInfo: PropertyInfoPlan | undefined
 	const seen = new Set<string>()
 	for (const child of fieldsOf(set, fragments)) {
 		const name = child.name.value
@@ -347,6 +363,7 @@ export function planColumns(
 			// A nested object may carry its id (compared, when it is a compared column) and fields the card
 			// cannot settle (counted as uncompared). Its own arguments and sub-objects are not interpreted.
 			if (!child.selectionSet || child.arguments?.length) throw new Unsupported("selection")
+			if (object === PROPERTY_OBJECT) propertyInfo = planPropertyInfo(child, fragments, propertyInfo)
 			if (nestedOut && NESTED_OBJECT_NAMES.includes(name)) {
 				const planned = planNestedEntity(name as NestedObjectName, child, fragments, nestedOut.variables)
 				nestedOut.plans.push(planned.plan)
@@ -373,7 +390,7 @@ export function planColumns(
 		if (spec.columns.includes(name)) columns[name] ??= key
 		else if (!spec.ignored.includes(name)) refuse("selection")
 	}
-	return {columns, nested, names}
+	return {columns, nested, names, ...(propertyInfo ? {propertyInfo} : {})}
 }
 
 type PlannedList = {list: ListPlan; spaceId: string | null}
@@ -402,7 +419,7 @@ function planList(
 			? {...list, nestedEntities: {plans: collector.plans, residual: collector.residual}}
 			: list
 	if (!connection) {
-		const {columns, nested, names} = planColumns(
+		const {columns, nested, names, propertyInfo} = planColumns(
 			field.selectionSet as SelectionSetNode,
 			fragments,
 			spec,
@@ -410,7 +427,16 @@ function planList(
 			collector,
 		)
 		return {
-			list: withNested({key: listKey, first, columns, nested, names, nodesKey: null, hasNext: null}),
+			list: withNested({
+				key: listKey,
+				first,
+				columns,
+				nested,
+				names,
+				nodesKey: null,
+				hasNext: null,
+				...(propertyInfo ? {propertyInfo} : {}),
+			}),
 			spaceId,
 		}
 	}
@@ -443,6 +469,7 @@ function planList(
 			names: rows.names,
 			nodesKey,
 			hasNext,
+			...(rows.propertyInfo ? {propertyInfo: rows.propertyInfo} : {}),
 		}),
 		spaceId,
 	}
@@ -825,6 +852,8 @@ export type PostgresCard = {
 	allRelations?: {rows: {spaceId: string | null}[]; truncated: boolean}
 	/** The nested entity objects of the relation rows, when the plan selected any (`GEODB_NESTED_ENTITY_SHADOW`). */
 	nestedEntities?: NestedEntities
+	/** The property_info objects of the values rows, when the plan selected any (`GEODB_PROPERTY_INFO_SHADOW`). */
+	propertyInfo?: PropertyInfos
 } | null
 
 /** PostGraphile's `updatedAt` / `createdAt`: unix seconds as text (an ISO instant is read too), else null. */
@@ -892,11 +921,13 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 	if (plan.relations.names.toEntity) nested.toEntity = []
 	if (plan.relations.names.fromEntity) nested.fromEntity = []
 	const values: ValueRow[] = []
+	const propertyInfo: PropertyInfos = {items: [], incomplete: false}
 	for (const raw of valueList.nodes) {
 		const node = asRecord(raw)
 		if (!node) return null
 		const propertyId = read(node, plan.values, "propertyId")
 		if (typeof propertyId !== "string") return null
+		if (plan.values.propertyInfo) collectPropertyInfo(node, propertyId, plan.values.propertyInfo, propertyInfo)
 		values.push({
 			property_id: propertyId,
 			text: orNull(read(node, plan.values, "text")),
@@ -935,6 +966,7 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 		const v = entityObject[key]
 		return typeof v === "string" ? v : null
 	}
+	if (plan.values.propertyInfo) card.propertyInfo = propertyInfo
 	if (plan.name) card.name = stringOrNull(plan.name)
 	if (plan.description) card.description = stringOrNull(plan.description)
 	if (plan.updatedAt) card.updatedAt = secondsOrNull(entityObject[plan.updatedAt])
@@ -1272,12 +1304,22 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	crossSpaceNames?: boolean
 	/** Compare the fields of a relation row's nested entity (`description`, `types`, `spaceIds`, lists) against one batched card read (`GEODB_NESTED_ENTITY_SHADOW`). */
 	nestedEntity?: boolean
+	/** Compare the `property { dataTypeId dataTypeName renderableTypeId renderableTypeName format isType }` metadata of a values row against one batched card read of the Properties (`GEODB_PROPERTY_INFO_SHADOW`). */
+	propertyInfo?: boolean
+	/** Compare an unfiltered `allRelationsList { spaceId }` against geo-db's reference statements of the entity (`.args.relations = true`; `GEODB_RELATIONS_MEMBERSHIP_SHADOW`). */
+	relationsMembership?: boolean
 }
 
 export type CardCheck =
 	| {result: "failed"}
 	| {result: "unsupported"; reason: UnsupportedReason}
-	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
+	| {
+			result: "match" | "mismatch"
+			uncompared: UncomparedReason[]
+			detail: Record<string, unknown>
+			/** Reasons in the plan's `uncompared` that this check judged after all (`property_info`, `membership_only`). */
+			settles?: UncomparedReason[]
+	  }
 
 /** Most spaces one wide comparison reads one by one; an entity in more is not compared (`many_spaces`). A multi-Space line is capped at MAX_LINE_SPACES instead. */
 export const MAX_READ_SPACES = 3
@@ -1799,6 +1841,54 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 					if (wrong.length > 0) {
 						result = "mismatch"
 						detail = {...detail, nestedMismatches: nested.mismatches}
+					}
+				}
+			}
+			if (deps.propertyInfo === true && postgres.propertyInfo && reasons.has("property_info")) {
+				const verdict = await checkPropertyInfo(deps, postgres.propertyInfo, "gateway entity shadow")
+				if (verdict.read) {
+					for (const reason of verdict.uncompared) reasons.add(reason)
+					if (verdict.settled) reasons.delete("property_info")
+					if (Object.keys(verdict.mismatches).length > 0) {
+						result = "mismatch"
+						detail = {...detail, propertyInfoMismatches: verdict.mismatches}
+					}
+				}
+			}
+			if (deps.relationsMembership === true && postgres.allRelations && reasons.has("membership_only")) {
+				// The Spaces PostgreSQL says hold the entity (its own lists), in geo-db's ids; geo-db's reference statements there
+				// may not outnumber the rows PostgreSQL lists for the Space.
+				const source =
+					postgres.spaceIds !== undefined ||
+					(postgres.allValues !== undefined && !postgres.allValues.truncated)
+				const named = new Set<string>()
+				for (const id of postgres.spaceIds ?? []) named.add(normalizeUuid(id))
+				for (const r of [...(postgres.allValues?.rows ?? []), ...postgres.allRelations.rows])
+					if (r.spaceId !== null) named.add(normalizeUuid(r.spaceId))
+				const populated = new Set<string>()
+				for (const id of named) {
+					const geo = await deps.geoSpaceOf(id)
+					if (geo) populated.add(geo)
+				}
+				if (source && populated.size > 0 && populated.size <= MAX_EVERY_SPACES) {
+					const verdict = await checkRelationsMembership(
+						deps,
+						plan.entityId,
+						{
+							spaces: postgres.allRelations.rows.map((r) => r.spaceId),
+							cut: postgres.allRelations.truncated,
+						},
+						[...populated],
+						true,
+						async (space) => (await deps.geoSpaceOf(space)) ?? null,
+						"gateway entity shadow",
+					)
+					if (verdict.read) {
+						reasons.delete("membership_only")
+						if (verdict.mismatch) {
+							result = "mismatch"
+							detail = {...detail, relationsMembership: verdict.detail}
+						}
 					}
 				}
 			}
