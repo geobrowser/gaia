@@ -21,7 +21,7 @@ spec:
   #
   # Modeled on k8s/staging/rolling-sweep-cronjob.yaml; v2 conventions applied
   # (namespace gaia, `geo` pull secret, non-root pod securityContext) to
-  # match k8s/v2/ranking-indexer.yaml. Needs DATABASE_URL, no Kafka; the geo-db mirror wiring below is dormant while GEODB_DERIVED_MIRROR is "0".
+  # match k8s/v2/ranking-indexer.yaml. Needs DATABASE_URL, no Kafka; the geo-db mirror wiring below is live while GEODB_DERIVED_MIRROR is "1" (set it back to "0" to stop).
   schedule: "0 * * * *"
   failedJobsHistoryLimit: 3
   concurrencyPolicy: Forbid
@@ -43,7 +43,7 @@ spec:
           volumes:
             - name: ssl-certs
               emptyDir: {}
-            # geodb-client for the ranking_scores mirror (GEODB_DERIVED_MIRROR, collection 11). Dormant while the
+            # geodb-client for the ranking_scores mirror (GEODB_DERIVED_MIRROR, collection 11). Inert when the
             # flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent geodb
             # never blocks a run. Same wiring as ranking-indexer.yaml: the SCORES key, a principal that may write
             # derived collection 11 among others (geodb-scores-key-job.yaml).
@@ -150,9 +150,9 @@ spec:
                       name: api-secrets
                       key: DATABASE_URL
                 # Copy the rows a recomputed block writes into geo-db derived collection 11, best-effort, after the
-                # Postgres write commits. OFF: the lead flips it to "1" once the one-time full fill has run.
+                # Postgres write commits. ON: each run copies only the blocks it recomputed; the one-time full fill is a separate Job.
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
@@ -168,7 +168,7 @@ spec:
                 - name: GEODB_META_BLOCK_SHADOW
                   value: "0"
                 - name: RUST_LOG
-                  value: "rolling_sweep=info,ranking_indexer=info"
+                  value: "rolling_sweep=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "256Mi"
