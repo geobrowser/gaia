@@ -128,7 +128,7 @@ spec:
                 path: reader.key
         # The api's private reader key (geodb/k8s/v2/geodb-private-reader-key-job.yaml, minted by the lead, not in
         # deploy-v2): its principal alone may read restricted collections 28 / 29. Optional; read only by the
-        # GEODB_PRIVATE_READERS_SHADOW, which is off.
+        # GEODB_PRIVATE_READERS_SHADOW (on after the key is minted and serve carries the grant).
         - name: geodb-private-key
           secret:
             secretName: geodb-private-reader-key
@@ -452,10 +452,10 @@ spec:
               value: "0"
             # The per-user readers' twins: one sampled user's group in restricted collection 28 (with collection 23 and the
             # config Space's interest records) against user_topic_weights, and in collection 29 against feed_user_seen
-            # (_INTERVAL_MS, default 5 min): gaia_api_private_readers_shadow_total{reader,result}, counts only. OFF; needs
+            # (_INTERVAL_MS, default 5 min): gaia_api_private_readers_shadow_total{reader,result}, counts only. ON; needs
             # the private reader key above and its derived_read=28,29 grant in serve's binding, else `restricted`.
             - name: GEODB_PRIVATE_READERS_SHADOW
-              value: "0"
+              value: "1"
             - name: GEODB_PRIVATE_KEY_PATH
               value: /etc/geodb/private-key/private-reader.key
             - name: NODE_EXTRA_CA_CERTS
