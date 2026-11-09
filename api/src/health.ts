@@ -10,6 +10,7 @@ import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
+import {renderFeedRunsShadowMetrics} from "./geodb/feedRunsShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
@@ -185,6 +186,8 @@ function renderPrometheusMetrics(): string {
 		renderEntityFeedConfigShadowMetrics(),
 		// The derived For you config digest against Postgres' feed_config_revision (GEODB_CONFIG_REVISION_SHADOW) — see geodb/configRevisionShadow.ts.
 		renderConfigRevisionShadowMetrics(),
+		// The mirrored newest succeeded feed_signal_runs row against Postgres' max data_through (GEODB_FEED_RUNS_SHADOW) — see geodb/feedRunsShadow.ts.
+		renderFeedRunsShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
 		// The Entity computed columns against the served score rows (GEODB_ENTITY_COLUMNS_SHADOW).
