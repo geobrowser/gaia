@@ -33,12 +33,25 @@
 //! Metrics: `ranking_indexer_geodb_reads_shadow_total{read,result}` (match, mismatch,
 //! missing_in_geodb, extra_in_geodb) counts keys, and
 //! `ranking_indexer_geodb_reads_shadow_failed_total{read,reason}` (read_failed, busy) counts
-//! observations that did not run. A difference also logs `event=geodb_reads_shadow_mismatch` with
+//! observations that did not run.
+//!
+//! # Timer sample
+//!
+//! Recompute is event-driven, and the live consumer sees few rank events, so the block-end hook
+//! above can go days without firing. With `RANKING_INDEXER_GEODB_READS_SHADOW_SAMPLE_SECS` set to a
+//! positive number (default `0`, off) and the flag on, a background task wakes that often and
+//! observes up to `RANKING_INDEXER_GEODB_READS_SHADOW_SAMPLE_BLOCKS` (default 5, max 50) randomly
+//! chosen blocks that already hold rows in Postgres. It only reads. A sampled block geo-db holds
+//! no rows for at all is counted as `ranking_indexer_geodb_reads_shadow_sample_blocks_total
+//! {outcome="absent_in_geodb"}` and kept out of the key-level `missing_in_geodb`, so an unfilled
+//! collection reads as "not filled yet", not as a mismatch. Other outcomes: `match`, `differs`,
+//! `empty_both`. A difference also logs `event=geodb_reads_shadow_mismatch` with
 //! counts, never ids.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use geodb_cursor::derived_read::{DerivedReader, ScanRow, SCAN_MAX};
 use tracing::{info, warn};
@@ -50,6 +63,11 @@ use crate::scoring::ScoreRow;
 pub const FLAG: &str = "RANKING_INDEXER_GEODB_READS_SHADOW";
 pub const TOTAL: &str = "ranking_indexer_geodb_reads_shadow_total";
 pub const FAILED: &str = "ranking_indexer_geodb_reads_shadow_failed_total";
+pub const SAMPLE_BLOCKS: &str = "ranking_indexer_geodb_reads_shadow_sample_blocks_total";
+pub const SAMPLE_SECS_VAR: &str = "RANKING_INDEXER_GEODB_READS_SHADOW_SAMPLE_SECS";
+pub const SAMPLE_BLOCKS_VAR: &str = "RANKING_INDEXER_GEODB_READS_SHADOW_SAMPLE_BLOCKS";
+const SAMPLE_BLOCKS_DEFAULT: i64 = 5;
+const SAMPLE_BLOCKS_MAX: i64 = 50;
 pub const READ: &str = "ranking_scores_by_block";
 
 /// What one block's comparison found, in keys.
@@ -121,6 +139,13 @@ pub fn describe() {
     for reason in ["read_failed", "busy"] {
         metrics::counter!(FAILED, "read" => READ, "reason" => reason).absolute(0);
     }
+    metrics::describe_counter!(
+        SAMPLE_BLOCKS,
+        "Blocks the timer sample observed, by outcome (absent_in_geodb = geo-db holds no rows)"
+    );
+    for outcome in ["match", "differs", "absent_in_geodb", "empty_both"] {
+        metrics::counter!(SAMPLE_BLOCKS, "read" => READ, "outcome" => outcome).absolute(0);
+    }
     for result in ["match", "mismatch", "missing_in_geodb", "extra_in_geodb"] {
         metrics::counter!(TOTAL, "read" => READ, "result" => result).absolute(0);
     }
@@ -152,6 +177,96 @@ fn record(c: Counts) {
             keys = c.matched,
             "geo-db read twin matches Postgres"
         );
+    }
+}
+
+/// What one sampled block showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleOutcome {
+    Match,
+    Differs,
+    /// Postgres has rows, geo-db has none for the block.
+    AbsentInGeodb,
+    EmptyBoth,
+}
+
+impl SampleOutcome {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::Differs => "differs",
+            Self::AbsentInGeodb => "absent_in_geodb",
+            Self::EmptyBoth => "empty_both",
+        }
+    }
+}
+
+/// Sampler settings from the environment: `None` (off) unless the interval is a positive number.
+pub fn sample_config(get: impl Fn(&str) -> Option<String>) -> Option<(Duration, i64)> {
+    let secs: u64 = get(SAMPLE_SECS_VAR)?
+        .trim()
+        .parse()
+        .ok()
+        .filter(|s| *s > 0)?;
+    let blocks = get(SAMPLE_BLOCKS_VAR)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(SAMPLE_BLOCKS_DEFAULT)
+        .min(SAMPLE_BLOCKS_MAX);
+    Some((Duration::from_secs(secs), blocks))
+}
+
+/// Classifies a sampled block. A block geo-db holds nothing for is `AbsentInGeodb` and is not
+/// compared key by key.
+pub fn classify_sample(
+    block: Uuid,
+    pg: &[ScoreRow],
+    geo: &[ScanRow],
+    more: bool,
+) -> (SampleOutcome, Option<Counts>) {
+    if geo.is_empty() {
+        let outcome = if pg.is_empty() {
+            SampleOutcome::EmptyBoth
+        } else {
+            SampleOutcome::AbsentInGeodb
+        };
+        return (outcome, None);
+    }
+    let c = compare(block, pg, geo, more);
+    let outcome = if c.differing() > 0 {
+        SampleOutcome::Differs
+    } else {
+        SampleOutcome::Match
+    };
+    (outcome, Some(c))
+}
+
+/// One timer-driven pass: samples blocks from Postgres and observes each. Runs until the process
+/// ends. Never fails the caller.
+pub async fn run_sampler(storage: crate::storage::Storage, every: Duration, blocks: i64) {
+    let Some(shadow) = storage.reads_shadow() else {
+        return;
+    };
+    info!(
+        event = "geodb_reads_shadow_sampler_started",
+        every_secs = every.as_secs(),
+        blocks,
+        "reads shadow sampler on"
+    );
+    let mut tick = tokio::time::interval(every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        match storage.sample_score_blocks(blocks).await {
+            Ok(sample) => {
+                for (block, rows) in sample {
+                    shadow.observe_sample(block, &rows).await;
+                }
+            }
+            Err(e) => {
+                warn!(event = "geodb_reads_shadow_sampler.pg_failed", error = %e, "sampler could not read Postgres")
+            }
+        }
     }
 }
 
@@ -189,6 +304,39 @@ impl RanksReadsShadow {
         let group = u128::from_be_bytes(*block.as_bytes());
         match self.reader.scan(COLLECTION, group, SCAN_MAX).await {
             Ok(page) => record(compare(block, pg, &page.rows, page.more)),
+            Err(e) => {
+                warn!(event = "geodb_reads_shadow.read_failed", read = READ, error = %e, "shadow read failed");
+                metrics::counter!(FAILED, "read" => READ, "reason" => "read_failed").increment(1);
+            }
+        }
+        self.busy.store(false, Ordering::Release);
+    }
+
+    /// Timer-path observation of one block already stored in Postgres. Like `observe_block`, but a
+    /// block geo-db holds no rows for is counted as `absent_in_geodb` (blocks), not as keys
+    /// missing from geo-db.
+    pub async fn observe_sample(&self, block: Uuid, pg: &[ScoreRow]) {
+        if self.busy.swap(true, Ordering::AcqRel) {
+            metrics::counter!(FAILED, "read" => READ, "reason" => "busy").increment(1);
+            return;
+        }
+        let group = u128::from_be_bytes(*block.as_bytes());
+        match self.reader.scan(COLLECTION, group, SCAN_MAX).await {
+            Ok(page) => {
+                let (outcome, counts) = classify_sample(block, pg, &page.rows, page.more);
+                metrics::counter!(SAMPLE_BLOCKS, "read" => READ, "outcome" => outcome.label())
+                    .increment(1);
+                match counts {
+                    Some(c) => record(c),
+                    None => info!(
+                        event = "geodb_reads_shadow_sample_empty",
+                        read = READ,
+                        outcome = outcome.label(),
+                        pg_keys = pg.len(),
+                        "sampled block has no rows in geo-db"
+                    ),
+                }
+            }
             Err(e) => {
                 warn!(event = "geodb_reads_shadow.read_failed", read = READ, error = %e, "shadow read failed");
                 metrics::counter!(FAILED, "read" => READ, "reason" => "read_failed").increment(1);
@@ -296,6 +444,56 @@ mod tests {
             _ => None,
         };
         assert!(RanksReadsShadow::from_vars(off).is_none());
+    }
+
+    #[test]
+    fn sample_config_is_off_unless_positive() {
+        let with = |secs: Option<&'static str>, blocks: Option<&'static str>| {
+            move |k: &str| match k {
+                SAMPLE_SECS_VAR => secs.map(String::from),
+                SAMPLE_BLOCKS_VAR => blocks.map(String::from),
+                _ => None,
+            }
+        };
+        assert_eq!(sample_config(with(None, None)), None);
+        assert_eq!(sample_config(with(Some("0"), None)), None);
+        assert_eq!(sample_config(with(Some("x"), None)), None);
+        assert_eq!(
+            sample_config(with(Some("60"), None)),
+            Some((Duration::from_secs(60), 5))
+        );
+        assert_eq!(
+            sample_config(with(Some("60"), Some("9999"))),
+            Some((Duration::from_secs(60), 50))
+        );
+        assert_eq!(
+            sample_config(with(Some("60"), Some("0"))),
+            Some((Duration::from_secs(60), 5))
+        );
+    }
+
+    #[test]
+    fn an_unfilled_block_is_absent_not_missing() {
+        let rows = [pg(1, 2.5, 1)];
+        assert_eq!(
+            classify_sample(u(7), &rows, &[], false),
+            (SampleOutcome::AbsentInGeodb, None)
+        );
+        assert_eq!(
+            classify_sample(u(7), &[], &[], false),
+            (SampleOutcome::EmptyBoth, None)
+        );
+        let (o, c) = classify_sample(u(7), &rows, &[geo(7, 1, 2.5, 1)], false);
+        assert_eq!((o, c.unwrap().matched), (SampleOutcome::Match, 1));
+        let (o, _) = classify_sample(u(7), &rows, &[geo(7, 1, 9.0, 1)], false);
+        assert_eq!(o, SampleOutcome::Differs);
+    }
+
+    #[tokio::test]
+    async fn a_sample_of_an_empty_group_frees_the_slot() {
+        let shadow = fake("echo ready; while IFS= read -r l; do printf '+0\\n'; done");
+        shadow.observe_sample(u(7), &[pg(1, 1.0, 1)]).await;
+        assert!(!shadow.busy.load(Ordering::Acquire));
     }
 
     fn fake(script: &str) -> RanksReadsShadow {
