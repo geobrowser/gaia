@@ -67,6 +67,16 @@ async fn main() -> Result<(), IndexerError> {
 
     info!("ranking-indexer started");
 
+    if let Some((every, blocks)) =
+        ranking_indexer::ranks_reads_shadow::sample_config(|k| env::var(k).ok())
+    {
+        tokio::spawn(ranking_indexer::ranks_reads_shadow::run_sampler(
+            storage.clone(),
+            every,
+            blocks,
+        ));
+    }
+
     let mut stream = consumer.stream();
     while let Some(result) = stream.next().await {
         let msg = match result {

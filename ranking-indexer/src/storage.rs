@@ -66,6 +66,47 @@ impl Storage {
         })
     }
 
+    pub fn reads_shadow(
+        &self,
+    ) -> Option<std::sync::Arc<crate::ranks_reads_shadow::RanksReadsShadow>> {
+        self.reads_shadow.clone()
+    }
+
+    /// Up to `limit` random blocks that hold rows in `ranks.ranking_scores`, with those rows. Read
+    /// only; feeds the reads shadow's timer sample.
+    pub async fn sample_score_blocks(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<(Uuid, Vec<ScoreRow>)>, IndexerError> {
+        let blocks = sqlx::query_scalar::<_, Uuid>(
+            "SELECT block_id FROM (SELECT DISTINCT block_id FROM ranks.ranking_scores) b \
+             ORDER BY random() LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let rows = sqlx::query_as::<_, (Uuid, Uuid, f64, i32)>(
+                "SELECT entity_id, space_id, score, position FROM ranks.ranking_scores \
+                 WHERE block_id = $1",
+            )
+            .bind(block)
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|(entity_id, space_id, score, position)| ScoreRow {
+                entity_id,
+                space_id,
+                score,
+                position,
+            })
+            .collect();
+            out.push((block, rows));
+        }
+        Ok(out)
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
