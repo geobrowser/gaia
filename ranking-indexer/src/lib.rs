@@ -35,6 +35,7 @@ pub mod membership;
 pub mod metrics;
 pub mod models;
 pub mod not_interested;
+pub mod pg_bin_writes;
 pub mod primer_claims_mirror;
 pub mod primer_mirror;
 pub mod primer_stats;
@@ -61,5 +62,7 @@ pub mod user_interest_shadow;
 pub mod user_topic_signals_mirror;
 pub mod wallet_hash;
 
+#[cfg(test)]
+mod pg_bin_writes_off_tests;
 #[cfg(test)]
 mod pg_writes_off_tests;

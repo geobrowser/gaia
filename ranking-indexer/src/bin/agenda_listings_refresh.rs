@@ -26,6 +26,8 @@ use ranking_indexer::agenda_listings_mirror::{self, Ident, Listing};
 use ranking_indexer::agenda_rescore_compute as rescore;
 use ranking_indexer::entity_ranking_score_compute as scores;
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 
 /// `AGENDA_LISTINGS_RUST_COMPUTE` (default off): after the refresh, compute the listings table again
 /// in code from the graph and log how many rows differ from what the SQL wrote. It covers the
@@ -363,39 +365,48 @@ async fn main() -> Result<(), IndexerError> {
     // its own limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
     // session SET: the connection goes through a transaction-mode pooler.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout = '10min'")
-        .execute(&mut *tx)
-        .await?;
-    let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
-        .fetch_one(&mut *tx)
-        .await?;
-    // The two score counts read entity_ranking_scores_trending_idx, not the whole table.
-    let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) =
-        sqlx::query_as(
-            "SELECT (SELECT count(*) FROM trending.agenda_listings), \
-                (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
-                 WHERE source <> 'agenda_topics'), \
-                (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
-                 WHERE source = 'agenda_topics'), \
-                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
-                (SELECT count(*) FROM public.entity_ranking_scores \
-                 WHERE trending_score <> 0 AND trending_source = 'topic')",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    info!(
-        scored,
-        listings,
-        claims,
-        topics,
-        boosted,
-        topic_boosted,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "agenda listings refreshed"
-    );
-    if rust_compute_enabled() {
+    // Off: the refresh and its counts are skipped as one write (they share a transaction), so the
+    // log and the comparisons against what it wrote are skipped too; the mirrors below still run.
+    let refreshed = pg_bin_writes::run(PgWriteSite::AgendaListingsRefresh, async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL statement_timeout = '10min'")
+            .execute(&mut *tx)
+            .await?;
+        let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
+            .fetch_one(&mut *tx)
+            .await?;
+        // The two score counts read entity_ranking_scores_trending_idx, not the whole table.
+        let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) =
+            sqlx::query_as(
+                "SELECT (SELECT count(*) FROM trending.agenda_listings), \
+                    (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
+                     WHERE source <> 'agenda_topics'), \
+                    (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
+                     WHERE source = 'agenda_topics'), \
+                    (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
+                    (SELECT count(*) FROM public.entity_ranking_scores \
+                     WHERE trending_score <> 0 AND trending_source = 'topic')",
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, IndexerError>((scored, listings, claims, topics, boosted, topic_boosted))
+    })
+    .await?;
+    let scored = refreshed.map(|r| r.0);
+    if let Some((scored, listings, claims, topics, boosted, topic_boosted)) = refreshed {
+        info!(
+            scored,
+            listings,
+            claims,
+            topics,
+            boosted,
+            topic_boosted,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "agenda listings refreshed"
+        );
+    }
+    if scored.is_some() && rust_compute_enabled() {
         match shadow(&pool).await {
             Ok((0, n)) => info!(rows = n, "agenda listings rust compute matches the SQL"),
             Ok((bad, n)) => warn!(
@@ -406,7 +417,7 @@ async fn main() -> Result<(), IndexerError> {
             Err(e) => warn!(error = %e, "agenda listings rust compute skipped"),
         }
     }
-    if let Some(before) = &rescore_state {
+    if let (Some(before), Some(scored)) = (&rescore_state, scored) {
         match rescore_shadow(&pool, before, scored).await {
             Ok((n, sql, 0)) if n as i64 == i64::from(sql) => {
                 info!(ids = n, "agenda rescore rust compute matches the SQL")
@@ -453,7 +464,7 @@ async fn main() -> Result<(), IndexerError> {
             "trending refresh state mirrored to geo-db"
         );
     }
-    if scores::shadow_enabled() {
+    if scored.is_some() && scores::shadow_enabled() {
         // After the commit, so it never holds the refresh's transaction. A read or compute problem
         // is logged and skipped; the SQL scores stay the source.
         shadow_scores(&pool).await;

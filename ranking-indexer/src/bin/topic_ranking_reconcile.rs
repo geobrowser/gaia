@@ -33,6 +33,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_ranking_compute::{
     created_epoch, FeedKey, FeedRow, Graph, Rel, TopicConfig, Value, Vote,
 };
@@ -329,104 +331,111 @@ async fn main() -> Result<(), IndexerError> {
     // limit. SET LOCAL inside one transaction rather than a session SET: the connection goes
     // through a transaction-mode pooler, where a session setting may land on another backend.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout = '10min'")
-        .execute(&mut *tx)
-        .await?;
-    let shadow = rust_compute_enabled();
-    // The two SQL calls below write `entity_topic_ranking` without telling geo-db. When the derived
-    // mirror is on (GEODB_DERIVED_MIRROR, default off), note the table first and diff it after.
-    let mirror = DerivedMirror::from_env().filter(|m| m.allows(topic_ranking_mirror::TABLE));
-    let mut diff = None;
-    if mirror.is_some() {
-        let mut d = Diff::default();
-        match stream_table(&mut tx, |t, k, e, s| d.before(t, k, e, s)).await {
-            Ok(()) => diff = Some(d),
-            Err(e) => {
-                warn!(error = %e, "topic ranking geo-db mirror skipped: before-state read failed")
+    // Off: the debate-score refresh and the reconcile are skipped as one write (they share a
+    // transaction with the shadows and the geo-db diff, which only describe what they changed),
+    // so the whole pass is skipped and counted.
+    pg_bin_writes::run(PgWriteSite::TopicRankingReconcile, async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL statement_timeout = '10min'")
+            .execute(&mut *tx)
+            .await?;
+        let shadow = rust_compute_enabled();
+        // The two SQL calls below write `entity_topic_ranking` without telling geo-db. When the derived
+        // mirror is on (GEODB_DERIVED_MIRROR, default off), note the table first and diff it after.
+        let mirror = DerivedMirror::from_env().filter(|m| m.allows(topic_ranking_mirror::TABLE));
+        let mut diff = None;
+        if mirror.is_some() {
+            let mut d = Diff::default();
+            match stream_table(&mut tx, |t, k, e, s| d.before(t, k, e, s)).await {
+                Ok(()) => diff = Some(d),
+                Err(e) => {
+                    warn!(error = %e, "topic ranking geo-db mirror skipped: before-state read failed")
+                }
             }
         }
-    }
-    let topic_debates: i32 = sqlx::query_scalar("SELECT public.refresh_topic_debate_scores()")
-        .fetch_one(&mut *tx)
-        .await?;
-    if shadow {
-        // A savepoint, so a failed shadow read cannot abort the transaction the job commits.
-        let mut sp = tx.begin().await?;
-        match debate_shadow(&mut sp).await {
-            Ok((ids, 0)) if ids as i64 == i64::from(topic_debates) => {
-                info!(ids, "topic debate rust compute matches the SQL")
+        let topic_debates: i32 = sqlx::query_scalar("SELECT public.refresh_topic_debate_scores()")
+            .fetch_one(&mut *tx)
+            .await?;
+        if shadow {
+            // A savepoint, so a failed shadow read cannot abort the transaction the job commits.
+            let mut sp = tx.begin().await?;
+            match debate_shadow(&mut sp).await {
+                Ok((ids, 0)) if ids as i64 == i64::from(topic_debates) => {
+                    info!(ids, "topic debate rust compute matches the SQL")
+                }
+                Ok((ids, differ)) => warn!(
+                    rust_ids = ids,
+                    sql_scored = topic_debates,
+                    scores_differ = differ,
+                    "topic debate rust compute differs from the SQL"
+                ),
+                Err(e) => warn!(error = %e, "topic debate rust compute skipped"),
             }
-            Ok((ids, differ)) => warn!(
-                rust_ids = ids,
-                sql_scored = topic_debates,
-                scores_differ = differ,
-                "topic debate rust compute differs from the SQL"
-            ),
-            Err(e) => warn!(error = %e, "topic debate rust compute skipped"),
+            let _ = sp.rollback().await;
         }
-        let _ = sp.rollback().await;
-    }
-    // Read after the score refresh, because that is what the reconcile sees.
-    let before = if shadow {
-        let mut sp = tx.begin().await?;
-        let read = reconcile_before(&mut sp).await;
-        let _ = sp.rollback().await;
-        match read {
-            Ok(b) => Some(b),
-            Err(e) => {
-                warn!(error = %e, "topic ranking rust compute skipped: before-state read failed");
-                None
+        // Read after the score refresh, because that is what the reconcile sees.
+        let before = if shadow {
+            let mut sp = tx.begin().await?;
+            let read = reconcile_before(&mut sp).await;
+            let _ = sp.rollback().await;
+            match read {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    warn!(error = %e, "topic ranking rust compute skipped: before-state read failed");
+                    None
+                }
             }
+        } else {
+            None
+        };
+        let changed: i32 = sqlx::query_scalar("SELECT public.reconcile_entity_topic_ranking()")
+            .fetch_one(&mut *tx)
+            .await?;
+        if let Some(before) = &before {
+            let mut sp = tx.begin().await?;
+            match reconcile_shadow(&mut sp, before).await {
+                Ok((n, 0)) if n as i64 == i64::from(changed) => {
+                    info!(changed = n, "topic ranking rust compute matches the SQL")
+                }
+                Ok((n, differ)) => warn!(
+                    rust_changed = n,
+                    sql_changed = changed,
+                    rows_differ = differ,
+                    "topic ranking rust compute differs from the SQL"
+                ),
+                Err(e) => warn!(error = %e, "topic ranking rust compute skipped"),
+            }
+            let _ = sp.rollback().await;
         }
-    } else {
-        None
-    };
-    let changed: i32 = sqlx::query_scalar("SELECT public.reconcile_entity_topic_ranking()")
-        .fetch_one(&mut *tx)
-        .await?;
-    if let Some(before) = &before {
-        let mut sp = tx.begin().await?;
-        match reconcile_shadow(&mut sp, before).await {
-            Ok((n, 0)) if n as i64 == i64::from(changed) => {
-                info!(changed = n, "topic ranking rust compute matches the SQL")
-            }
-            Ok((n, differ)) => warn!(
-                rust_changed = n,
-                sql_changed = changed,
-                rows_differ = differ,
-                "topic ranking rust compute differs from the SQL"
-            ),
-            Err(e) => warn!(error = %e, "topic ranking rust compute skipped"),
+        // The after state is read in the transaction, so a failed read here cannot be mistaken for a
+        // delete of every row; it is sent only once the commit has gone through.
+        let planned = match diff {
+            Some(mut d) => match stream_table(&mut tx, |t, k, e, s| d.after(t, k, e, s)).await {
+                Ok(()) => Some(d.finish()),
+                Err(e) => {
+                    warn!(error = %e, "topic ranking geo-db mirror skipped: after-state read failed");
+                    None
+                }
+            },
+            None => None,
+        };
+        tx.commit().await?;
+        if let (Some(m), Some((puts, deletes))) = (&mirror, planned) {
+            info!(
+                puts = puts.len(),
+                deletes = deletes.len(),
+                "topic ranking geo-db mirror"
+            );
+            topic_ranking_mirror::mirror(m, &puts, &deletes).await;
         }
-        let _ = sp.rollback().await;
-    }
-    // The after state is read in the transaction, so a failed read here cannot be mistaken for a
-    // delete of every row; it is sent only once the commit has gone through.
-    let planned = match diff {
-        Some(mut d) => match stream_table(&mut tx, |t, k, e, s| d.after(t, k, e, s)).await {
-            Ok(()) => Some(d.finish()),
-            Err(e) => {
-                warn!(error = %e, "topic ranking geo-db mirror skipped: after-state read failed");
-                None
-            }
-        },
-        None => None,
-    };
-    tx.commit().await?;
-    if let (Some(m), Some((puts, deletes))) = (&mirror, planned) {
         info!(
-            puts = puts.len(),
-            deletes = deletes.len(),
-            "topic ranking geo-db mirror"
+            topic_debates,
+            changed,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "topic ranking reconciled"
         );
-        topic_ranking_mirror::mirror(m, &puts, &deletes).await;
-    }
-    info!(
-        topic_debates,
-        changed,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "topic ranking reconciled"
-    );
+        Ok::<_, IndexerError>(())
+    })
+    .await?;
     Ok(())
 }

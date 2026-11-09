@@ -19,6 +19,8 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_suggestions_compute as compute;
 use ranking_indexer::topic_suggestions_mirror::{self, Suggestion};
 
@@ -125,15 +127,22 @@ async fn main() -> Result<(), IndexerError> {
 
     let started = Instant::now();
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let rows: i32 = sqlx::query_scalar("SELECT public.refresh_space_topic_suggestions()")
-        .fetch_one(&pool)
-        .await?;
-    info!(
-        rows,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "topic suggestions refreshed"
-    );
-    if rust_compute_enabled() {
+    let refreshed: Option<i32> = pg_bin_writes::run(PgWriteSite::TopicSuggestionsRefresh, async {
+        sqlx::query_scalar("SELECT public.refresh_space_topic_suggestions()")
+            .fetch_one(&pool)
+            .await
+    })
+    .await?;
+    // Off: nothing was refreshed, so the log line and the SQL comparison are skipped; the mirror
+    // below still runs.
+    if let Some(rows) = refreshed {
+        info!(
+            rows,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "topic suggestions refreshed"
+        );
+    }
+    if refreshed.is_some() && rust_compute_enabled() {
         match shadow(&pool).await {
             Ok((0, n)) => info!(rows = n, "topic suggestions rust compute matches the SQL"),
             Ok((bad, n)) => warn!(
