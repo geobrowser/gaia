@@ -34,9 +34,11 @@ import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
 import {
 	backlinkRowsFromGeoDbOutput,
+	entityVersionRowsFromGeoDbOutput,
 	type GeoBacklinkRow,
 	type GeoCardRow,
 	type GeoPageRow,
+	type GeoVersionRow,
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
@@ -80,6 +82,14 @@ export type GeoDbCardClient = {
 	 * with `client_failed`). Absent on a client that cannot do it.
 	 */
 	readHolders?(args: {geoSpaceIds: string[]; entityId: string; timeoutMs?: number}): Promise<string[]>
+	/**
+	 * One page of an entity's version log (`entity-versions` pipe line, wire revision 12): newest first by seal time, then
+	 * Space, then version_seq, across the Public Spaces holding it, `first` rows at most (1 to 4096), each carrying the
+	 * log's `total`. Needs a geodb-client built from geo-db 25360b28c6 or later: an older one does not know the line and its
+	 * worker exits, which rejects with `client_failed` (see `entityVersionsUnsupported`). Absent on a client that cannot
+	 * do it.
+	 */
+	readEntityVersions?(args: {entityId: string; first: number; timeoutMs?: number}): Promise<GeoVersionRow[]>
 	/**
 	 * The entities referring to `entityId` (its card's backlinks, `.args.backlinks = limit`) in one or several
 	 * Spaces, one row a referring statement. At most `limit` rows come back, so `limit` rows means there may be
@@ -145,6 +155,9 @@ export const MAX_BACKLINKS = 4096
 /** Most Spaces one multi-Space line may name (geo-db's vector bound). */
 export const MAX_LINE_SPACES = 1024
 
+/** The most rows one `entity-versions` pipe line may ask for (geo-db `tools/client.zig`). */
+export const MAX_ENTITY_VERSIONS = 4096
+
 export class GeoDbError extends Error {
 	constructor(
 		readonly reason: "timeout" | "unmapped_space" | "client_failed" | "bad_request" | "overloaded",
@@ -162,6 +175,19 @@ export class GeoDbError extends Error {
  * print something else, so none of them reads as "this serve does not know the argument".
  */
 export const HOLDERS_UNKNOWN_ARGUMENT = /^refused: DefiniteRefusal MalformedRequest span \d+\.\.\d+$/
+
+/**
+ * Why an `entity-versions` read cannot be answered, when it is the peer rather than the request: `client` is a
+ * geodb-client that predates the line (its pipe answers `want <space uuid>...|*\t<geoql>`, naming neither the line nor
+ * the verb, and exits), `server` is a node before wire revision 12 (`UnknownOpcode`). Anything else is null: a
+ * timeout, a dead worker or a malformed row is the read's own failure.
+ */
+export function entityVersionsUnsupported(error: unknown): "client" | "server" | null {
+	if (!(error instanceof GeoDbError) || error.reason !== "client_failed") return null
+	if (error.message.startsWith("want <space uuid>") && !error.message.includes("entity-versions")) return "client"
+	if (/\bUnknownOpcode\b/.test(error.message)) return "server"
+	return null
+}
 
 /** Whether `error` is the old serve's refusal of `.args.holders`, the one reason to read without it. */
 export function isHoldersUnknownArgument(error: unknown): boolean {
@@ -359,6 +385,8 @@ type Request = {
 	ids?: boolean
 	/** A holders read: the answer is the Spaces holding `entityId`, each as a row whose `raw` is the Space. */
 	holders?: boolean
+	/** An entity-versions read: the answer is the version log's rows (`GeoVersionRow`s). */
+	versions?: boolean
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
@@ -545,27 +573,31 @@ export function createPipeGeoDbClient(
 			const answered = performance.now()
 			let outcome: GeoCardRow[] | GeoDbError
 			try {
-				outcome = request.ids
-					? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-					: request.page
-						? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-						: request.holders
-							? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
-							: request.cards
-								? rowsFromGeoDbOutput(payload, null, {
-										names: request.names,
-										spaces: request.spaces && !request.legacy,
-									})
-								: request.backlinks
-									? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
-									: rowsFromGeoDbOutput(payload, request.entityId, {
+				outcome = request.versions
+					? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+					: request.ids
+						? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+						: request.page
+							? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+							: request.holders
+								? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
+								: request.cards
+									? rowsFromGeoDbOutput(payload, null, {
 											names: request.names,
-											spaces: request.spaces,
+											spaces: request.spaces && !request.legacy,
 										})
+									: request.backlinks
+										? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
+												spaces: request.spaces,
+											})
+										: rowsFromGeoDbOutput(payload, request.entityId, {
+												names: request.names,
+												spaces: request.spaces,
+											})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
-			if (!request.keepWarm && request.sentAt !== null) {
+			if (!request.keepWarm && !request.versions && request.sentAt !== null) {
 				const shape = shapeOf(request)
 				observeReadStage("wait", shape, (request.sentAt - request.submittedAt) / 1000)
 				observeReadStage("answer", shape, (answered - request.sentAt) / 1000)
@@ -637,6 +669,7 @@ export function createPipeGeoDbClient(
 		ids = false,
 		legacy = false,
 		holders = false,
+		versions = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -653,6 +686,7 @@ export function createPipeGeoDbClient(
 				...(ids ? {ids} : {}),
 				...(legacy ? {legacy} : {}),
 				...(holders ? {holders} : {}),
+				...(versions ? {versions} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -793,6 +827,27 @@ export function createPipeGeoDbClient(
 				true,
 			)
 			return rows.map((row) => row.raw)
+		},
+		async readEntityVersions({entityId, first, timeoutMs}) {
+			if (!HEX32.test(entityId) || !Number.isInteger(first) || first < 1 || first > MAX_ENTITY_VERSIONS)
+				throw new GeoDbError("bad_request", "one entity id and 1 to 4096 rows")
+			// The line names no Space: the log spans every Public Space holding the entity. `-` frames are the
+			// worker's own refusals; a line it does not know ends the worker (see entityVersionsUnsupported).
+			const rows = await submit(
+				`entity-versions\t${entityId}\t${first}\n`,
+				entityId,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				true,
+			)
+			return rows as unknown as GeoVersionRow[]
 		},
 		readBacklinks({geoSpaceIds, entityId, limit}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

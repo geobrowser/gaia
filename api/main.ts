@@ -41,6 +41,11 @@ import {
 	createEntityFeedConfigShadow,
 	readEntityFeedConfigShadowConfig,
 } from "./src/geodb/entityFeedConfigShadow"
+import {
+	createEntityVersionsShadow,
+	type EntityVersionsShadow,
+	readEntityVersionsShadowConfig,
+} from "./src/geodb/entityVersionsShadow"
 import {createFeedRunsShadow, readFeedRunsShadowConfig} from "./src/geodb/feedRunsShadow"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
@@ -198,7 +203,13 @@ if (opensearchUrl) {
 }
 
 // Mount versioned entities router
-app.route("/versioned", createVersionedRouter(db, runtime))
+// GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
+// shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
+const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+app.route(
+	"/versioned",
+	createVersionedRouter(db, runtime, {versions: (served) => entityVersionsShadowRef.current?.versions(served)}),
+)
 log.info("Versioned entity routes enabled")
 
 // Mount v2 versioned entities router (additive enrichments over v1)
@@ -236,6 +247,15 @@ const sharedGeoDb =
 if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
+}
+
+const entityVersionsShadowConfig = readEntityVersionsShadowConfig(process.env)
+if (entityVersionsShadowConfig.enabled) {
+	entityVersionsShadowRef.current = createEntityVersionsShadow({
+		config: entityVersionsShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		log,
+	})
 }
 
 // Mount profile router
