@@ -549,7 +549,7 @@ export function createPostgresRankedReadsSource(db: Database): RankedReadsSource
 			}))
 			const agendaIds = rowsOf(
 				await db.execute(
-					sql`SELECT DISTINCT agenda_id::text AS id FROM trending.current_agendas() WHERE listed_on >= ${today}::date - ${LOOKBACK_DAYS}`,
+					sql`SELECT DISTINCT agenda_id::text AS id FROM trending.current_agendas() WHERE listed_on >= ${today}::date - ${LOOKBACK_DAYS}::int`,
 				),
 			).map((r) => String(r.id))
 			const relations = new Map<string, Rel>()
