@@ -1,0 +1,46 @@
+# Role and RoleBinding for the job Lease (GEODB_JOB_LEASE=1; plan 10.21 section 10.3).
+#
+# Apply this BEFORE turning the flag on. Nothing reads it while the flag is 0.
+#
+# The ranking-indexer Jobs run as the namespace's `default` ServiceAccount (none of their
+# manifests sets serviceAccountName), so the binding targets it; that avoids a manifest change
+# that would break the Jobs if it were deployed before the ServiceAccount existed. A dedicated
+# ServiceAccount is a possible later tightening.
+#
+# The lease names are fixed, so get/update/patch are pinned with resourceNames. `create` cannot be
+# restricted by resourceName (the name is not known to the authorizer on create), so it is a
+# separate rule, and it can only create Lease objects in this namespace.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ranking-indexer-job-lease
+  namespace: gaia
+  labels:
+    app: ranking-indexer
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames:
+      - personalization-user-topic-interest
+      - personalization-feed-signals
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ranking-indexer-job-lease
+  namespace: gaia
+  labels:
+    app: ranking-indexer
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: gaia
+roleRef:
+  kind: Role
+  name: ranking-indexer-job-lease
+  apiGroup: rbac.authorization.k8s.io
