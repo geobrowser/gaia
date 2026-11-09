@@ -180,7 +180,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:71bc5b6c18
+          image: registry.digitalocean.com/geo/geodb:ec8f42c57b
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -235,6 +235,14 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: geodb-scores-key
+                  key: keyid
+                  optional: true
+            # Optional: the api's private reader key (k8s/v2/geodb-private-reader-key-job.yaml): derived_read=28,29 only, so
+            # it can read the restricted per-user collections and nothing else. Absent = no such principal.
+            - name: GEODB_PRIVATE_READER_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-private-reader-key
                   key: keyid
                   optional: true
             - name: GEODB_GRANT_TTL_S
