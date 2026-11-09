@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
+use crate::metrics::PgWriteSite;
 use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
 use crate::scoring::ScoreRow;
@@ -49,6 +50,18 @@ pub struct Storage {
     reads_shadow: Option<std::sync::Arc<crate::ranks_reads_shadow::RanksReadsShadow>>,
     /// Flag-off shadow of the `meta` cursor read against geo-db (`GEODB_META_BLOCK_SHADOW=1`).
     meta_shadow: Option<std::sync::Arc<geodb_cursor::meta_read::MetaBlockShadow>>,
+    /// `RANKING_INDEXER_PG_WRITES`, default on. Off: every `Storage` write issues no Postgres
+    /// statement and counts the skip instead (cutover switch, plan 10.22). Reads are unaffected.
+    pg_writes: bool,
+}
+
+/// Parse `RANKING_INDEXER_PG_WRITES`. Unset, empty or anything but an explicit off value means
+/// on, so a typo never silently stops the writes.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 impl Storage {
@@ -63,7 +76,38 @@ impl Storage {
             reads_shadow: crate::ranks_reads_shadow::RanksReadsShadow::from_env(),
             meta_shadow: geodb_cursor::meta_read::MetaBlockShadow::from_env()
                 .map(std::sync::Arc::new),
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("RANKING_INDEXER_PG_WRITES").ok().as_deref(),
+            ),
         })
+    }
+
+    /// Wrap an existing pool (the env var sets the Postgres-writes default).
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self {
+            pool,
+            derived: None,
+            reads_shadow: None,
+            meta_shadow: None,
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("RANKING_INDEXER_PG_WRITES").ok().as_deref(),
+            ),
+        }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+
+    /// True (and counted) when this write must not reach Postgres.
+    fn skip_pg_write(&self, site: PgWriteSite) -> bool {
+        if self.pg_writes {
+            return false;
+        }
+        crate::metrics::pg_write_skipped(site);
+        true
     }
 
     pub fn reads_shadow(
@@ -171,6 +215,9 @@ impl Storage {
         space_id: Uuid,
         member_space_id: Uuid,
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::AddMember) {
+            return Ok(());
+        }
         sqlx::query(
             "INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)
              ON CONFLICT DO NOTHING",
@@ -188,6 +235,9 @@ impl Storage {
         space_id: Uuid,
         member_space_id: Uuid,
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::RemoveMember) {
+            return Ok(());
+        }
         sqlx::query("DELETE FROM ranks.members WHERE member_space_id = $1 AND space_id = $2")
             .bind(member_space_id)
             .bind(space_id)
@@ -202,6 +252,9 @@ impl Storage {
         space_id: Uuid,
         member_space_id: Uuid,
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::AddEditor) {
+            return Ok(());
+        }
         sqlx::query(
             "INSERT INTO ranks.editors (member_space_id, space_id) VALUES ($1, $2)
              ON CONFLICT DO NOTHING",
@@ -219,6 +272,9 @@ impl Storage {
         space_id: Uuid,
         member_space_id: Uuid,
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::RemoveEditor) {
+            return Ok(());
+        }
         sqlx::query("DELETE FROM ranks.editors WHERE member_space_id = $1 AND space_id = $2")
             .bind(member_space_id)
             .bind(space_id)
@@ -655,6 +711,9 @@ impl Storage {
 
     /// Upsert a Ranking Block.
     pub async fn upsert_ranking_block(&self, b: &RankingBlock) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::UpsertRankingBlock) {
+            return Ok(());
+        }
         sqlx::query(
             r#"
             INSERT INTO ranks.ranking_blocks
@@ -689,6 +748,9 @@ impl Storage {
     /// Upsert a Rank submission. A null incoming `block_id` never clobbers an
     /// already-known link (the link may have arrived in an earlier edit).
     pub async fn upsert_ranking(&self, r: &Ranking) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::UpsertRanking) {
+            return Ok(());
+        }
         sqlx::query(
             r#"
             INSERT INTO ranks.rankings
@@ -728,6 +790,9 @@ impl Storage {
         block_id: Uuid,
         space_id: Uuid,
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::SetRankingBlock) {
+            return Ok(());
+        }
         sqlx::query(
             "UPDATE ranks.rankings SET block_id = $2, updated_at = now() \
              WHERE id = $1 AND space_id = $3",
@@ -746,6 +811,9 @@ impl Storage {
         ranking_id: Uuid,
         items: &[RankingItem],
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::ReplaceRankingItems) {
+            return Ok(());
+        }
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1")
             .bind(ranking_id)
@@ -794,6 +862,12 @@ impl Storage {
         block_id: Uuid,
         rows: &[ScoreRow],
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::ReplaceRankingScores) {
+            // No Postgres statement. The geo-db mirror and the reads shadow are not Postgres
+            // statements, so they still run; without the prior keys the mirror sends no deletes.
+            self.after_scores_written(block_id, rows, Vec::new()).await;
+            return Ok(());
+        }
         let mut tx = self.pool.begin().await?;
         // Only when the mirror is on: the keys this block held, so the ones it no longer has can
         // be deleted from geo-db. A failed read just skips the deletes; Postgres is unaffected.
@@ -826,15 +900,25 @@ impl Storage {
             .await?;
         }
         tx.commit().await?;
+        self.after_scores_written(block_id, rows, prior.unwrap_or_default())
+            .await;
+        Ok(())
+    }
+
+    /// The geo-db mirror and the reads shadow for a block's scores; neither is a Postgres statement.
+    async fn after_scores_written(
+        &self,
+        block_id: Uuid,
+        rows: &[ScoreRow],
+        prior: Vec<(Uuid, Uuid)>,
+    ) {
         if let Some(mirror) = self.derived.as_deref() {
-            crate::derived_mirror::mirror_block(mirror, block_id, rows, prior.unwrap_or_default())
-                .await;
+            crate::derived_mirror::mirror_block(mirror, block_id, rows, prior).await;
         }
         if let Some(shadow) = self.reads_shadow.clone() {
             let (rows, block) = (rows.to_vec(), block_id);
             tokio::spawn(async move { shadow.observe_block(block, &rows).await });
         }
-        Ok(())
     }
 
     /// Replace a block's public `RANK_POSITION` projection atomically:
@@ -848,6 +932,9 @@ impl Storage {
         rows: &[RankPositionRow],
         contributing_rankings: &[Uuid],
     ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::ReplaceRankPositionProjection) {
+            return Ok(());
+        }
         use sdk::core::ids::{
             AGGREGATED_RANKINGS_RELATION_TYPE_ID, RANK_POSITION_RELATION_TYPE_ID,
             RANK_POSITION_VALUE_PROPERTY_ID,
