@@ -41,6 +41,7 @@ import {
 	createEntityFeedConfigShadow,
 	readEntityFeedConfigShadowConfig,
 } from "./src/geodb/entityFeedConfigShadow"
+import {createFeedRunsShadow, readFeedRunsShadowConfig} from "./src/geodb/feedRunsShadow"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
@@ -453,6 +454,12 @@ if (configRevisionShadowConfig.enabled) {
 		}),
 		log,
 	}).start()
+}
+// GEODB_FEED_RUNS_SHADOW (off by default) compares the data_through of geo-db's mirrored newest succeeded feed_signal_runs row
+// (cursors collection 10) with Postgres' max over the succeeded runs (gaia_api_feed_runs_shadow_total). Background only.
+const feedRunsShadowConfig = readFeedRunsShadowConfig(process.env)
+if (feedRunsShadowConfig.enabled) {
+	createFeedRunsShadow({config: feedRunsShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
 }
 const internalRoutes = mountInternalRoutes(
 	app,

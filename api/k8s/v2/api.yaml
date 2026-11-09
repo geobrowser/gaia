@@ -425,6 +425,11 @@ spec:
             # Postgres. Needs the geodb-feeder's for_you_config, interest_config and entity_ranking_config backfills run first.
             - name: GEODB_CONFIG_REVISION_SHADOW
               value: "0"
+            # The feed signal runs watermark twin: geo-db's mirrored newest succeeded feed_signal_runs row (cursors collection 10,
+            # GEODB_FEED_RUNS_MIRROR in the feed-signals-sync CronJob) against Postgres' max(data_through) over the succeeded runs
+            # (_INTERVAL_MS, default 5 min): gaia_api_feed_runs_shadow_total{result}. OFF; `absent` until the mirror is on.
+            - name: GEODB_FEED_RUNS_SHADOW
+              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL
