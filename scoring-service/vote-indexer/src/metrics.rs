@@ -20,6 +20,7 @@ pub const VOTES_DROPPED: &str = "vote_indexer_votes_dropped_total";
 pub const MESSAGES_REJECTED: &str = "vote_indexer_messages_rejected_total";
 pub const RANKING_REFRESH_FAILURES: &str = "vote_indexer_ranking_refresh_failures_total";
 pub const WRITE_RETRIES: &str = "vote_indexer_write_retries_total";
+pub const PG_WRITES_SKIPPED: &str = "vote_indexer_pg_writes_skipped_total";
 pub const HALTED: &str = "vote_indexer_halted";
 
 /// Why a single message was committed past without being indexed.
@@ -36,6 +37,26 @@ impl RejectReason {
         match self {
             RejectReason::Undecodable => "undecodable",
             RejectReason::Invalid => "invalid",
+        }
+    }
+}
+
+/// A Postgres write site skipped because `VOTE_INDEXER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    /// A whole vote batch: transaction, locking reads, the four writes and the ranking refresh.
+    VoteBatch,
+    /// The ranking-score refresh function call (after a batch, and from the two sweep binaries).
+    RankingRefresh,
+}
+
+impl PgWriteSite {
+    const ALL: [PgWriteSite; 2] = [PgWriteSite::VoteBatch, PgWriteSite::RankingRefresh];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::VoteBatch => "vote_batch",
+            PgWriteSite::RankingRefresh => "ranking_refresh",
         }
     }
 }
@@ -71,6 +92,14 @@ pub fn register() {
          scores catch up on the next vote or a backfill"
     );
 
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres write calls skipped because VOTE_INDEXER_PG_WRITES is off, by site. While off, \
+         votes_processed still counts the skipped votes (their offsets commit)"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
     metrics::counter!(VOTES_PROCESSED).absolute(0);
     metrics::counter!(VOTES_DROPPED).absolute(0);
     for reason in [RejectReason::Undecodable, RejectReason::Invalid] {
@@ -91,6 +120,10 @@ pub fn votes_dropped(count: u64) {
 
 pub fn message_rejected(reason: RejectReason) {
     metrics::counter!(MESSAGES_REJECTED, "reason" => reason.as_str()).increment(1);
+}
+
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
 }
 
 pub fn ranking_refresh_failed() {
@@ -128,6 +161,7 @@ mod tests {
             "vote_indexer_ranking_refresh_failures_total 0",
             "vote_indexer_write_retries_total 0",
             "vote_indexer_halted 0",
+            "vote_indexer_pg_writes_skipped_total{site=\"vote_batch\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

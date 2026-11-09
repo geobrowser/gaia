@@ -27,6 +27,18 @@ pub struct Storage {
     derived: Option<std::sync::Arc<geodb_cursor::derived::DerivedMirror>>,
     /// Flag-off shadow of the reads against geo-db; see [`crate::geodb_reads_shadow`].
     reads_shadow: Option<std::sync::Arc<crate::geodb_reads_shadow::ReadsShadow>>,
+    /// `VOTE_INDEXER_PG_WRITES`, default on. Off: the vote batch and the ranking refresh issue no
+    /// Postgres statement and are counted instead (cutover switch, plan 10.22).
+    pg_writes: bool,
+}
+
+/// Parse `VOTE_INDEXER_PG_WRITES`. Unset, empty or anything but an explicit off value means on,
+/// so a typo never silently stops the writes.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 impl Storage {
@@ -35,7 +47,21 @@ impl Storage {
             pool,
             derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
             reads_shadow: crate::geodb_reads_shadow::ReadsShadow::from_env(),
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("VOTE_INDEXER_PG_WRITES").ok().as_deref(),
+            ),
         }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+
+    /// Whether Postgres writes are on (`VOTE_INDEXER_PG_WRITES`, default on).
+    pub fn pg_writes_enabled(&self) -> bool {
+        self.pg_writes
     }
 
     /// Connect to the database and create a new Storage instance.
@@ -343,6 +369,10 @@ impl Storage {
         &self,
         counts: &[VotesCountItem],
     ) -> Result<u64, StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::RankingRefresh);
+            return Ok(0);
+        }
         let entity_ids = ranking_recompute_entity_ids(counts);
 
         if entity_ids.is_empty() {
@@ -504,6 +534,10 @@ impl Storage {
         &self,
         entity_ids: &[Uuid],
     ) -> Result<u64, StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::RankingRefresh);
+            return Ok(0);
+        }
         let mut scored = 0u64;
 
         for batch in entity_ids.chunks(RANKING_REFRESH_BATCH_SIZE) {
