@@ -31,6 +31,16 @@
 //! at the wrong or a half-restored database would otherwise look like "every document is an
 //! orphan".
 //!
+//! # geo-db checker (ORPHANS-RECONCILE-GEODB)
+//!
+//! `--geodb-mode` (default `off`, which changes nothing above) lets geo-db answer the same
+//! question, with an orphan defined as "no live statement of the entity in the document's Space"
+//! (`missing_entity`: none in any Space). See [`geodb_check`] for the definition and its transport.
+//! `compare` asks both stores about every live document, counts how the two verdicts line up
+//! (`search_orphan_geodb_compare_summary`) and logs a sample of the disagreements; `only` asks
+//! geo-db alone and needs no Postgres. Both are report only: `--prune` is refused with either,
+//! until the compare counts have been read against live data.
+//!
 //! Memory and time stay bounded: the index is read with a scroll, one page at a time, and each
 //! page is one Postgres statement over index lookups, far inside the 30s role statement timeout.
 //! Only candidate orphans are kept (live documents only, so tombstones cannot fill the cap), and
@@ -50,6 +60,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::geodb_check::{self, Compare, GeoDbChecker, GeoDbConfig, GeoDbMode};
 use crate::opensearch_client;
 
 /// Fields fetched per document. Everything else in `_source` is skipped to keep pages small.
@@ -64,8 +75,29 @@ const SOURCE_FIELDS: [&str; 5] = [
 #[derive(Args)]
 pub struct ReconcileOrphansCommand {
     /// Postgres URL of the knowledge graph (read only; nothing is written to Postgres).
+    /// Required unless `--geodb-mode only`.
     #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
-    database_url: String,
+    database_url: Option<String>,
+
+    /// Which store decides what an orphan is. `compare` and `only` are report only.
+    #[arg(long, env = "RECONCILE_GEODB_MODE", value_enum, default_value_t = GeoDbMode::Off)]
+    geodb_mode: GeoDbMode,
+
+    /// The `geodb-client` binary the geo-db checker starts.
+    #[arg(long, env = "GEODB_CLIENT_BIN", default_value = "geodb-client")]
+    geodb_client_bin: String,
+
+    /// Client key file for geo-db (`--key`). Required unless `--geodb-mode off`.
+    #[arg(long, env = "GEODB_KEY_PATH")]
+    geodb_key_path: Option<String>,
+
+    /// Binding file for geo-db (`--binding`). Required unless `--geodb-mode off`.
+    #[arg(long, env = "GEODB_BINDING_PATH")]
+    geodb_binding_path: Option<String>,
+
+    /// Parallel `geodb-client pipe` workers; each answers one entity at a time.
+    #[arg(long, env = "RECONCILE_GEODB_WORKERS", default_value_t = 4)]
+    geodb_workers: usize,
 
     /// Index version to scan. Defaults to the alias, i.e. the index /search reads.
     #[arg(long, env = "INDEX_VERSION")]
@@ -256,13 +288,64 @@ pub struct Tally {
     pub candidates_truncated: bool,
 }
 
+/// Which store answers a check.
+enum Checker {
+    Postgres(PgPool),
+    GeoDb(GeoDbChecker),
+}
+
+impl Checker {
+    async fn check_page(&self, docs: &[DocRef]) -> Result<Vec<(DocRef, OrphanKind)>> {
+        match self {
+            Checker::Postgres(pool) => check_page(pool, docs).await,
+            Checker::GeoDb(geo) => geo.check_page(docs).await,
+        }
+    }
+}
+
+/// The checks one run makes: the store that decides, and in compare mode geo-db beside it.
+struct Checks {
+    primary: Checker,
+    compare_with: Option<GeoDbChecker>,
+}
+
+/// What the scan learned by asking both stores: the verdict counts, and the documents they
+/// disagreed on, to be asked again after the recheck delay.
+#[derive(Default)]
+struct Compared {
+    checked: u64,
+    tally: Compare,
+    disagreed: Vec<DocRef>,
+    truncated: bool,
+}
+
 impl ReconcileOrphansCommand {
+    fn geodb_config(&self) -> Result<GeoDbConfig> {
+        Ok(GeoDbConfig {
+            client_bin: self.geodb_client_bin.clone(),
+            key_path: self
+                .geodb_key_path
+                .clone()
+                .context("--geodb-key-path (GEODB_KEY_PATH) is required for the geo-db checker")?,
+            binding_path: self.geodb_binding_path.clone().context(
+                "--geodb-binding-path (GEODB_BINDING_PATH) is required for the geo-db checker",
+            )?,
+            workers: self.geodb_workers,
+        })
+    }
+
     pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
         let started = Instant::now();
         let target = match self.version {
             Some(v) => format!("{index_alias}_v{v}"),
             None => index_alias.to_string(),
         };
+        if self.prune && self.geodb_mode != GeoDbMode::Off {
+            bail!(
+                "--prune is refused with --geodb-mode {:?}: geo-db's verdict is report only until its compare counts are read",
+                self.geodb_mode
+            );
+        }
         let mode = if !self.prune {
             "report"
         } else if self.prune_missing_in_space {
@@ -270,27 +353,25 @@ impl ReconcileOrphansCommand {
         } else {
             "prune(missing_entity)"
         };
-        info!(index = %target, mode, page_size = self.page_size, "Starting orphan reconcile");
+        info!(index = %target, mode, geodb_mode = ?self.geodb_mode, page_size = self.page_size, "Starting orphan reconcile");
 
         let client = opensearch_client::create_client(opensearch_url)?;
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .acquire_timeout(Duration::from_secs(30))
-            .connect(&self.database_url)
-            .await
-            .context("Failed to connect to Postgres")?;
+        let checks = match self.geodb_mode {
+            GeoDbMode::Off => Checks {
+                primary: Checker::Postgres(self.connect_postgres().await?),
+                compare_with: None,
+            },
+            GeoDbMode::Compare => Checks {
+                primary: Checker::Postgres(self.connect_postgres().await?),
+                compare_with: Some(GeoDbChecker::new(self.geodb_config()?)),
+            },
+            GeoDbMode::Only => Checks {
+                primary: Checker::GeoDb(GeoDbChecker::new(self.geodb_config()?)),
+                compare_with: None,
+            },
+        };
 
-        // A reachable but empty (or wrong) database would make every document an orphan.
-        let has_entities: bool =
-            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM public.entities)")
-                .fetch_one(&pool)
-                .await
-                .context("Failed to read entities")?;
-        if !has_entities {
-            bail!("entities table is empty: refusing to reconcile against this database");
-        }
-
-        let (tally, candidates) = self.scan(&client, &pool, &target).await?;
+        let (tally, candidates, compared) = self.scan(&client, &checks, &target).await?;
         info!(
             scanned = tally.scanned,
             candidates = candidates.len(),
@@ -304,11 +385,14 @@ impl ReconcileOrphansCommand {
         let mut confirmed: Vec<(DocRef, OrphanKind)> = Vec::with_capacity(candidates.len());
         for chunk in candidates.chunks(self.page_size.max(1)) {
             let docs: Vec<DocRef> = chunk.iter().map(|(d, _)| d.clone()).collect();
-            confirmed.extend(check_page(&pool, &docs).await?);
+            confirmed.extend(checks.primary.check_page(&docs).await?);
         }
         let transient = candidates.len() - confirmed.len();
 
         self.report(&tally, &confirmed, transient, started);
+        if let Some(geo) = &checks.compare_with {
+            self.report_compare(&checks.primary, geo, compared).await?;
+        }
 
         if self.prune {
             self.prune_confirmed(&client, &target, &tally, &confirmed)
@@ -329,10 +413,11 @@ impl ReconcileOrphansCommand {
     async fn scan(
         &self,
         client: &OpenSearch,
-        pool: &PgPool,
+        checks: &Checks,
         target: &str,
-    ) -> Result<(Tally, Vec<(DocRef, OrphanKind)>)> {
+    ) -> Result<(Tally, Vec<(DocRef, OrphanKind)>, Compared)> {
         let mut tally = Tally::default();
+        let mut compared = Compared::default();
         let mut candidates: Vec<(DocRef, OrphanKind)> = Vec::new();
 
         let response = client
@@ -376,7 +461,13 @@ impl ReconcileOrphansCommand {
                     }
                 }
                 // Only live documents reach check_page, so the cap counts live orphans alone.
-                for found in check_page(pool, &docs).await? {
+                let found_page = checks.primary.check_page(&docs).await?;
+                if let Some(geo) = &checks.compare_with {
+                    let theirs = geo.check_page(&docs).await?;
+                    compared.checked += docs.len() as u64;
+                    self.note_disagreements(&mut compared, &docs, &found_page, &theirs);
+                }
+                for found in found_page {
                     if candidates.len() < self.max_candidates {
                         candidates.push(found);
                     } else {
@@ -417,7 +508,98 @@ impl ReconcileOrphansCommand {
                 .await;
         }
         result?;
-        Ok((tally, candidates))
+        Ok((tally, candidates, compared))
+    }
+
+    async fn connect_postgres(&self) -> Result<PgPool> {
+        let url = self
+            .database_url
+            .as_deref()
+            .context("--database-url (DATABASE_URL) is required unless --geodb-mode only")?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_secs(30))
+            .connect(url)
+            .await
+            .context("Failed to connect to Postgres")?;
+
+        // A reachable but empty (or wrong) database would make every document an orphan.
+        let has_entities: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM public.entities)")
+                .fetch_one(&pool)
+                .await
+                .context("Failed to read entities")?;
+        if !has_entities {
+            bail!("entities table is empty: refusing to reconcile against this database");
+        }
+        Ok(pool)
+    }
+
+    /// Fold one page's two verdicts into the run's compare counts, keeping the documents they
+    /// disagree on (bounded by `--max-candidates`) for the recheck.
+    fn note_disagreements(
+        &self,
+        compared: &mut Compared,
+        docs: &[DocRef],
+        postgres: &[(DocRef, OrphanKind)],
+        geodb: &[(DocRef, OrphanKind)],
+    ) {
+        let (tally, samples) = geodb_check::compare(postgres, geodb);
+        compared.tally.both_same_kind += tally.both_same_kind;
+        compared.tally.both_other_kind += tally.both_other_kind;
+        compared.tally.postgres_only += tally.postgres_only;
+        compared.tally.geodb_only += tally.geodb_only;
+        for (id, _) in samples {
+            if compared.disagreed.len() >= self.max_candidates {
+                compared.truncated = true;
+            } else if let Some(doc) = docs.iter().find(|d| d.doc_id == id) {
+                compared.disagreed.push(doc.clone());
+            }
+        }
+    }
+
+    /// Ask both stores again about the documents they disagreed on, after the recheck delay (the
+    /// two feeds race by design), then log both sets of counts. Never writes anywhere.
+    async fn report_compare(
+        &self,
+        postgres: &Checker,
+        geo: &GeoDbChecker,
+        compared: Compared,
+    ) -> Result<()> {
+        let first = &compared.tally;
+        if !compared.disagreed.is_empty() && self.recheck_delay_secs > 0 {
+            tokio::time::sleep(Duration::from_secs(self.recheck_delay_secs)).await;
+        }
+        let mut settled = Compare::default();
+        let mut samples: Vec<(String, &'static str)> = Vec::new();
+        for chunk in compared.disagreed.chunks(self.page_size.max(1)) {
+            let pg = postgres.check_page(chunk).await?;
+            let theirs = geo.check_page(chunk).await?;
+            let (t, s) = geodb_check::compare(&pg, &theirs);
+            settled.both_same_kind += t.both_same_kind;
+            settled.both_other_kind += t.both_other_kind;
+            settled.postgres_only += t.postgres_only;
+            settled.geodb_only += t.geodb_only;
+            samples.extend(s);
+        }
+        for (id, what) in samples.iter().take(self.log_limit) {
+            info!(doc_id = %id, what, "geodb_compare_disagreement");
+        }
+        info!(
+            checked = compared.checked,
+            agree_orphan_same_kind = first.both_same_kind + settled.both_same_kind,
+            first_pass_disagreements = first.disagreements(),
+            first_pass_postgres_only = first.postgres_only,
+            first_pass_geodb_only = first.geodb_only,
+            first_pass_kind_differs = first.both_other_kind,
+            settled_disagreements = settled.disagreements(),
+            settled_postgres_only = settled.postgres_only,
+            settled_geodb_only = settled.geodb_only,
+            settled_kind_differs = settled.both_other_kind,
+            truncated = compared.truncated,
+            "search_orphan_geodb_compare_summary"
+        );
+        Ok(())
     }
 
     fn report(
