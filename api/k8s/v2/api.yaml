@@ -340,6 +340,11 @@ spec:
             # response. The geodb-feeder writes the proposal status records (GEODB_PROPOSAL_STATUS=1).
             - name: GEODB_GOVERNANCE_SHADOW
               value: "1"
+            # Comparisons running at once per pod; one past it is dropped (counted unsupported{busy}). Unset = 8, which
+            # dropped ~6.3% of list comparisons (6.3k/24h). Worst case at 16 is 16 comparisons x ~4 parallel reads = 64
+            # of the geo-db client's 256 queue slots (4 workers x 64), shared with served reads.
+            - name: GEODB_GOVERNANCE_SHADOW_MAX_IN_FLIGHT
+              value: "16"
             # Background samplers that feed the shadows above without waiting for traffic. All off until flipped.
             - name: GEODB_GOVERNANCE_SHADOW_SAMPLER
               value: "0"
