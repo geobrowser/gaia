@@ -992,6 +992,73 @@ export function analyzeLightEntities(
 	}
 }
 
+/** One `totalCount`-only `entitiesConnection` root lowered to geo-db's count form (see `analyzeCountOnly`). */
+export type CountOnlyRoot = {
+	/** The root's response key (its alias). */
+	key: string
+	/** `spaceId` / `spaceIds`: the Spaces counted in (gaia ids); null counts across every Space. */
+	spaceIds: string[] | null
+	/** The one Type the entities must hold (`typeIds: {overlaps: [T]}`, `typeId` or `typeIds: {in: [T]}`). */
+	typeId: string
+	/** `relations: {some: {typeId, toEntityId}}`: the relation's Type (one) and the targets (any of), or null when no relation is asked. */
+	edge: {typeId: string; targets: string[]} | null
+}
+export type CountOnlyPlan = {roots: CountOnlyRoot[]}
+
+/** Most targets a lowered relation term names: geo-db's bound on an `in` set of a count's `where`. */
+export const MAX_COUNT_ONLY_TARGETS = 4
+/** Most aliased roots one operation lowers (each is one geo-db read). */
+export const MAX_COUNT_ONLY_ROOTS = 8
+
+/**
+ * The `entitiesConnection` roots that ask nothing but `totalCount` (alone, or several aliased: the topic page's counters),
+ * lowered to geo-db's entities count form (`.args = .{ .type, .count = true, .where }`, docs/api/03 "The count form"):
+ * `filter: {and: [{typeIds: {overlaps: [T]}}, {relations: {some: {typeId: {is: R}, toEntityId: {is|in: [..]}}}}]}` becomes the
+ * members of type T whose statements of the Reference property R name one of the targets. A root the form cannot state
+ * (a second type, several relation types, a filter clause that is neither, more than 4 targets, an id list) leaves the
+ * whole operation `count_only`. `first`, `offset`, `after` and `orderBy` do not change a `totalCount`, so they are ignored.
+ */
+export function analyzeCountOnly(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+): LightAnalysis<CountOnlyPlan> {
+	const notLowerable = {ok: false, reason: "count_only"} as const
+	try {
+		const parsed = parseOperation(document, operationName, variables)
+		const roots = parsed.roots.filter((r) => r.name.value !== METAS_FIELD)
+		if (roots.length === 0 || roots.length > MAX_COUNT_ONLY_ROOTS) return notLowerable
+		const lowered: CountOnlyRoot[] = []
+		for (const root of roots) {
+			if (root.name.value !== "entitiesConnection" || !isCountOnly(root, parsed.fragments)) return notLowerable
+			const args = argsOf(root, parsed.variables)
+			for (const arg of Object.keys(args))
+				if (!ENTITIES_ARGS.includes(arg) && arg !== "after") return notLowerable
+			if (args.systemTypeId != null || args.systemTypeIds != null) return notLowerable
+			const sink = new Set<UncomparedReason>()
+			const {claims, ids, exact} = readFilter(args.filter, sink)
+			if (ids !== null || !exact) return notLowerable
+			const spaceIds = readRootArgs(args, claims, sink)
+			const types = claims.filter((c): c is Extract<FilterClaim, {kind: "type"}> => c.kind === "type")
+			const edges = claims.filter((c): c is Extract<FilterClaim, {kind: "edge"}> => c.kind === "edge")
+			const type = types[0]
+			if (types.length !== 1 || type?.typeIds.length !== 1 || edges.length > 1) return notLowerable
+			const edge = edges[0]
+			if (edge && (edge.typeIds.length !== 1 || edge.toEntityIds.length > MAX_COUNT_ONLY_TARGETS))
+				return notLowerable
+			lowered.push({
+				key: responseKeyOf(root),
+				spaceIds,
+				typeId: type.typeIds[0] as string,
+				edge: edge ? {typeId: edge.typeIds[0] as string, targets: edge.toEntityIds} : null,
+			})
+		}
+		return {ok: true, plan: {roots: lowered}}
+	} catch {
+		return notLowerable
+	}
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Comparison
 // ---------------------------------------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import {
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
+	typeCountFromGeoDbOutput,
 	typeScanIdsFromGeoDbOutput,
 } from "./card"
 import type {GeoDbCardConfig} from "./config"
@@ -110,6 +111,14 @@ export type GeoDbCardClient = {
 	 */
 	readTypeScan?(args: TypeScanRequest): Promise<string[]>
 	/**
+	 * The exact member count of a type (`entities` root, `.args = .{ .type, .count = true }` and optionally one `.where`
+	 * reference term, geo-db DR-154 item 8) across the Spaces named, or every Space the session reads (`"every"`, a `*`
+	 * line): the pages the tool fetched from the one cursor summed, `complete` whether the walk reached the end. Needs a
+	 * store with the count form, which an older one refuses (`client_failed`, `MalformedRequest`). Absent on a client that
+	 * cannot do it.
+	 */
+	readTypeCount?(args: TypeCountRequest): Promise<TypeCount>
+	/**
 	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
 	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
 	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
@@ -127,6 +136,22 @@ export type TypeScanRequest = {
 	/** Entities asked for, 1 to `MAX_TYPE_SCAN`. */
 	first: number
 }
+
+export type TypeCountRequest = {
+	/** The Spaces to count in (distinct, 32 hex digits), or `"every"` for the `*` line. */
+	geoSpaceIds: string[] | "every"
+	/** The type whose members are counted (32 hex digits). */
+	typeId: string
+	/** Keep the members holding a statement of `property` (a `Reference` property) naming any of `targets` (1 to `MAX_COUNT_TARGETS`). */
+	where?: {property: string; targets: string[]}
+	timeoutMs?: number
+}
+
+/** The sums of a count form's pages: `members` the distinct members meeting the terms, `scanned` the member statements read. */
+export type TypeCount = {members: number; scanned: number; complete: boolean}
+
+/** Most targets one count `where` term names: geo-db's bound on an `in` set. */
+export const MAX_COUNT_TARGETS = 4
 
 /** Most entities one type scan asks for: geo-db's `MAX_TOPK_LIMIT`. */
 export const MAX_TYPE_SCAN = 4096
@@ -235,6 +260,18 @@ export function entitiesPageDocument(request: Omit<EntitiesPageRequest, "geoSpac
 export function typeScanDocument(request: Omit<TypeScanRequest, "geoSpaceIds">): string {
 	const types = request.typeIds.map((id) => `"${id}"`).join(", ")
 	return `.{ .version = 1, .select = .{ .t = .{ .field = "entities", .args = .{ .types = .{ ${types} }, .first = ${request.first} } } } }`
+}
+
+/** The geoql document for a type's member count (`.args.count = true`), with one reference `where` term. Ids are 32 hex digits. */
+export function typeCountDocument(request: Pick<TypeCountRequest, "typeId" | "where">): string {
+	const {where} = request
+	const operand = where
+		? where.targets.length === 1
+			? `.eq = "${where.targets[0]}"`
+			: `.in = .{ ${where.targets.map((id) => `"${id}"`).join(", ")} }`
+		: ""
+	const term = where ? `, .where = .{ .@"${where.property}" = .{ ${operand} } }` : ""
+	return `.{ .version = 1, .select = .{ .n = .{ .field = "entities", .args = .{ .type = "${request.typeId}", .count = true${term} } } } }`
 }
 
 /**
@@ -383,6 +420,8 @@ type Request = {
 	legacy?: boolean
 	/** A type scan: the answer is entity ids, one a line. */
 	ids?: boolean
+	/** A type count: the answer is rows of three integers (`members`, `scanned`, `complete`), a page each. */
+	count?: boolean
 	/** A holders read: the answer is the Spaces holding `entityId`, each as a row whose `raw` is the Space. */
 	holders?: boolean
 	/** An entity-versions read: the answer is the version log's rows (`GeoVersionRow`s). */
@@ -575,25 +614,30 @@ export function createPipeGeoDbClient(
 			try {
 				outcome = request.versions
 					? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-					: request.ids
-						? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-						: request.page
-							? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-							: request.holders
-								? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
-								: request.cards
-									? rowsFromGeoDbOutput(payload, null, {
-											names: request.names,
-											spaces: request.spaces && !request.legacy,
-										})
-									: request.backlinks
-										? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
-												spaces: request.spaces,
-											})
-										: rowsFromGeoDbOutput(payload, request.entityId, {
+					: request.count
+						? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
+						: request.ids
+							? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+							: request.page
+								? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+								: request.holders
+									? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
+											prop: "",
+											raw,
+										}))
+									: request.cards
+										? rowsFromGeoDbOutput(payload, null, {
 												names: request.names,
-												spaces: request.spaces,
+												spaces: request.spaces && !request.legacy,
 											})
+										: request.backlinks
+											? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
+													spaces: request.spaces,
+												})
+											: rowsFromGeoDbOutput(payload, request.entityId, {
+													names: request.names,
+													spaces: request.spaces,
+												})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -670,6 +714,7 @@ export function createPipeGeoDbClient(
 		legacy = false,
 		holders = false,
 		versions = false,
+		count = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -687,6 +732,7 @@ export function createPipeGeoDbClient(
 				...(legacy ? {legacy} : {}),
 				...(holders ? {holders} : {}),
 				...(versions ? {versions} : {}),
+				...(count ? {count} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -904,6 +950,43 @@ export function createPipeGeoDbClient(
 				undefined,
 				true,
 			) as unknown as Promise<string[]>
+		},
+		async readTypeCount({geoSpaceIds, typeId, where, timeoutMs}) {
+			if (geoSpaceIds !== "every") {
+				if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+					throw new GeoDbError("bad_request", "1 to 1024 space ids")
+				if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+					throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			}
+			if (!HEX32.test(typeId)) throw new GeoDbError("bad_request", "the type id must be 32 hex digits")
+			if (
+				where &&
+				(!HEX32.test(where.property) ||
+					where.targets.length === 0 ||
+					where.targets.length > MAX_COUNT_TARGETS ||
+					!where.targets.every((id) => HEX32.test(id)))
+			)
+				throw new GeoDbError(
+					"bad_request",
+					`a count term names a property and 1 to ${MAX_COUNT_TARGETS} targets of 32 hex digits`,
+				)
+			const scope = geoSpaceIds === "every" ? "*" : geoSpaceIds.join(",")
+			const rows = await submit(
+				`${scope}\t${typeCountDocument({typeId, where})}\n`,
+				NO_ENTITY,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				true,
+			)
+			return rows[0] as unknown as TypeCount
 		},
 		readLegacyIds({originalIds, timeoutMs}) {
 			if (

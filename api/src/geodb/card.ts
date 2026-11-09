@@ -459,6 +459,31 @@ export function typeScanIdsFromGeoDbOutput(output: string): string[] {
 }
 
 /**
+ * `geodb-client pipe` output of a type's count form (`.args.count = true`): one row of three integers a page the tool
+ * fetched, `members`, `scanned` and `complete` (`1` once the walk reached the end), then `partial: <n>` where a page was
+ * cut. The pages are summed (a page's members are distinct from the others', the sums are exact); `complete` is the last
+ * page's. No row, or a row that is not three integers, is an error.
+ */
+export function typeCountFromGeoDbOutput(output: string): {members: number; scanned: number; complete: boolean} {
+	let members = 0
+	let scanned = 0
+	let last: string | null = null
+	let rows = 0
+	for (const line of output.split("\n")) {
+		if (line === "" || line.startsWith("# plan") || line.startsWith("partial:")) continue
+		const cells = line.split("\t")
+		if (cells.length !== 3 || !cells.every((cell) => /^\d+$/.test(cell)) || (cells[2] !== "0" && cells[2] !== "1"))
+			throw new Error(`a count row is not three integers: ${line.slice(0, 60)}`)
+		members += Number(cells[0])
+		scanned += Number(cells[1])
+		last = cells[2] as string
+		rows++
+	}
+	if (rows === 0) throw new Error("a count answered no row")
+	return {members, scanned, complete: last === "1"}
+}
+
+/**
  * An instant row's value as nanoseconds since the epoch (`instant:<seconds>.<nanos>`), or null for any other text.
  */
 export function instantNanos(raw: string): bigint | null {

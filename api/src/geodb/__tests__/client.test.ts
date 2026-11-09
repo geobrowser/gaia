@@ -954,3 +954,36 @@ describe("createSpaceMap", () => {
 		await expect(createSpaceMap("/nonexistent/spaces.json")(SPACE)).rejects.toMatchObject({reason: "client_failed"})
 	})
 })
+
+describe("readTypeCount", () => {
+	const T = "e550fe517e904b2c8fffdf13408f5634"
+	const R = "8f151ba4de204e3c9cb499ddf96f48f1"
+	const X = "11111111111141118111111111111111"
+
+	it("sends the count document with the scope and sums the pages", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	if (spaces !== "${SPACE}" || !doc.includes(".count = true") || !doc.includes(".eq = \\"${X}\\"")) return frame("-", "bad document")
+	frame("+", "3\\t10\\t0\\npartial: 1\\n2\\t5\\t1\\n")
+})
+`)
+		await expect(
+			client.readTypeCount?.({geoSpaceIds: [SPACE], typeId: T, where: {property: R, targets: [X]}}),
+		).resolves.toEqual({members: 5, scanned: 15, complete: true})
+		client.close()
+	})
+
+	it("uses the every-Space scope and surfaces a refusal", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => frame(line.startsWith("*\\t") ? "-" : "+", line.startsWith("*\\t") ? "refused: Request MalformedRequest" : "0\\t0\\t1\\n"))
+`)
+		await expect(client.readTypeCount?.({geoSpaceIds: "every", typeId: T})).rejects.toMatchObject({
+			reason: "client_failed",
+			message: expect.stringContaining("MalformedRequest"),
+		})
+		client.close()
+	})
+})

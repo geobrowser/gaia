@@ -85,6 +85,14 @@ export type GeoDbCardConfig = {
 	 */
 	typeScan?: boolean
 	/**
+	 * Let the `entitiesConnection` shadow lower an operation that asks only `totalCount` (`filter: {typeIds, relations: {some}}`) to
+	 * geo-db's entities count form (`.args = .{ .type, .count = true, .where }`, DR-154 item 8) and compare the counts. Needs a serve
+	 * whose store has the count form with `where`: an older one refuses it (counted `unsupported_selection` / `count_refused`, and
+	 * costs one worker restart per refused read). A root with no Space argument is counted across every Space (a `*` line) and
+	 * needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_COUNT_ONLY_SHADOW=on.
+	 */
+	countOnly?: boolean
+	/**
 	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
 	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
 	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
@@ -149,6 +157,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
 		typeScan: env.GEODB_TYPE_SCAN_SHADOW?.trim().toLowerCase() === "on",
+		countOnly: env.GEODB_COUNT_ONLY_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",

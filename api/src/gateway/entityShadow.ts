@@ -1220,6 +1220,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	 * Needs a serve from geo-db c2f9d09cfa; an older one refuses the argument, counted `type_scan_refused`.
 	 */
 	typeScan?: boolean
+	/** Lower a `totalCount`-only `entitiesConnection` to geo-db's entities count form and compare the counts (`GEODB_COUNT_ONLY_SHADOW`; countOnlyShadow.ts). */
+	countOnly?: boolean
 	/** Compare a relation target's own `valuesList` against geo-db's cards of the targets, read in one batch (`GEODB_NESTED_TARGET_VALUES_SHADOW`). */
 	nestedTargetValues?: boolean
 	/** Accept a `typeId`-filtered relations list that does not select the type in the light `entities` shadow (`GEODB_RELATIONS_TYPE_FILTER_SHADOW`). */
