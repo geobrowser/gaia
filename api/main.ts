@@ -35,6 +35,11 @@ import {
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
+import {
+	createEntityAtVersionShadow,
+	type EntityAtVersionShadow,
+	readEntityAtVersionShadowConfig,
+} from "./src/geodb/entityAtVersionShadow"
 import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
 import {
 	createEntityFeedConfigReaders,
@@ -208,14 +213,23 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+// GEODB_ENTITY_AT_VERSION_SHADOW (off by default) likewise compares a sampled `/versioned/entities/:id` snapshot and the v2 diff's
+// name enrichment with geo-db (gaia_api_entity_at_version_shadow_total).
+const entityAtVersionShadowRef: {current: EntityAtVersionShadow | null} = {current: null}
 app.route(
 	"/versioned",
-	createVersionedRouter(db, runtime, {versions: (served) => entityVersionsShadowRef.current?.versions(served)}),
+	createVersionedRouter(db, runtime, {
+		versions: (served) => entityVersionsShadowRef.current?.versions(served),
+		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
+	}),
 )
 log.info("Versioned entity routes enabled")
 
 // Mount v2 versioned entities router (additive enrichments over v1)
-app.route("/v2/versioned", createVersionedV2Router(db, runtime))
+app.route(
+	"/v2/versioned",
+	createVersionedV2Router(db, runtime, {names: (served) => entityAtVersionShadowRef.current?.names(served)}),
+)
 log.info("Versioned v2 entity routes enabled")
 
 // Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
@@ -258,6 +272,16 @@ if (entityVersionsShadowConfig.enabled) {
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
 		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
+	})
+}
+
+const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
+if (entityAtVersionShadowConfig.enabled) {
+	entityAtVersionShadowRef.current = createEntityAtVersionShadow({
+		config: entityAtVersionShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
 	})
 }
 
