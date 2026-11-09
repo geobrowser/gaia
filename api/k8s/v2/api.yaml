@@ -300,6 +300,10 @@ spec:
             # count form refuses it as unsupported_selection{count_refused}, never a failed request. Shadow only.
             - name: GEODB_COUNT_ONLY_SHADOW
               value: "on"
+            # Compare nested entity selections against geo-db's nested entity read (gaia#1411). Shadow only; a serve that
+            # cannot answer counts unsupported_selection, never a failed request.
+            - name: GEODB_NESTED_ENTITY_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
