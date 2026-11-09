@@ -179,6 +179,124 @@ describe("the real Entity and EntityPage queries", () => {
 		})
 	})
 
+	describe("property info (GEODB_PROPERTY_INFO_SHADOW)", () => {
+		const DATA_TYPE_REL = conformingId("entity", "6d29d578-49bb-4959-baf7-2cc696b1671a")
+		const RENDERABLE_REL = conformingId("entity", "2316bbe1-c76f-4635-83f2-3e03b4f1fe46")
+		const FORMAT_PROP = conformingId("entity", "396f8c72-dfd0-4b57-91ea-09c1b9321b2f")
+		const properties = (): any[] => {
+			const seen = new Map<string, any>()
+			for (const v of ENTITY_A.response.data.entity.valuesList) seen.set(v.property.id, v.property)
+			return [...seen.values()]
+		}
+		/** The Property cards geo-db would answer, built from the fixture's own property objects. */
+		const propertyCards = (tweak?: (p: any) => any) =>
+			properties().flatMap((raw) => {
+				const p = tweak ? tweak(raw) : raw
+				const entity = conformingId("entity", p.id)
+				const row = (prop: string, value: string, targetName?: string) => ({
+					prop,
+					raw: value,
+					space: GEO_SPACE_A,
+					entity,
+					...(targetName === undefined ? {} : {targetName}),
+				})
+				return [
+					...(p.dataTypeId ? [row(DATA_TYPE_REL, conformingId("entity", p.dataTypeId), p.dataTypeName)] : []),
+					...(p.renderableTypeId
+						? [row(RENDERABLE_REL, conformingId("entity", p.renderableTypeId), p.renderableTypeName)]
+						: []),
+					...(p.format ? [row(FORMAT_PROP, p.format)] : []),
+				]
+			})
+
+		function withPropertyInfo(cards: unknown[], enabled: boolean) {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const readCard = vi.fn(async ({entityId, names}: {geoSpaceId: string; entityId: string; names?: boolean}) =>
+				rowsFromGeoDbOutput(geoOutput(ENTITY_A), entityId, {names}),
+			)
+			const readCards = vi.fn(async () => cards as never)
+			const shadow = createEntityShadow({
+				geoDb: {readCard, readCards},
+				geoSpaceOf: async (space) => (space === SPACE_A ? GEO_SPACE_A : null),
+				log,
+				propertyInfo: enabled,
+				allGeoSpaces: async () => [GEO_SPACE_A],
+			})
+			return {log, readCards, shadow}
+		}
+
+		it("flag off: still uncompared, no Property read", async () => {
+			const w = withPropertyInfo(propertyCards(), false)
+			await run(w.shadow, ENTITY_A)
+			expect(w.readCards).not.toHaveBeenCalled()
+			expect(uncompared().property_info).toBe(1)
+		})
+
+		it("flag on, geo-db agrees: match and property_info is no longer uncompared", async () => {
+			const w = withPropertyInfo(propertyCards(), true)
+			await run(w.shadow, ENTITY_A)
+			expect(results()).toEqual({match: 1})
+			expect(w.readCards).toHaveBeenCalledTimes(1)
+			expect(uncompared().property_info).toBeUndefined()
+			expect(w.log.warn).not.toHaveBeenCalled()
+		})
+
+		it("flag on, geo-db holds a different data type: mismatch", async () => {
+			const w = withPropertyInfo(
+				propertyCards((p) => (p.dataTypeId ? {...p, dataTypeId: "149fd752d9d04f80820d1d942eea7842"} : p)),
+				true,
+			)
+			await run(w.shadow, ENTITY_A)
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
+	describe("relation membership (GEODB_RELATIONS_MEMBERSHIP_SHADOW)", () => {
+		const relationRows = (count: number) =>
+			Array.from({length: count}, (_, n) => ({
+				prop: conformingId("entity", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa000" + n),
+				raw: conformingId("entity", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbb000" + n),
+				space: GEO_SPACE_A,
+				entity: ENTITY_HEX,
+			}))
+		function withMembership(held: number, enabled: boolean) {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const readCard = vi.fn(async ({entityId, names}: {geoSpaceId: string; entityId: string; names?: boolean}) =>
+				rowsFromGeoDbOutput(geoOutput(ENTITY_A), entityId, {names}),
+			)
+			const readCardSpaces = vi.fn(async () => relationRows(held) as never)
+			const shadow = createEntityShadow({
+				geoDb: {readCard, readCardSpaces},
+				geoSpaceOf: async (space) => (space === SPACE_A ? GEO_SPACE_A : space === SPACE_B ? GEO_SPACE_B : null),
+				log,
+				relationsMembership: enabled,
+			})
+			return {log, readCardSpaces, shadow}
+		}
+		const listed = ENTITY_A.response.data.entity.allRelationsList.length
+
+		it("flag off: still uncompared, no relations read", async () => {
+			const w = withMembership(1, false)
+			await run(w.shadow, ENTITY_A)
+			expect(w.readCardSpaces).not.toHaveBeenCalled()
+			expect(uncompared().membership_only).toBe(1)
+		})
+
+		it("flag on, geo-db holds no more than PostgreSQL lists: match and no longer uncompared", async () => {
+			const w = withMembership(Math.min(listed, 2), true)
+			await run(w.shadow, ENTITY_A)
+			expect(results()).toEqual({match: 1})
+			expect(w.readCardSpaces).toHaveBeenCalledWith(expect.objectContaining({relations: true}))
+			expect(uncompared().membership_only).toBeUndefined()
+		})
+
+		it("flag on, geo-db holds more relations in a Space than PostgreSQL lists: mismatch", async () => {
+			const w = withMembership(listed + 5, true)
+			await run(w.shadow, ENTITY_A)
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	it("EntityPage, space A: match, and the co-root relations field is uncompared", async () => {
 		const {shadow} = setup(geoOutput(PAGE_A))
 		await run(shadow, PAGE_A, ["entity", "relations"])

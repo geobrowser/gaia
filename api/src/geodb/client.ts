@@ -68,6 +68,8 @@ export type GeoDbCardClient = {
 		names?: boolean
 		/** This read's timeout in ms, in place of the pool's: a shadow read wider than the serving path's budget. */
 		timeoutMs?: number
+		/** Read the entity's reference statements alone (`.args.relations = true`, geo-db ISS-590-263); an older serve refuses it. */
+		relations?: boolean
 	}): Promise<GeoCardRow[]>
 	/**
 	 * The cards of several entities in the Spaces named (`.args.ids`, geo-db ISS-625-317): the rows of every card, each
@@ -222,10 +224,15 @@ export function isHoldersUnknownArgument(error: unknown): boolean {
 }
 
 /** The geoql document for one entity's card. Ids are 32 hex digits, so nothing needs escaping. */
-export function cardDocument(entityId: string, options: {names?: boolean; backlinks?: number} = {}): string {
+export function cardDocument(
+	entityId: string,
+	options: {names?: boolean; backlinks?: number; relations?: boolean} = {},
+): string {
 	const names = options.names ? ", .names = true" : ""
 	const backlinks = options.backlinks ? `, .backlinks = ${options.backlinks}` : ""
-	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks} } } } }`
+	// `.relations = true` reads the reference statements alone (geo-db ISS-590-263); beside `backlinks` it is refused.
+	const relations = options.relations ? ", .relations = true" : ""
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks}${relations} } } } }`
 }
 
 /** The geoql document for the Spaces holding one entity (`.args.holders = true`). Ids are 32 hex digits, so nothing needs escaping. */
@@ -808,7 +815,7 @@ export function createPipeGeoDbClient(
 			}
 			return submit(`${geoSpaceId}\t${cardDocument(entityId, {names})}\n`, entityId, names, false)
 		},
-		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs}) {
+		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
 				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
 			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
@@ -817,7 +824,7 @@ export function createPipeGeoDbClient(
 			// more is the multi-Space form.
 			const spaces = geoSpaceIds.length > 1
 			return submit(
-				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`,
+				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names, relations})}\n`,
 				entityId,
 				names,
 				spaces,

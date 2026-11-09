@@ -115,6 +115,20 @@ export type GeoDbCardConfig = {
 	 */
 	nestedEntity?: boolean
 	/**
+	 * Compare the Property metadata a values row's `property` object selects (`dataTypeId`, `dataTypeName`, `renderableTypeId`,
+	 * `renderableTypeName`, `format`, `isType`) against one batched card read of the Properties across every Space (`.args.ids`,
+	 * at most 64 Properties, two reads). Needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_PROPERTY_INFO_SHADOW=on.
+	 */
+	propertyInfo?: boolean
+	/**
+	 * Compare an unfiltered `allRelationsList { spaceId }` (the `Entity` query's, and the `EntitiesBatch` projection when
+	 * `GEODB_ENTITIES_BATCH_SHADOW` is on) against geo-db's reference statements of the entity in the Spaces that hold
+	 * it: no Space may hold more than PostgreSQL lists. One more read an entity (`.args.relations = true`, geo-db
+	 * ISS-590-263; a serve without it refuses the document, counted `failed`), under the every-Space budget on the
+	 * `Entity` query. Off by default. GEODB_RELATIONS_MEMBERSHIP_SHADOW=on.
+	 */
+	relationsMembership?: boolean
+	/**
 	 * Settle an every-Space card read (an answer that names no Space) by asking geo-db which Spaces hold the entity
 	 * (`.args.holders = true`) and reading the card in those alone, in place of the card across every loaded Space.
 	 * Needs a serve whose store has geo-db 48739dfef5, so turn it on only after the serve pin passes that commit; a store
@@ -168,6 +182,8 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
 		nestedEntity: env.GEODB_NESTED_ENTITY_SHADOW?.trim().toLowerCase() === "on",
+		propertyInfo: env.GEODB_PROPERTY_INFO_SHADOW?.trim().toLowerCase() === "on",
+		relationsMembership: env.GEODB_RELATIONS_MEMBERSHIP_SHADOW?.trim().toLowerCase() === "on",
 		holdersLookup: env.GEODB_HOLDERS_LOOKUP?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
