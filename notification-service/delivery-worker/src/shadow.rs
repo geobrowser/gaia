@@ -27,6 +27,11 @@
 //!   `extra_grace` of the claim. That grace must outlast the retry backoff (capped at two days,
 //!   [`crate::deliver::backoff_seconds`]), so the default is three days.
 //!
+//! A unit that never pairs (left by an earlier run whose lease lapsed, or claimed after its row
+//! aged into `miss`) is held until `extra_grace`. If the held units reach [`HELD_MAX`] the
+//! longest-held tenth are completed uncounted
+//! (`delivery_worker_shadow_skipped_total{reason="held_full"}`) instead of stalling the shadow.
+//!
 //! Rows delivered before the mirror was switched on show as `miss`; read the series from the
 //! mirror's start. The shadow is OFF unless `GEODB_OUTBOX_SHADOW_READ` is `1` or `true`.
 
@@ -193,6 +198,21 @@ impl Matcher {
         Observed::Waiting
     }
 
+    /// Takes the `n` longest-held units out of the wait list, oldest first, so the caller can
+    /// complete them uncounted. A unit that has waited this long for a Postgres row that never
+    /// came (a leftover of an earlier run, or one claimed after its row had aged into `miss`)
+    /// will not pair, and held, it would fill [`HELD_MAX`] and stop the shadow for good.
+    pub fn evict_oldest_units(&mut self, n: usize) -> Vec<Claimed> {
+        let mut by_age: Vec<(Instant, Key)> =
+            self.units.iter().map(|(k, (_, t))| (*t, *k)).collect();
+        by_age.sort_unstable();
+        by_age
+            .into_iter()
+            .take(n)
+            .filter_map(|(_, k)| self.units.remove(&k).map(|(c, _)| c))
+            .collect()
+    }
+
     /// Ages out what waited too long: rows past `miss_grace` are misses (nothing to complete),
     /// units past `extra_grace` are extras (to complete). Returns the miss count and the extras.
     pub fn sweep(&mut self, now: Instant) -> (u64, Vec<Claimed>) {
@@ -269,6 +289,8 @@ pub struct Tally {
     pub complete_errors: u64,
     /// Pre-start units (and markers) completed without counting.
     pub skipped: u64,
+    /// Held units retired uncounted because the wait list was full.
+    pub evicted: u64,
 }
 
 impl Tally {
@@ -294,6 +316,9 @@ impl Tally {
         }
         if self.skipped > 0 {
             metrics::counter!(SKIPPED, "reason" => "pre_start").increment(self.skipped);
+        }
+        if self.evicted > 0 {
+            metrics::counter!(SKIPPED, "reason" => "held_full").increment(self.evicted);
         }
         if self.claim_errors > 0 {
             metrics::counter!(ERRORS, "op" => "claim").increment(self.claim_errors);
@@ -359,10 +384,22 @@ pub async fn pass<S: Source>(
             }
         }
     }
-    let draining = matches!(gate, Gate::Draining(_));
+    // A full wait list must not stop the shadow: the units in it are ones that did not pair.
+    // Retire the longest-held tenth uncounted so fresh units can be claimed.
+    if matches!(gate, Gate::Live) && m.units_held() >= HELD_MAX {
+        for unit in m.evict_oldest_units(HELD_MAX / 10) {
+            t.evicted += 1;
+            if let Err(e) = src.complete(&unit).await {
+                t.complete_errors += 1;
+                debug!(error = %e, "shadow evict complete failed");
+            }
+        }
+    }
     if !matches!(gate, Gate::Entering) && m.units_held() < HELD_MAX {
-        let calls = if draining { DRAIN_CLAIMS } else { 1 };
-        for _ in 0..calls {
+        // Keep claiming while batches come back full, live or draining: the queue is read
+        // oldest first, so a backlog ahead of fresh units must be cleared in one pass, not one
+        // batch a tick.
+        for _ in 0..DRAIN_CLAIMS {
             match src.claim(batch, lease_ms).await {
                 Ok(units) => {
                     let full = units.len() >= usize::from(batch);
@@ -380,7 +417,7 @@ pub async fn pass<S: Source>(
                             done.push(r);
                         }
                     }
-                    if !full || matches!(gate, Gate::Live) || m.units_held() >= HELD_MAX {
+                    if !full || m.units_held() >= HELD_MAX {
                         break;
                     }
                 }
@@ -430,7 +467,9 @@ impl Settings {
             batch: get("GEODB_SHADOW_BATCH")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(16),
-            lease: secs("GEODB_SHADOW_LEASE_SECS", 3600),
+            // Longer than `extra_grace`: a held unit whose lease lapsed would be handed out again
+            // ahead of fresh units (geo-db reads pending and lapsed-lease rows oldest first).
+            lease: secs("GEODB_SHADOW_LEASE_SECS", 3 * 24 * 3600 + 3600),
             miss_grace: secs("GEODB_SHADOW_MISS_GRACE_SECS", 600),
             extra_grace: secs("GEODB_SHADOW_EXTRA_GRACE_SECS", 3 * 24 * 3600),
         }
@@ -514,7 +553,9 @@ pub fn register() {
     for v in Verdict::ALL {
         metrics::counter!(RESULTS, "result" => v.as_str()).absolute(0);
     }
-    metrics::counter!(SKIPPED, "reason" => "pre_start").absolute(0);
+    for reason in ["pre_start", "held_full"] {
+        metrics::counter!(SKIPPED, "reason" => reason).absolute(0);
+    }
     for op in ["claim", "complete"] {
         metrics::counter!(ERRORS, "op" => op).absolute(0);
     }
@@ -755,10 +796,7 @@ mod tests {
         assert!(src.completed.is_empty());
     }
 
-    #[tokio::test]
-    async fn a_full_unit_list_stops_claiming() {
-        let now = Instant::now();
-        let mut m = matcher();
+    fn full_list(m: &mut Matcher, now: Instant) {
         for i in 0..HELD_MAX {
             let mut k = [0u8; KEY_BYTES];
             k[..8].copy_from_slice(&(i as u64).to_be_bytes());
@@ -769,12 +807,39 @@ mod tests {
                     epoch: 1,
                     payload: vec![],
                 },
-                now,
+                now + Duration::from_millis(i as u64),
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_full_unit_list_retires_its_oldest_tenth_and_keeps_claiming() {
+        let now = Instant::now();
+        let mut m = matcher();
+        full_list(&mut m, now);
         let mut src = Fake::default();
+        let t = pass(&mut src, &mut m, &mut Gate::Live, vec![], 16, 1000, now).await;
+        assert_eq!(t.evicted as usize, HELD_MAX / 10);
+        assert_eq!(src.completed.len(), HELD_MAX / 10);
+        assert_eq!(m.units_held(), HELD_MAX - HELD_MAX / 10);
+        // The oldest went first: key 0 is gone.
+        assert_eq!(src.completed[0].0[..8], 0u64.to_be_bytes());
+        assert!(src.claim_calls >= 1);
+    }
+
+    #[tokio::test]
+    async fn live_claims_continue_while_batches_come_back_full() {
+        let now = Instant::now();
+        let mut m = matcher();
+        let mut src = Fake::default();
+        for round in 0..3u8 {
+            let batch = (0..16u8).map(|i| unit(round * 16 + i + 1, "{}")).collect();
+            src.claims.push_back(Ok(batch));
+        }
         pass(&mut src, &mut m, &mut Gate::Live, vec![], 16, 1000, now).await;
-        assert_eq!(src.claim_calls, 0);
+        // Three full batches, then an empty one that ends the pass.
+        assert_eq!(src.claim_calls, 4);
+        assert_eq!(m.units_held(), 48);
     }
 
     #[test]
@@ -808,6 +873,7 @@ mod tests {
         let d = Settings::from_vars(|_| None);
         assert_eq!(d.extra_grace, Duration::from_secs(3 * 24 * 3600));
         assert_eq!(d.batch, 16);
+        assert!(d.lease > d.extra_grace);
         let o = Settings::from_vars(|k| (k == "GEODB_SHADOW_BATCH").then(|| "4".to_string()));
         assert_eq!(o.batch, 4);
     }
