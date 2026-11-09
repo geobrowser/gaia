@@ -416,6 +416,11 @@ pub async fn guard(key: &str, wait_default_secs: u64) -> Result<Guard, IndexerEr
     }
 }
 
+/// The fencing token of the held lease, `None` when no lease is held (flag off, or in tests).
+pub fn held_token() -> Option<u64> {
+    HELD.get().and_then(|l| u64::try_from(l.token()).ok())
+}
+
 /// The fence. A no-op when no lease is held (flag off, or in tests).
 pub async fn fence() -> Result<(), IndexerError> {
     match HELD.get() {
