@@ -11,7 +11,8 @@
  * asked about that entity, so a profile whose Postgres answer has no front page entity is counted
  * `unsupported{no_front_page}` (geo-db has no cheap way to find it from the Space alone). An entity whose card
  * geo-db does not hold in the Space is a `mismatch` of what Postgres served, not unsupported, unless the Space itself
- * is not loaded (`unmapped_space`).
+ * is not loaded (`unmapped_space`). A card with several avatars is compared against every one's url (Postgres picks
+ * one arbitrarily); only one with more than `MAX_AVATARS` is `unsupported{ambiguous}`.
  *
  * Counts only: no id, name or url is ever logged.
  */
@@ -91,6 +92,8 @@ export function __resetProfileShadowMetricsForTests(): void {
 	unsupported.clear()
 }
 
+/** Most distinct avatar relations of one card the shadow reads; a card with more is counted `ambiguous`. */
+const MAX_AVATARS = 8
 const NAME = conformingId("entity", SystemIds.NAME_PROPERTY)
 const AVATAR = conformingId("entity", ContentIds.AVATAR_PROPERTY)
 const IMAGE_URL = conformingId("entity", SystemIds.IMAGE_URL_PROPERTY)
@@ -130,15 +133,14 @@ export function createProfileShadow(deps: {
 			// Postgres picks one of several names arbitrarily (LIMIT 1): any held name is the served one.
 			const nameOk = servedName === null ? names.length === 0 : names.includes(servedName)
 
+			// Postgres picks one of several avatar relations arbitrarily (LIMIT 1), as it does for names: the served url
+			// is right when any held avatar has it. Past MAX_AVATARS the card is too wide to read in the background.
 			const avatars = [...new Set(textOf(card, AVATAR))]
-			let avatarOk: boolean
-			if (avatars.length > 1) return recordUnsupported(surface, "ambiguous")
-			if (avatars.length === 0) {
-				avatarOk = p.avatarUrl === null
-			} else {
-				const urls = textOf(await read(geoSpaceId, avatars[0] as string), IMAGE_URL).filter((u) => u !== "")
-				avatarOk = p.avatarUrl === null ? urls.length === 0 : urls.includes(p.avatarUrl)
-			}
+			if (avatars.length > MAX_AVATARS) return recordUnsupported(surface, "ambiguous")
+			const urls: string[] = []
+			for (const avatar of avatars)
+				urls.push(...textOf(await read(geoSpaceId, avatar), IMAGE_URL).filter((u) => u !== ""))
+			const avatarOk = p.avatarUrl === null ? urls.length === 0 : urls.includes(p.avatarUrl)
 
 			const match = nameOk && avatarOk
 			recordResult(surface, match ? "match" : "mismatch")
