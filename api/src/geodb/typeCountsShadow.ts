@@ -54,6 +54,16 @@ import {
 export const RESULTS = ["match", "mismatch", "not_served", "fallback", "failed"] as const
 export type Result = (typeof RESULTS)[number]
 
+/** The shape of a call, a fixed set: the blended rate hid that these fail for different reasons. */
+export const FORMS = ["plain", "debate", "spaces", "spaces_debate", "topics"] as const
+export type Form = (typeof FORMS)[number]
+
+export function formOf(call: TypeCountsCall): Form {
+	if (call.topics.length > 1) return "topics"
+	if (call.spaces !== null) return call.debateTaggedClaims ? "spaces_debate" : "spaces"
+	return call.debateTaggedClaims ? "debate" : "plain"
+}
+
 export const FAIL_REASONS = [
 	"timeout",
 	"client_failed",
@@ -111,6 +121,7 @@ let active = false
 const results = new Map<Result, number>()
 const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
 const failReasons = new Map<FailReason, number>()
+const formResults = new Map<string, number>()
 const fallbacks = new Map<FallbackReason, number>()
 const retries = {answered: 0, failed: 0}
 const firstTryFailures = new Map<FailReason, number>()
@@ -123,6 +134,15 @@ export function renderTypeCountsShadowMetrics(): string {
 		"# TYPE gaia_api_type_counts_shadow_total counter",
 	]
 	for (const r of RESULTS) lines.push(`gaia_api_type_counts_shadow_total{result="${r}"} ${results.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_type_counts_shadow_form_total The same results split by the call's form: plain (one topic), debate (Claim walked as Debate), spaces (a Space filter), spaces_debate, topics (several topics).",
+		"# TYPE gaia_api_type_counts_shadow_form_total counter",
+	)
+	for (const f of FORMS)
+		for (const r of RESULTS)
+			lines.push(
+				`gaia_api_type_counts_shadow_form_total{form="${f}",result="${r}"} ${formResults.get(`${f}\t${r}`) ?? 0}`,
+			)
 	lines.push(
 		"# HELP gaia_api_type_counts_shadow_fallback_total Type-counts shadow calls that fell back to Postgres, by reason: too_many_spaces (past 64), resource_exhausted (the serve's read budget), serve_revision (the serve or client is below the form's frame revision 14 or 15) or backoff (the form was refused for its revision recently and is not asked yet).",
 		"# TYPE gaia_api_type_counts_shadow_fallback_total counter",
@@ -157,6 +177,7 @@ export function __resetTypeCountsShadowMetricsForTests(): void {
 	active = false
 	results.clear()
 	failReasons.clear()
+	formResults.clear()
 	fallbacks.clear()
 	retries.answered = 0
 	retries.failed = 0
@@ -304,7 +325,18 @@ export function createTypeCountsShadow(deps: {
 		}
 	}
 
+	/** One call, with its result also counted under the call's form (whichever counter the body moved). */
 	async function check(call: TypeCountsCall, blocked: string[], held: Set<string>): Promise<void> {
+		const before = new Map(results)
+		await checkBody(call, blocked, held)
+		for (const r of RESULTS)
+			if ((results.get(r) ?? 0) > (before.get(r) ?? 0)) {
+				const k = `${formOf(call)}\t${r}`
+				formResults.set(k, (formResults.get(k) ?? 0) + 1)
+			}
+	}
+
+	async function checkBody(call: TypeCountsCall, blocked: string[], held: Set<string>): Promise<void> {
 		let pg: Map<string, number>
 		try {
 			let geoSpaces: string[] | null = null
@@ -445,21 +477,54 @@ const uuidArray = (ids: string[]) =>
 		sql`, `,
 	)}]::uuid[]`
 
+/** The uuid just above `id` in byte order; all-f wraps to all-0, and the sampler stops on a repeat. */
+export function nextUuid(id: string): string {
+	const h = id.replace(/-/g, "").toLowerCase()
+	const digits = h.split("")
+	for (let i = digits.length - 1; i >= 0; i--) {
+		const d = Number.parseInt(digits[i] as string, 16)
+		if (d < 15) {
+			digits[i] = (d + 1).toString(16)
+			break
+		}
+		digits[i] = "0"
+	}
+	const n = digits.join("")
+	return `${n.slice(0, 8)}-${n.slice(8, 12)}-${n.slice(12, 16)}-${n.slice(16, 20)}-${n.slice(20)}`
+}
+
 /** The default source: Postgres. */
 export function createPostgresTypeCountsSource(db: Database): TypeCountsSource {
-	const topicsFrom = async (from: string | null, n: number) =>
-		rowsOf(
+	// One topic per query: the next topic id above the last (an index step), so every topic is as likely as any other. The old
+	// shape took the first rows from a random pivot, which a large topic filled alone.
+	const nextTopic = async (after: string | null): Promise<string | null> => {
+		const rows = rowsOf(
 			await db.execute(
-				from === null
-					? sql`SELECT DISTINCT topic_id::text AS id FROM (SELECT topic_id FROM public.entity_topic_ranking ORDER BY topic_id LIMIT ${n}) t`
-					: sql`SELECT DISTINCT topic_id::text AS id FROM (SELECT topic_id FROM public.entity_topic_ranking WHERE topic_id >= ${from}::uuid ORDER BY topic_id LIMIT ${n}) t`,
+				after === null
+					? sql`SELECT topic_id::text AS id FROM public.entity_topic_ranking ORDER BY topic_id LIMIT 1`
+					: sql`SELECT topic_id::text AS id FROM public.entity_topic_ranking WHERE topic_id >= ${after}::uuid ORDER BY topic_id LIMIT 1`,
 			),
-		).map((r) => String(r.id))
+		)
+		return rows.length > 0 ? String(rows[0]?.id) : null
+	}
 	return {
 		async sampleTopics(limit) {
-			// Per-topic row count skews small, so ask for rows and keep the distinct topics: a big topic fills the page alone.
-			const first = await topicsFrom(crypto.randomUUID(), limit)
-			return first.length > 0 ? first.slice(0, limit) : (await topicsFrom(null, limit)).slice(0, limit)
+			const out: string[] = []
+			let from: string | null = crypto.randomUUID()
+			while (out.length < limit) {
+				const topic = await nextTopic(from)
+				if (topic === null) {
+					// Past the last topic: wrap once to the first, and stop if that is one already taken.
+					if (from === null) break
+					from = null
+					continue
+				}
+				if (out.includes(topic)) break
+				out.push(topic)
+				// The smallest uuid above this one: the topic id with its last digit stepped.
+				from = nextUuid(topic)
+			}
+			return out
 		},
 		async typesOf(topic) {
 			return rowsOf(

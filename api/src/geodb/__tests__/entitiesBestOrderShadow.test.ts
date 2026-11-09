@@ -189,3 +189,71 @@ describe("runOnce", () => {
 		expect(r.scan).toHaveBeenCalledWith(3, hex(S), 5)
 	})
 })
+
+describe("failure labels", () => {
+	const metrics = () => renderBestOrderShadowMetrics()
+	const reason = (read: string, r: string) =>
+		Number(new RegExp(`failed_total\\{read="${read}",reason="${r}"\\} (\\d+)`).exec(metrics())?.[1])
+	const step = (read: string, st: string, kind: string) =>
+		Number(
+			new RegExp(`reference_failed_total\\{read="${read}",step="${st}",kind="${kind}"\\} (\\d+)`).exec(
+				metrics(),
+			)?.[1],
+		)
+
+	it("exports every reason and step series at zero once mounted", () => {
+		createBestOrderShadow({config, db: fakeDb(agreeing), reader: reader(), log})
+		expect(reason("best_order", "timeout")).toBe(0)
+		expect(reason("local_score", "other")).toBe(0)
+		expect(step("local_score", "sample_space", "error")).toBe(0)
+		expect(step("best_order", "pg_order", "timeout")).toBe(0)
+	})
+	it("splits geo-db failures by GeoDbError reason, and anything else as other", async () => {
+		const failing = reader({
+			scores: vi.fn(async () => {
+				throw new GeoDbError("overloaded", "busy")
+			}),
+			scan: vi.fn(async (c: number) => {
+				if (c === 2) throw new GeoDbError("timeout", "slow")
+				throw new Error("surprise")
+			}),
+		})
+		await createBestOrderShadow({config, db: fakeDb(agreeing), reader: failing, log}).runOnce()
+		expect(reason("best_order", "overloaded")).toBe(1)
+		expect(reason("global_score", "timeout")).toBe(1)
+		expect(reason("local_score", "other")).toBe(1)
+	})
+	it("names the reference query that timed out", async () => {
+		const timeout = Object.assign(new Error("statement timeout"), {code: "57014"})
+		const inner = fakeDb(agreeing)
+		const db = {
+			execute: vi.fn(async (q: {queryChunks?: unknown[]}) => {
+				if (JSON.stringify(q.queryChunks ?? []).includes("entities_in_best_order")) throw timeout
+				return inner.execute(q as never)
+			}),
+		} as unknown as Database
+		await createBestOrderShadow({config, db, reader: reader(), log}).runOnce()
+		expect(step("best_order", "pg_order", "timeout")).toBe(1)
+		expect(step("best_order", "pg_order", "error")).toBe(0)
+		expect(count("best_order", "reference_timeout")).toBe(1)
+		expect(count("global_score", "match")).toBe(1)
+	})
+	it("counts a non-timeout reference error under kind error", async () => {
+		const db = {
+			execute: vi.fn(async () => {
+				throw new Error("nope")
+			}),
+		} as unknown as Database
+		await createBestOrderShadow({config, db, reader: reader(), log}).runOnce()
+		const errors = (["sample_ids", "pg_order", "cards", "config", "pg_page", "sample_space"] as const)
+			.map(
+				(st) =>
+					step("best_order", st, "error") +
+					step("global_score", st, "error") +
+					step("local_score", st, "error"),
+			)
+			.reduce((a, b) => a + b, 0)
+		expect(errors).toBeGreaterThan(0)
+		expect(step("best_order", "other", "timeout")).toBe(0)
+	})
+})

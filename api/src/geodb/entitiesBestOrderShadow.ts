@@ -33,13 +33,27 @@ import {GeoDbError} from "./client"
 import type {DerivedScanReader, DerivedScoresReader, ScoreCard} from "./derived"
 import {entitiesInBestOrder, entitiesOrderedByScore} from "./rankedReads/bestOrder"
 import {readCards, readScoreConfig, sampleIds} from "./rankingScoresShadow"
-import {failureResult, viaReference} from "./referenceSide"
+import {failureResult, ReferenceSideError, viaReference} from "./referenceSide"
 import {sampleTable} from "./scoresShadow"
 
 export const READS = ["best_order", "global_score", "local_score"] as const
 export type Read = (typeof READS)[number]
 export const RESULTS = ["match", "mismatch", "failed", "reference_timeout", "reference_failed"] as const
 export type Result = (typeof RESULTS)[number]
+
+/** Which Postgres reference query a reference failure came from: a fixed set, so the label stays bounded. */
+export const STEPS = ["sample_ids", "pg_order", "cards", "config", "pg_page", "sample_space", "other"] as const
+export type Step = (typeof STEPS)[number]
+/** Why a geo-db read failed: the GeoDbError reasons, or `other` for anything that is not one. */
+export const FAIL_REASONS = [
+	"timeout",
+	"unmapped_space",
+	"client_failed",
+	"bad_request",
+	"overloaded",
+	"other",
+] as const
+export type FailReason = (typeof FAIL_REASONS)[number]
 
 export type BestOrderShadowConfig = {enabled: boolean; intervalMs: number; sample: number}
 
@@ -69,6 +83,14 @@ const bump = (read: Read, r: Result): void => {
 	const k = `${read}\t${r}`
 	counts.set(k, (counts.get(k) ?? 0) + 1)
 }
+const failReasons = new Map<string, number>()
+const referenceSteps = new Map<string, number>()
+const stepOf = (e: ReferenceSideError): Step =>
+	(STEPS as readonly string[]).includes(e.step ?? "") ? (e.step as Step) : "other"
+const reasonOf = (error: unknown): FailReason =>
+	error instanceof GeoDbError && (FAIL_REASONS as readonly string[]).includes(error.reason)
+		? (error.reason as FailReason)
+		: "other"
 
 /** Empty until mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
 export function renderBestOrderShadowMetrics(): string {
@@ -82,12 +104,33 @@ export function renderBestOrderShadowMetrics(): string {
 			lines.push(
 				`gaia_api_entities_best_order_shadow_total{read="${read}",result="${r}"} ${counts.get(`${read}\t${r}`) ?? 0}`,
 			)
+	lines.push(
+		"# HELP gaia_api_entities_best_order_shadow_failed_total Failed (geo-db side) results by read and reason: a GeoDbError reason or other.",
+		"# TYPE gaia_api_entities_best_order_shadow_failed_total counter",
+	)
+	for (const read of READS)
+		for (const reason of FAIL_REASONS)
+			lines.push(
+				`gaia_api_entities_best_order_shadow_failed_total{read="${read}",reason="${reason}"} ${failReasons.get(`${read}\t${reason}`) ?? 0}`,
+			)
+	lines.push(
+		"# HELP gaia_api_entities_best_order_shadow_reference_failed_total Postgres reference failures (reference_timeout and reference_failed) by read, the reference query that failed, and kind: timeout (statement timeout) or error.",
+		"# TYPE gaia_api_entities_best_order_shadow_reference_failed_total counter",
+	)
+	for (const read of READS)
+		for (const step of STEPS)
+			for (const kind of ["timeout", "error"])
+				lines.push(
+					`gaia_api_entities_best_order_shadow_reference_failed_total{read="${read}",step="${step}",kind="${kind}"} ${referenceSteps.get(`${read}\t${step}\t${kind}`) ?? 0}`,
+				)
 	return lines.join("\n")
 }
 
 export function __resetBestOrderShadowMetricsForTests(): void {
 	active = false
 	counts.clear()
+	failReasons.clear()
+	referenceSteps.clear()
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -157,20 +200,28 @@ export function createBestOrderShadow(deps: {
 		}
 	}
 	const fail = (read: Read, error: unknown) => {
-		bump(read, failureResult(error))
+		const result = failureResult(error)
+		bump(read, result)
+		if (error instanceof ReferenceSideError) {
+			const k = `${read}\t${stepOf(error)}\t${result === "reference_timeout" ? "timeout" : "error"}`
+			referenceSteps.set(k, (referenceSteps.get(k) ?? 0) + 1)
+		} else {
+			const k = `${read}\t${reasonOf(error)}`
+			failReasons.set(k, (failReasons.get(k) ?? 0) + 1)
+		}
 		if (!(error instanceof GeoDbError)) log.warn("entities best order shadow failed", {read, error: String(error)})
 	}
 
 	async function bestOrder(): Promise<void> {
 		if (!reader.scores) return
 		try {
-			const ids = await viaReference(sampleIds(db, pivotOf(), config.sample))
+			const ids = await viaReference(sampleIds(db, pivotOf(), config.sample), "sample_ids")
 			if (ids.length === 0) return
 			const uuids = ids.map(uuidOfHex)
 			const [pg, cards, scoreConfig] = await Promise.all([
-				viaReference(pgBestOrder(db, uuids)),
-				viaReference(readCards(db, uuids)),
-				viaReference(readScoreConfig(db)),
+				viaReference(pgBestOrder(db, uuids), "pg_order"),
+				viaReference(readCards(db, uuids), "cards"),
+				viaReference(readScoreConfig(db), "config"),
 			])
 			if (scoreConfig === null) throw new Error("entity_ranking_config has no usable row")
 			const withCard = ids.filter((id) => cards.has(id))
@@ -197,13 +248,13 @@ export function createBestOrderShadow(deps: {
 			let group = "0"
 			let pg: Promise<string[]>
 			if (read === "global_score") {
-				pg = viaReference(pgGlobalPage(db, config.sample))
+				pg = viaReference(pgGlobalPage(db, config.sample), "pg_page")
 			} else {
-				const row = (await viaReference(sampleTable(db, "local_scores", pivotOf(), 1)))[0]
+				const row = (await viaReference(sampleTable(db, "local_scores", pivotOf(), 1), "sample_space"))[0]
 				if (row === undefined) return
 				collection = 3
 				group = row.groupHex
-				pg = viaReference(pgLocalPage(db, uuidOfHex(row.groupHex), config.sample))
+				pg = viaReference(pgLocalPage(db, uuidOfHex(row.groupHex), config.sample), "pg_page")
 			}
 			const [expected, page] = await Promise.all([pg, reader.scan(collection, group, config.sample)])
 			// A collection-3 key is the entity id then the space id; collection 2's key is the entity id.

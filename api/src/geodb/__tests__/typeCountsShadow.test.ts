@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import type {Database} from "../../forYou/queries"
 import {GeoDbError} from "../client"
 import type {DerivedCountsReader} from "../derived"
 import {countsLine, countsRefusal, FormGatedError, refusalNeedsBackoff} from "../derived"
@@ -13,8 +14,11 @@ import {
 } from "../rankedReads/typeCounts"
 import {
 	__resetTypeCountsShadowMetricsForTests,
+	createPostgresTypeCountsSource,
 	createTypeCountsShadow,
 	FORM_BACKOFF_MS,
+	formOf,
+	nextUuid,
 	readTypeCountsShadowConfig,
 	renderTypeCountsShadowMetrics,
 	type TypeCountsSource,
@@ -797,5 +801,74 @@ describe("countsRefusal", () => {
 		expect(refusalNeedsBackoff(refused("InvalidWirePayload"))).toBe(true)
 		expect(refusalNeedsBackoff(refused("code=InvalidWirePayload refused: x"))).toBe(false)
 		expect(refusalNeedsBackoff(new FormGatedError(14, 15))).toBe(false)
+	})
+})
+
+describe("form labels and the topic sampler", () => {
+	const log = {warn: vi.fn()}
+	const form = (f: string, r: string) =>
+		Number(
+			new RegExp(`form_total\\{form="${f}",result="${r}"\\} (\\d+)`).exec(renderTypeCountsShadowMetrics())?.[1],
+		)
+	beforeEach(() => {
+		__resetTypeCountsShadowMetricsForTests()
+		log.warn.mockClear()
+	})
+
+	it("names each call shape", () => {
+		expect(formOf(call())).toBe("plain")
+		expect(formOf(call({debateTaggedClaims: true}))).toBe("debate")
+		expect(formOf(call({spaces: [OTHER]}))).toBe("spaces")
+		expect(formOf(call({spaces: [OTHER], debateTaggedClaims: true}))).toBe("spaces_debate")
+		expect(formOf(call({topics: [TOPIC, OTHER]}))).toBe("topics")
+	})
+
+	it("counts each result under its form", async () => {
+		const src: TypeCountsSource = {
+			sampleTopics: async () => [TOPIC, OTHER],
+			typesOf: async () => [NEWS],
+			blocklist: async () => [],
+			sampleSpaces: async () => [],
+			pgCounts: async () => new Map([[NEWS, 2]]),
+		}
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 2},
+			source: src,
+			reader: {
+				typeCounts: async (_c, _g, walked) => ({
+					walked: 1,
+					counts: walked.map((w) => (w === hex(NEWS) ? 2 : 0)),
+				}),
+			} as unknown as DerivedCountsReader,
+			log,
+		})
+		await shadow.runOnce()
+		expect(form("plain", "match") + form("plain", "mismatch")).toBe(2)
+		expect(form("debate", "match") + form("debate", "mismatch")).toBe(2)
+		expect(form("spaces", "match") + form("spaces", "mismatch")).toBe(0)
+		expect(form("topics", "match") + form("topics", "mismatch")).toBeGreaterThan(0)
+	})
+
+	it("steps a uuid up by one, carrying and wrapping", () => {
+		expect(nextUuid("00000000-0000-4000-8000-00000000000f")).toBe("00000000-0000-4000-8000-000000000010")
+		expect(nextUuid("ffffffff-ffff-ffff-ffff-ffffffffffff")).toBe("00000000-0000-0000-0000-000000000000")
+	})
+
+	it("samples distinct topics by index step from a random start, wrapping once", async () => {
+		const topics = [OTHER, TOPIC, NEWS].sort()
+		const db = {
+			execute: vi.fn(async (q: {queryChunks?: unknown[]}) => {
+				const chunks = q.queryChunks ?? []
+				const from = chunks.find((c) => typeof c === "string" && /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(c)) as
+					| string
+					| undefined
+				const hit = from === undefined ? topics[0] : topics.find((t) => t >= from)
+				return {rows: hit ? [{id: hit}] : []}
+			}),
+		} as unknown as Database
+		const got = await createPostgresTypeCountsSource(db).sampleTopics(5)
+		expect(new Set(got).size).toBe(got.length)
+		expect([...got].sort()).toEqual(topics)
+		expect((await createPostgresTypeCountsSource(db).sampleTopics(2)).length).toBe(2)
 	})
 })
