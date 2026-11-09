@@ -643,3 +643,25 @@ class TestPacing:
         assert m.stats["dropped"] == 0
         assert m.stats["puts"] == 200
         m.close()
+
+    def test_a_table_suffix_overrides_the_plain_setting(self) -> None:
+        m = DerivedMirror.from_env(
+            _env(
+                GEODB_DERIVED_MAX_ROWS_PER_S="500",
+                GEODB_DERIVED_MAX_ROWS_PER_S_GLOBAL_SCORES="100",
+                GEODB_DERIVED_BATCH_ROWS_GLOBAL_SCORES="16",
+            )
+        )
+        assert m.table_rates == {"global_scores": 100.0, "local_scores": 500.0, "space_scores": 500.0}
+        assert m.table_batch_rows["global_scores"] == 16
+        assert m.table_batch_rows["local_scores"] == BATCH_MAX
+
+    def test_only_the_named_table_is_paced(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, timeout=5, batch=True, batch_rows=100, table_rates={"global_scores": 1000.0})
+        with patch("src.geodb_derived.time.sleep") as sleep:
+            m.put("local_scores", _rows(200))
+            sleep.assert_not_called()
+            m.put("global_scores", _rows(200))
+            assert sleep.call_count == 2
+        m.close()
