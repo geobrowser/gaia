@@ -38,8 +38,11 @@ describe.skipIf(!url)("readProposalVoteRows on a real Postgres", () => {
 			PRIMARY KEY (proposal_id, proposal_version, voter_id))`)
 		// A few proposals with several versions and voters each, so pages break inside one proposal and version.
 		const options = ["Yes", "No", "Abstain"]
+		// The first two ids are fixed: numeric collation sorts 9a... before 10... (9 < 10) while uuid byte order sorts 0x10 before 0x9a,
+		// so the text and uuid orders differ on every run. The rest are random.
+		const fixedProposals = ["9a000000-0000-4000-8000-000000000000", "10000000-0000-4000-8000-000000000000"]
 		for (let p = 0; p < 10; p++) {
-			const proposal = randomUUID()
+			const proposal = fixedProposals[p] ?? randomUUID()
 			const space = randomUUID()
 			for (const version of [1, 2, 3, -2147483648]) {
 				for (let v = 0; v < 4; v++) {
