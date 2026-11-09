@@ -46,6 +46,7 @@ pub mod publish;
 pub mod ranking_config;
 pub mod ranks_reads_shadow;
 pub mod recompute;
+pub mod refresh_state;
 pub mod scoring;
 pub mod sql_helpers;
 pub mod stance_graph;
