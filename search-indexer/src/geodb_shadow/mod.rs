@@ -76,6 +76,20 @@ pub fn describe() {
         "Shadow comparisons not made, by lookup and reason \
          (busy, space_not_loaded, space_map_unreadable)"
     );
+    // Register every series at zero, so a shadow that is on but has not yet sampled renders
+    // zeroes instead of nothing. The twinned lookups run only on score, relation-removal and
+    // retire-sweep events, so a quiet indexer can go a long while without one.
+    for lookup in [SPACES_FOR_ENTITIES, EMPTY_IN_SPACE, DOCS_FOR_RELATIONS] {
+        for result in ["match", "mismatch", "failed"] {
+            metrics::counter!(SHADOW, "lookup" => lookup, "result" => result).increment(0);
+        }
+        for kind in ["missing_in_geodb", "extra_in_geodb"] {
+            metrics::counter!(SHADOW_MISMATCH, "lookup" => lookup, "kind" => kind).increment(0);
+        }
+        for reason in ["busy", "space_not_loaded", "space_map_unreadable"] {
+            metrics::counter!(SHADOW_SKIPPED, "lookup" => lookup, "reason" => reason).increment(0);
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -858,6 +872,22 @@ mod tests {
         assert_eq!(s.pick(&[1, 2, 3]), vec![3, 1]);
         assert_eq!(s.pick(&[5, 5, 5]), vec![5]);
         assert!(s.pick::<u8>(&[]).is_empty());
+    }
+
+    #[test]
+    fn describe_registers_every_series_at_zero() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, describe);
+        let out = handle.render();
+        for line in [
+            "search_indexer_geodb_shadow_total{lookup=\"spaces_for_entities\",result=\"match\"} 0",
+            "search_indexer_geodb_shadow_total{lookup=\"docs_for_relations\",result=\"failed\"} 0",
+            "search_indexer_geodb_shadow_mismatch_total{lookup=\"empty_in_space\",kind=\"extra_in_geodb\"} 0",
+            "search_indexer_geodb_shadow_skipped_total{lookup=\"empty_in_space\",reason=\"busy\"} 0",
+        ] {
+            assert!(out.contains(line), "missing `{line}` in:\n{out}");
+        }
     }
 
     #[test]
