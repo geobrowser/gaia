@@ -304,6 +304,11 @@ spec:
             # cannot answer counts unsupported_selection, never a failed request.
             - name: GEODB_NESTED_ENTITY_SHADOW
               value: "on"
+            # Compare a values row's property metadata (dataType, renderableType, format, isType) against one batched card read
+            # of the Properties across every Space (at most 64 Properties, two reads). Shadow only; a serve that cannot answer
+            # counts unsupported_selection, never a failed request.
+            - name: GEODB_PROPERTY_INFO_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"

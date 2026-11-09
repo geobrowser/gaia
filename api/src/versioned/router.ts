@@ -19,6 +19,7 @@ type AppEnv = {
 	}
 }
 
+import type {ServedSnapshot} from "../geodb/entityAtVersionShadow"
 import type {ServedVersions} from "../geodb/entityVersionsShadow"
 import type {ServedProposalDiff} from "../geodb/proposalDiffShadow"
 import {getProfilesBySpaceIds} from "../profile/queries"
@@ -314,7 +315,11 @@ export function createVersionedRouter(
 	db: Database,
 	runtime: AppRuntime,
 	/** GEODB_VERSIONS_SHADOW: compares a served `/entities/:id/versions` page with geo-db's log; never changes a response. */
-	shadow?: {versions(served: ServedVersions): void; proposalDiff?(served: ServedProposalDiff): void},
+	shadow?: {
+		versions(served: ServedVersions): void
+		proposalDiff?(served: ServedProposalDiff): void
+		entityAt?(served: ServedSnapshot): void
+	},
 ) {
 	const router = new Hono<AppEnv>()
 
@@ -498,7 +503,17 @@ export function createVersionedRouter(
 							)
 					}
 				},
-				onRight: (snapshot) => c.json(snapshot),
+				onRight: (snapshot) => {
+					// Fire and forget (GEODB_ENTITY_AT_VERSION_SHADOW): runs after the response is built, swallows its own errors.
+					shadow?.entityAt?.({
+						entityId: snapshot.id,
+						editId: normalizeUuid(rawEditId as string),
+						spaceId: rawSpaceId ? normalizeUuid(rawSpaceId) : undefined,
+						values: snapshot.values,
+						relations: snapshot.relations,
+					})
+					return c.json(snapshot)
+				},
 			})
 		},
 	)

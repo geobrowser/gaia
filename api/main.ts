@@ -35,6 +35,11 @@ import {
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
+import {
+	createEntityAtVersionShadow,
+	type EntityAtVersionShadow,
+	readEntityAtVersionShadowConfig,
+} from "./src/geodb/entityAtVersionShadow"
 import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
 import {
 	createEntityFeedConfigReaders,
@@ -216,17 +221,24 @@ const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current
 // GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
 // statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
 const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
+// GEODB_ENTITY_AT_VERSION_SHADOW (off by default) likewise compares a sampled `/versioned/entities/:id` snapshot and the v2 diff's
+// name enrichment with geo-db (gaia_api_entity_at_version_shadow_total).
+const entityAtVersionShadowRef: {current: EntityAtVersionShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
 		versions: (served) => entityVersionsShadowRef.current?.versions(served),
 		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
+		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
 	}),
 )
 log.info("Versioned entity routes enabled")
 
 // Mount v2 versioned entities router (additive enrichments over v1)
-app.route("/v2/versioned", createVersionedV2Router(db, runtime))
+app.route(
+	"/v2/versioned",
+	createVersionedV2Router(db, runtime, {names: (served) => entityAtVersionShadowRef.current?.names(served)}),
+)
 log.info("Versioned v2 entity routes enabled")
 
 // Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
@@ -276,6 +288,16 @@ const proposalDiffShadowConfig = readProposalDiffShadowConfig(process.env)
 if (proposalDiffShadowConfig.enabled) {
 	proposalDiffShadowRef.current = createProposalDiffShadow({
 		config: proposalDiffShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
+	})
+}
+
+const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
+if (entityAtVersionShadowConfig.enabled) {
+	entityAtVersionShadowRef.current = createEntityAtVersionShadow({
+		config: entityAtVersionShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
 		log,

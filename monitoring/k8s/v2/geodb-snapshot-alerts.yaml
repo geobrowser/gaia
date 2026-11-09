@@ -4,6 +4,9 @@
 #   GeoDbSnapshotJobFailed  a geodb-snapshot Job failed (it stays a week, so this holds until the Job is deleted
 #                           or a later run is read and understood)
 #   GeoDbSnapshotStale      no successful run for 36h (a missed day, a suspended CronJob, a Job that never started)
+#   GeoDbSnapshotNewestOld  the newest successful run of either CronJob (daily geodb-snapshot, 4-hourly geodb-snapshot-4h)
+#                           is over 5 h old; over 26 h while the 4-hourly CronJob does not exist yet, so this rule can be
+#                           applied before or after it. The only rule that watches the 4-hourly RPO.
 #   GeoDbSnapshotTooOld     no successful run for 5 days: one day short of the 6-day limit set by Kafka's 7-day
 #                           retention on testnet.knowledge.edits; past it a snapshot cannot be caught up from Kafka
 #
@@ -65,3 +68,32 @@ spec:
               Kafka retention on testnet.knowledge.edits is 7 days; a snapshot older than that cannot be caught up
               and a rebuild takes about 5 h and needs Postgres. Take a pair by hand now (RUNBOOK §9) and fix
               the CronJob.
+
+        - alert: GeoDbSnapshotNewestOld
+          # Age of the newest successful pair across both CronJobs (the pair is complete when the Job succeeds; kube-state-metrics
+          # has no VolumeSnapshot series). The limit is 5 h once geodb-snapshot-4h exists (a 4 h schedule plus an hour of slack),
+          # else 26 h (a daily schedule plus two hours). A never-run 4-hourly CronJob has no last-successful series, so the daily
+          # one carries the age until the first 4 h pair lands; the absent() arm covers both being gone.
+          expr: |
+            (
+              time() - max(kube_cronjob_status_last_successful_time{namespace="gaia", cronjob=~"geodb-snapshot|geodb-snapshot-4h"}) > 26 * 3600
+            )
+            or
+            (
+              count(kube_cronjob_info{namespace="gaia", cronjob="geodb-snapshot-4h"}) > 0
+              and
+              time() - max(kube_cronjob_status_last_successful_time{namespace="gaia", cronjob=~"geodb-snapshot|geodb-snapshot-4h"}) > 5 * 3600
+            )
+            or
+            absent(kube_cronjob_status_last_successful_time{namespace="gaia", cronjob=~"geodb-snapshot|geodb-snapshot-4h"})
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb-snapshot
+            namespace: gaia
+          annotations:
+            summary: Newest geo-db snapshot pair is older than its cadence allows
+            description: >-
+              With the 4-hourly CronJob the newest pair should never be over 5 h old (26 h before it exists), so a restore would
+              replay more than the planned few hours of Kafka. Check kubectl -n gaia get cronjob,job -l app=geodb-snapshot
+              (suspended? failed? a readyToUse timeout or the DigitalOcean snapshot quota?). RUNBOOK §9.

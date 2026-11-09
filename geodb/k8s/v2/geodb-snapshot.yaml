@@ -168,3 +168,129 @@ spec:
                   memory: 64Mi
                 limits:
                   memory: 256Mi
+---
+# The 4-hourly pair (plan 10.24 section 4): cuts the worst-case RPO of the durable rows from 24 h to about 4 h. Same
+# script and the same ServiceAccount as the daily CronJob above, with its own snapshot-kind (scheduled-4h) and name
+# prefix (sched4h-), so the two retentions never see each other's pairs: the daily one keeps 7 days, this one the
+# newest 6 (24 h). Both stay far inside the 6-day pair-age limit (Kafka keeps 7 days). The schedule is 30 min clear of
+# the daily run so the two never snapshot at once. Worst-case volume: 6 more pairs of 55 Gi source size.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: geodb-snapshot-4h
+  namespace: gaia
+  labels:
+    app: geodb-snapshot
+spec:
+  schedule: "47 */4 * * *" # 00:47, 04:47 ... 20:47 UTC: every 4 h, 30 min clear of the daily 09:17 run and off the hour marks
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: geodb-snapshot
+    spec:
+      backoffLimit: 0 # a failed run is read from its logs; the next run, 4 h later, is the retry
+      activeDeadlineSeconds: 1500 # the script's own waits total at most 2 x 600 s
+      ttlSecondsAfterFinished: 604800 # a failed Job stays a week so kube_job_failed keeps firing until looked at
+      template:
+        metadata:
+          labels:
+            app: geodb-snapshot
+        spec:
+          serviceAccountName: geodb-snapshot
+          restartPolicy: Never
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: snapshot
+              # kubectl + bash. Docker Hub image, pinned to the cluster's server version (1.36.5, same minor).
+              image: alpine/k8s:1.36.5
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: KEEP
+                  value: "6" # pairs kept: 24 h of 4-hourly pairs; the newest KEEP stamps of THIS kind survive a successful run
+                - name: READY_TIMEOUT
+                  value: "600s" # per snapshot (measured: 4 s each, so this is 150x headroom)
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+              command: ["bash", "-ceu"]
+              args:
+                - |
+                  set -o pipefail
+                  SEL="app=geodb-snapshot,snapshot-kind=scheduled-4h"
+                  STAMP="$(date -u +%Y%m%dt%H%M%Sz)"
+                  STATE_PVC=geodb-feeder-state
+                  DATA_PVC=data-geodb-0
+
+                  snap() { # <pvc>: create the VolumeSnapshot, labelled so retention can find it and nothing else
+                    cat <<YAML | kubectl create -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: sched4h-${STAMP}-$1
+                    namespace: ${NAMESPACE}
+                    labels:
+                      app: geodb-snapshot
+                      snapshot-kind: scheduled-4h
+                      snapshot-stamp: "${STAMP}"
+                      snapshot-pvc: $1
+                  spec:
+                    volumeSnapshotClassName: do-block-storage
+                    source:
+                      persistentVolumeClaimName: $1
+                  YAML
+                  }
+                  ready() { # <pvc>: block until readyToUse, or fail
+                    kubectl wait volumesnapshot/sched4h-${STAMP}-$1 --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
+                  }
+                  CLEAN=0
+                  cleanup_this_run() { # EXIT trap: any failure, timeout or SIGTERM before the pair is complete lands here
+                    [ "${CLEAN}" = 1 ] && return 0
+                    echo "FAILED: removing this run's snapshots (stamp ${STAMP}); older ones are untouched" >&2
+                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${STAMP}" --ignore-not-found --wait=false || true
+                  }
+                  trap cleanup_this_run EXIT
+
+                  for pvc in "${STATE_PVC}" "${DATA_PVC}"; do
+                    phase="$(kubectl get pvc "${pvc}" -o jsonpath='{.status.phase}')"
+                    [ "${phase}" = Bound ] || { echo "pvc ${pvc} is ${phase}, not Bound" >&2; false; }
+                  done
+
+                  # 1. feeder state first, and wait for it, so its offsets are older than anything in the data snapshot.
+                  snap "${STATE_PVC}"; ready "${STATE_PVC}"
+                  # 2. then the store.
+                  snap "${DATA_PVC}"; ready "${DATA_PVC}"
+                  CLEAN=1
+                  echo "OK: pair ${STAMP} ready"
+
+                  # 3. retention, only after the new pair is ready: keep the newest KEEP stamps, delete the rest.
+                  # A failed run never reaches here, so it never costs a good pair.
+                  stamps="$(kubectl get volumesnapshot -l "${SEL}" -o jsonpath='{range .items[*]}{.metadata.labels.snapshot-stamp}{"\n"}{end}' | sort -u)"
+                  old="$(printf '%s\n' "${stamps}" | grep -v '^$' | awk -v k="${KEEP}" '{a[NR]=$0} END{for(i=1;i<=NR-k;i++)print a[i]}')"
+                  for s in ${old}; do
+                    echo "pruning pair ${s}"
+                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${s}" --wait=false
+                  done
+                  kubectl get volumesnapshot -l "${SEL}" --sort-by=.metadata.creationTimestamp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
