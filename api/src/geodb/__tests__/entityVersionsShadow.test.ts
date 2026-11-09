@@ -130,6 +130,7 @@ describe("createEntityVersionsShadow", () => {
 		reader: GeoDbCardClient["readEntityVersions"],
 		env: Record<string, string> = {},
 		clock = {t: 1_000_000},
+		hasLiveStatements?: (entityId: string) => Promise<boolean>,
 	) => {
 		const warn = vi.fn()
 		const geoDb = {readEntityVersions: reader} as unknown as GeoDbCardClient
@@ -142,6 +143,7 @@ describe("createEntityVersionsShadow", () => {
 			geoDb,
 			log: {warn},
 			now: () => clock.t,
+			...(hasLiveStatements ? {hasLiveStatements} : {}),
 		})
 		return {shadow, warn, clock}
 	}
@@ -177,6 +179,27 @@ describe("createEntityVersionsShadow", () => {
 			"versions shadow mismatch",
 			expect.objectContaining({entityId: ENTITY, spaceId: undefined, offset: 0, limit: 50, served: 2, total: 3}),
 		)
+	})
+
+	it("counts an empty log as removed when Postgres has no live statement, a count mismatch when it has some", async () => {
+		const live = vi.fn(async () => false)
+		const {shadow, warn} = setup(async () => [], {}, {t: 1_000_000}, live)
+		shadow.versions(served({}, [1, 2, 3, 4]))
+		await settle()
+		expect(live).toHaveBeenCalledWith(ENTITY)
+		expect(unsupported("removed")).toBe(1)
+		expect(result("mismatch")).toBe(0)
+		expect(warn).not.toHaveBeenCalled()
+		live.mockResolvedValue(true)
+		shadow.versions(served({}, [1, 2, 3, 4]))
+		await settle()
+		expect(result("mismatch")).toBe(1)
+		expect(mismatch("count")).toBe(1)
+		live.mockRejectedValue(new Error("pg down"))
+		shadow.versions(served({}, [1]))
+		await settle()
+		expect(mismatch("count")).toBe(2)
+		expect(unsupported("removed")).toBe(1)
 	})
 
 	it("does not read a scoped request", async () => {
