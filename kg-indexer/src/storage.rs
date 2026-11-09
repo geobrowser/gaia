@@ -71,9 +71,11 @@ impl Storage {
                     // Best-effort: covers any statement run outside one of the
                     // transactions opened by `begin_with_timeout`. It is NOT
                     // sufficient on its own — see that method for why.
-                    sqlx::query(&format!("SET statement_timeout = {timeout_ms}"))
-                        .execute(conn)
-                        .await?;
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "SET statement_timeout = {timeout_ms}"
+                    )))
+                    .execute(conn)
+                    .await?;
                     Ok(())
                 })
             })
@@ -124,10 +126,10 @@ impl Storage {
         &self,
     ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "SET LOCAL statement_timeout = {}",
             statement_timeout_ms()
-        ))
+        )))
         .execute(&mut *tx)
         .await?;
         Ok(tx)

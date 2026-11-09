@@ -995,7 +995,9 @@ impl PostgresCheckpointStore {
             .after_connect(move |conn, _meta| {
                 let statement_timeout_query = statement_timeout_query.clone();
                 Box::pin(async move {
-                    sqlx::query(&statement_timeout_query).execute(conn).await?;
+                    sqlx::query(sqlx::AssertSqlSafe(statement_timeout_query))
+                        .execute(conn)
+                        .await?;
                     Ok(())
                 })
             })

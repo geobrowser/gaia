@@ -128,7 +128,10 @@ async fn place_on_spaces(
          FROM public.spaces s JOIN c ON c.wallet_address_hash = {SPACE_ADDRESS_HASH_SQL} \
          WHERE s.type = 'Personal' GROUP BY s.id"
     );
-    let placed: Vec<(uuid::Uuid, String)> = sqlx::query_as(&sql).bind(rows).fetch_all(pool).await?;
+    let placed: Vec<(uuid::Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(rows)
+        .fetch_all(pool)
+        .await?;
     Ok(placed.into_iter().collect())
 }
 
@@ -188,10 +191,10 @@ async fn main() -> Result<(), IndexerError> {
         .connect(&database_url)
         .await?;
 
-    let known: String = sqlx::query_scalar(&format!(
+    let known: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM (SELECT $1::text AS address) s",
         SPACE_ADDRESS_HASH_SQL
-    ))
+    )))
     .bind(KNOWN_ADDRESS)
     .fetch_one(&pool)
     .await?;

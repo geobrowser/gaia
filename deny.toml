@@ -37,8 +37,10 @@ ignore = [
     # The only user is search-indexer's relation map (rusqlite 0.32), which opens
     # a file on its own pod volume that only it writes, so the exposed case cannot
     # arise. The fix (libsqlite3-sys >= 0.39, rusqlite >= 0.39) cannot resolve
-    # alongside sqlx 0.8, whose optional sqlx-sqlite pins libsqlite3-sys 0.30 via
-    # `links = "sqlite3"`. REMOVE this line with the sqlx 0.9 upgrade.
+    # alongside sqlx 0.9 either: sqlx-sqlite 0.9.0 requires libsqlite3-sys < 0.38
+    # (via `links = "sqlite3"`, resolved even though the feature is off), while
+    # rusqlite 0.41 needs 0.39. REMOVE this line once a sqlx release allows
+    # libsqlite3-sys >= 0.39, or the sqlx dependency drops its sqlite crate.
     "RUSTSEC-2026-0459",
 ]
 
