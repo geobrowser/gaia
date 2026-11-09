@@ -36,6 +36,10 @@ export const UNSUPPORTED_REASONS = [
 	"bad_layout",
 	/** `entitiesConnection` asking nothing but `totalCount` (alone or as several aliased roots): geo-db holds no count of a filtered set, and no card is returned to judge. */
 	"count_only",
+	/** A `totalCount`-only `entitiesConnection` lowered to geo-db's count form that the serve refused (`.args.count` with `.where` is geo-db DR-154 item 8 or later): the serve has not rolled yet. */
+	"count_refused",
+	/** A `totalCount`-only `entitiesConnection` lowered to the count form whose walk did not reach the end within the pages the tool fetched, so the sum is not the count. */
+	"count_incomplete",
 ] as const
 
 /**

@@ -7,14 +7,16 @@
  * and its order stay uncompared (`filter_completeness`, `order_completeness`), `totalCount` is `total_count`, and
  * `pageInfo` is not read. A page after a cursor (`after`) is never placed in the order. `edges { node { .. } cursor }`
  * is read as the same nodes. An operation that asks only `totalCount` (one root, or several aliased roots) holds no
- * node to judge and is counted `unsupported_selection{count_only}`.
+ * node to judge: with `GEODB_COUNT_ONLY_SHADOW=on` it is lowered to geo-db's entities count form and the `totalCount`s are
+ * compared (countOnlyShadow.ts); a shape the form cannot state, or the flag off, is `unsupported_selection{count_only}`.
  *
  * It only runs when GRAPHQL_GATEWAY_FIELDS names `entitiesConnection=shadow`; off by default. It never changes a response.
  */
 
+import {checkCountOnly} from "./countOnlyShadow"
 import {countLight, type EntityShadowDeps} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
-import {analyzeLightEntities, noteUnsupported, ORDERED_ROOT, runLight} from "./lightShadow"
+import {analyzeCountOnly, analyzeLightEntities, noteUnsupported, ORDERED_ROOT, runLight} from "./lightShadow"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
 
 export const ENTITIES_CONNECTION_FIELD = "entitiesConnection"
@@ -48,6 +50,21 @@ function createLightListShadow(
 				relationsTypeFilter: deps.relationsTypeFilter === true,
 				derivedFields: deps.derivedFields === true,
 			})
+			if (!analysis.ok && analysis.reason === "count_only" && mode.connection && deps.countOnly === true) {
+				const counted = analyzeCountOnly(document, classification.operationName, params.variables)
+				if (counted.ok) {
+					let countBody: unknown
+					try {
+						countBody = await response.json()
+					} catch {
+						return
+					}
+					countLight(deps, field, await checkCountOnly(deps, counted.plan, countBody, label), {
+						operationName: classification.operationName,
+					})
+					return
+				}
+			}
 			if (!analysis.ok) {
 				recordGatewayShadow(field, "unsupported_selection")
 				recordGatewayUnsupported(field, analysis.reason)
