@@ -8,6 +8,7 @@ import {
 	createPipeGeoDbClient,
 	createSpaceMap,
 	entitiesPageDocument,
+	entityVersionsUnsupported,
 	GeoDbError,
 	holdersDocument,
 	isHoldersUnknownArgument,
@@ -68,6 +69,53 @@ ${body}
 	})
 	return {client, starts: () => starts}
 }
+
+describe("readEntityVersions", () => {
+	const EDIT = "00000000000040008000000000000001"
+	const row = `${SPACE}\t9\t${"ab".repeat(16)}\t1700000000000000001\t${EDIT}\t-\t[${OTHER_SPACE}]\t-\t${"cd".repeat(8)}\n`
+
+	it("sends the entity-versions line and parses the log", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (line === "entity-versions\\t${ENTITY}\\t5") frame("+", ${JSON.stringify(row)} + "total: 1\\n")
+	else frame("-", "unexpected " + line)
+})`)
+		const rows = await client.readEntityVersions?.({entityId: ENTITY, first: 5})
+		expect(rows).toEqual([
+			{space: SPACE, seq: 9, timestampNs: "1700000000000000001", editId: EDIT, authors: [OTHER_SPACE], total: 1},
+		])
+		client.close()
+	})
+
+	it("rejects bad arguments without a read", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		await expect(client.readEntityVersions?.({entityId: "x", first: 5})).rejects.toMatchObject({
+			reason: "bad_request",
+		})
+		await expect(client.readEntityVersions?.({entityId: ENTITY, first: 0})).rejects.toMatchObject({
+			reason: "bad_request",
+		})
+		await expect(client.readEntityVersions?.({entityId: ENTITY, first: 4097})).rejects.toMatchObject({
+			reason: "bad_request",
+		})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+
+	it("tells an old client's refusal from the read's own failures", () => {
+		const old = new GeoDbError("client_failed", "want <space uuid>[,<space uuid>]...|*\\t<geoql>")
+		const current = new GeoDbError(
+			"client_failed",
+			"want <space uuid>|*\\t<geoql> or entity-versions\\t<entity uuid>",
+		)
+		expect(entityVersionsUnsupported(old)).toBe("client")
+		expect(entityVersionsUnsupported(current)).toBeNull()
+		expect(entityVersionsUnsupported(new GeoDbError("client_failed", "refused: x UnknownOpcode"))).toBe("server")
+		expect(entityVersionsUnsupported(new GeoDbError("timeout", "slow"))).toBeNull()
+		expect(entityVersionsUnsupported(new Error("want <space uuid>"))).toBeNull()
+	})
+})
 
 describe("createPipeGeoDbClient", () => {
 	it("keeps one worker across requests and parses the rows of the entity asked for", async () => {

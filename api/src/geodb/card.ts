@@ -232,6 +232,57 @@ export function holderSpacesFromGeoDbOutput(output: string, entityId: string): s
 		})
 }
 
+/**
+ * One sealed version of an entity from geo-db's `entity-versions` log (wire revision 12, opcode 0x40): newest first by
+ * seal time, then Space, then version_seq, across the Public Spaces holding the entity. `total` is the whole log's size,
+ * the same on every row of a page.
+ */
+export type GeoVersionRow = {
+	/** The Space the version was sealed in (geo-db's id). */
+	space: string
+	seq: number
+	/** Seal time in nanoseconds since the epoch; a decimal string, as it can pass 2^53. */
+	timestampNs: string
+	/** The sealing edit. */
+	editId: string
+	/** The version's authors, as geo-db records them (empty when none is recorded). */
+	authors: string[]
+	total: number
+}
+
+/**
+ * `geodb-client pipe` output of an `entity-versions` line: one tab-separated row a version (Space, version_seq,
+ * VersionId, timestamp_ns, EditId, base, authors as `[a,b]`, label, reading), then `total: N`.
+ */
+export function entityVersionRowsFromGeoDbOutput(output: string): GeoVersionRow[] {
+	const lines = output.split("\n").filter((line) => line !== "")
+	const last = lines.pop() ?? ""
+	const totalMatch = /^total: (\d+)$/.exec(last)
+	if (!totalMatch) throw new Error(`an entity-versions answer has no total: ${last.slice(0, 60)}`)
+	const total = Number(totalMatch[1])
+	return lines.map((line) => {
+		const cells = line.split("\t")
+		const authors = /^\[(.*)\]$/.exec(cells[6] ?? "")
+		if (
+			cells.length !== 9 ||
+			!/^[0-9a-f]{32}$/.test(cells[0] ?? "") ||
+			!/^\d+$/.test(cells[1] ?? "") ||
+			!/^-?\d+$/.test(cells[3] ?? "") ||
+			!/^[0-9a-f]{32}$/.test(cells[4] ?? "") ||
+			!authors
+		)
+			throw new Error(`an entity-versions row is malformed: ${line.slice(0, 60)}`)
+		return {
+			space: cells[0] as string,
+			seq: Number(cells[1]),
+			timestampNs: cells[3] as string,
+			editId: cells[4] as string,
+			authors: (authors[1] ?? "") === "" ? [] : (authors[1] as string).split(","),
+			total,
+		}
+	})
+}
+
 /** A statement referring to an entity, from its card's backlinks: `from` holds `prop` with the entity as value. */
 export type GeoBacklinkRow = GeoCardRow & {from: string}
 

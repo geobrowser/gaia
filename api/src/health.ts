@@ -10,6 +10,7 @@ import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
+import {renderEntityVersionsShadowMetrics} from "./geodb/entityVersionsShadow"
 import {renderFeedRunsShadowMetrics} from "./geodb/feedRunsShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
@@ -166,6 +167,8 @@ function renderPrometheusMetrics(): string {
 		renderQueriesMetrics(),
 		// Profile name and avatar from geo-db against the served profile (GEODB_PROFILE_SHADOW) — see profile/shadow.ts.
 		renderProfileShadowMetrics(),
+		// Entity version count, order and author from geo-db against the served /versioned/entities/:id/versions (GEODB_VERSIONS_SHADOW) — see geodb/entityVersionsShadow.ts.
+		renderEntityVersionsShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
 		renderForYouConfigMetrics(),
 		// entity_ranking_config tau_seconds from geo-db against the served one (GEODB_ENTITY_RANKING_CONFIG_SHADOW) — see forYou/entityRankingConfigShadow.ts.

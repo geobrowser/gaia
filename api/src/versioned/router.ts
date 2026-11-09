@@ -19,6 +19,7 @@ type AppEnv = {
 	}
 }
 
+import type {ServedVersions} from "../geodb/entityVersionsShadow"
 import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
@@ -308,7 +309,12 @@ function resolveCreatorProfiles(
  * @param runtime - Effect runtime with telemetry and other services
  * @returns Configured Hono router
  */
-export function createVersionedRouter(db: Database, runtime: AppRuntime) {
+export function createVersionedRouter(
+	db: Database,
+	runtime: AppRuntime,
+	/** GEODB_VERSIONS_SHADOW: compares a served `/entities/:id/versions` page with geo-db's log; never changes a response. */
+	shadow?: {versions(served: ServedVersions): void},
+) {
 	const router = new Hono<AppEnv>()
 
 	/**
@@ -638,6 +644,9 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 				// Get entity versions
 				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
+
+				// Fire and forget: the shadow runs after this, in the background, and swallows its own errors.
+				shadow?.versions({entityId, spaceId, limit, offset, versions})
 
 				// Batch-resolve creator profiles server-side to avoid client N+1
 				const profileMap = yield* resolveCreatorProfiles(
