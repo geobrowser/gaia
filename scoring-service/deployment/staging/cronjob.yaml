@@ -31,6 +31,9 @@ spec:
                 # Output mode: postgres, kafka, or all
                 - name: OUTPUT_MODE
                   value: "all"
+                # Postgres write off-switch for cutover; "1" keeps today's behaviour.
+                - name: SCORING_WRITER_PG_WRITES
+                  value: "1"
                 # Kafka configuration (uses kafka-credentials secret copied to scoring namespace)
                 - name: KAFKA_BROKER
                   valueFrom:

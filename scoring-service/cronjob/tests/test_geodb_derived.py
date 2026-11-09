@@ -808,3 +808,39 @@ class TestPacing:
             m.put("global_scores", _rows(200))
             assert sleep.call_count == 2
         m.close()
+
+
+class TestPgWritesOffSwitch:
+    """SCORING_WRITER_PG_WRITES=0: no Postgres statement of any kind, the geo-db mirror still runs."""
+
+    def _args(self):
+        s = Space(id=S1, created_at=datetime.now())
+        s.space_score = 2.0
+        return [entity(E1, 0.5, [persp(E1, S1, 0.7)])], [s]
+
+    def test_off_issues_no_connection_and_no_inserts(self) -> None:
+        calls: list[str] = []
+        mirror = DerivedMirror(["x"])
+        mirror.put = lambda table, rows, progress=None: calls.append(table)  # type: ignore[method-assign]
+        w = ScoringDataWriter("postgresql://x", derived=mirror, pg_writes=False)
+        with patch("src.scoring_data_writer.scoring_data_writer.psycopg.connect") as c:
+            w.write_all(*self._args())
+        assert c.call_count == 0
+        assert calls == ["global_scores", "local_scores", "space_scores"]
+
+    def test_default_still_writes(self) -> None:
+        w = ScoringDataWriter("postgresql://x")
+        with patch("src.scoring_data_writer.scoring_data_writer.psycopg.connect") as c:
+            conn = MagicMock()
+            c.return_value.__enter__.return_value = conn
+            w.write_all(*self._args())
+        assert c.call_count == 1
+        assert any("INSERT INTO" in str(a) for a in conn.cursor.return_value.__enter__.return_value.executemany.call_args_list + conn.cursor.return_value.__enter__.return_value.execute.call_args_list)
+
+    def test_env_parsing(self) -> None:
+        from src.scoring_data_writer.scoring_data_writer import pg_writes_enabled
+
+        assert pg_writes_enabled({}) is True
+        assert pg_writes_enabled({"SCORING_WRITER_PG_WRITES": "1"}) is True
+        for off in ("0", "false", "off", "no", "FALSE"):
+            assert pg_writes_enabled({"SCORING_WRITER_PG_WRITES": off}) is False
