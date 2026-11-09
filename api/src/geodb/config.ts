@@ -109,6 +109,13 @@ export type GeoDbCardConfig = {
 	 */
 	crossSpaceNames?: boolean
 	/**
+	 * Re-judge an `entity` card comparison that came out `cross_space` against the card read across every Space the entity
+	 * lives in (a multi-Space line, or every Space narrowed by `.args.holders`), so the name, description, Types, `spaceIds`
+	 * and unfiltered lists are decided instead of skipped. One extra read per such comparison. Off by default.
+	 * GEODB_CROSS_SPACE_HOLDERS_SHADOW=on.
+	 */
+	crossSpaceHolders?: boolean
+	/**
 	 * Compare the fields of a relation row's nested entity (`description`, `types`, `typeIds`, `spaceIds`, `valuesList`,
 	 * `relationsList`, `values`, `relations`) in the `entity` shadow against one batched card read of the nested entities
 	 * across every Space (`.args.ids`, at most 32). Needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_NESTED_ENTITY_SHADOW=on.
@@ -181,6 +188,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
+		crossSpaceHolders: env.GEODB_CROSS_SPACE_HOLDERS_SHADOW?.trim().toLowerCase() === "on",
 		nestedEntity: env.GEODB_NESTED_ENTITY_SHADOW?.trim().toLowerCase() === "on",
 		propertyInfo: env.GEODB_PROPERTY_INFO_SHADOW?.trim().toLowerCase() === "on",
 		relationsMembership: env.GEODB_RELATIONS_MEMBERSHIP_SHADOW?.trim().toLowerCase() === "on",
