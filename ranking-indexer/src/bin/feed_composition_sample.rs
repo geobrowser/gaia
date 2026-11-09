@@ -57,6 +57,8 @@ use uuid::Uuid;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::feed_composition;
 use ranking_indexer::feed_composition_mirror::{self, Sample};
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 
 /// One item as the app's feed endpoint returns it. Only the fields the histogram needs.
 #[derive(serde::Deserialize)]
@@ -154,17 +156,25 @@ async fn sample_rendered(
     let composition = serde_json::to_value(&counts)
         .map_err(|e| IndexerError::Config(format!("serialising the composition: {e}")))?;
 
-    let sample_id: i64 = sqlx::query_scalar(
-        "SELECT public.record_feed_composition_sample('rendered', $1, $2, $3, NULL, $4, $5)",
-    )
-    .bind(type_ids)
-    .bind(&composition)
-    .bind(feed.items.len() as i32)
-    .bind(median)
-    .bind(oldest)
-    .fetch_one(pool)
-    .await
-    .map_err(IndexerError::Database)?;
+    let recorded: Option<i64> =
+        pg_bin_writes::run(PgWriteSite::FeedCompositionRenderedSample, async {
+            sqlx::query_scalar(
+            "SELECT public.record_feed_composition_sample('rendered', $1, $2, $3, NULL, $4, $5)",
+        )
+        .bind(type_ids)
+        .bind(&composition)
+        .bind(feed.items.len() as i32)
+        .bind(median)
+        .bind(oldest)
+        .fetch_one(pool)
+        .await
+        .map_err(IndexerError::Database)
+        })
+        .await?;
+    // Off: nothing was recorded, so there is no sample to report drift on.
+    let Some(sample_id) = recorded else {
+        return Ok(());
+    };
 
     info!(
         sample_id,
@@ -319,13 +329,21 @@ async fn sample_scope(
     space: Option<Uuid>,
     alert_delta: f64,
 ) -> Result<(), IndexerError> {
-    let sample_id: i64 = sqlx::query_scalar("SELECT public.sample_feed_composition($1, $2, $3)")
-        .bind(type_ids)
-        .bind(window)
-        .bind(space)
-        .fetch_one(pool)
-        .await
-        .map_err(IndexerError::Database)?;
+    let sampled: Option<i64> =
+        pg_bin_writes::run(PgWriteSite::FeedCompositionWindowSample, async {
+            sqlx::query_scalar("SELECT public.sample_feed_composition($1, $2, $3)")
+                .bind(type_ids)
+                .bind(window)
+                .bind(space)
+                .fetch_one(pool)
+                .await
+                .map_err(IndexerError::Database)
+        })
+        .await?;
+    // Off: nothing was sampled, so there is no sample to report drift on.
+    let Some(sample_id) = sampled else {
+        return Ok(());
+    };
 
     info!(
         sample_id,

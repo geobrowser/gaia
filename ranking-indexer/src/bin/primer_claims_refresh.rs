@@ -25,6 +25,8 @@ use tracing::{info, warn};
 use ranking_indexer::anchor_select;
 use ranking_indexer::claim_overlap;
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::primer_claims_mirror::{
     self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
 };
@@ -285,74 +287,90 @@ async fn main() -> Result<(), IndexerError> {
 
     let started = Instant::now();
     // Any failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let mut tx = pool.begin().await?;
-    let scored: i32 = sqlx::query_scalar("SELECT public.refresh_primer_claim_stats()")
-        .fetch_one(&mut *tx)
-        .await?;
-    let new_set: Option<i32> =
-        sqlx::query_scalar("SELECT public.refresh_anchor_claims(force => $1)")
-            .bind(force_anchors)
-            .fetch_one(&mut *tx)
-            .await?;
-    tx.commit().await?;
-
-    if primer_stats_rust_enabled() {
-        match stats_shadow(&pool).await {
-            Ok((rust, table, mismatched)) => info!(
-                rust,
-                table, mismatched, "primer claim stats rust compute checked against the table"
-            ),
-            Err(e) => warn!(error = %e, "primer claim stats rust compute skipped"),
-        }
-    }
-    let (contested, eligible): (i64, i64) = sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE contested), count(*) FILTER (WHERE weighted_voters >= 3) \
-         FROM public.primer_claim_stats",
-    )
-    .fetch_one(&pool)
-    .await?;
-    info!(
-        scored,
-        eligible,
-        contested,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "primer claim statistics refreshed"
-    );
-
-    if let (Some(set_id), true) = (new_set, anchor_rust_enabled()) {
-        match anchor_shadow(&pool, set_id).await {
-            Ok(same) => info!(
-                set_id,
-                same, "anchor set rust compute checked against the SQL"
-            ),
-            Err(e) => warn!(error = %e, "anchor set rust compute skipped"),
-        }
-    }
-    if let Some(set_id) = new_set {
-        let size: i32 =
-            sqlx::query_scalar("SELECT claim_count FROM public.anchor_claim_sets WHERE id = $1")
-                .bind(set_id)
-                .fetch_one(&pool)
+    // Off: the stats rebuild and the anchor choice are skipped as one write (they share a
+    // transaction), so the checks on what they wrote are skipped too.
+    let refreshed: Option<(i32, Option<i32>)> =
+        pg_bin_writes::run(PgWriteSite::PrimerClaimsRefresh, async {
+            let mut tx = pool.begin().await?;
+            let scored: i32 = sqlx::query_scalar("SELECT public.refresh_primer_claim_stats()")
+                .fetch_one(&mut *tx)
                 .await?;
-        if size < ANCHOR_MIN {
-            warn!(
-                set_id,
-                size,
-                "new anchor set is smaller than {ANCHOR_MIN}: too few claims have enough voters"
-            );
-        } else {
-            info!(
-                set_id,
-                size,
-                forced = force_anchors,
-                "new anchor set chosen"
-            );
-        }
-    }
+            let new_set: Option<i32> =
+                sqlx::query_scalar("SELECT public.refresh_anchor_claims(force => $1)")
+                    .bind(force_anchors)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            tx.commit().await?;
+            Ok::<_, IndexerError>((scored, new_set))
+        })
+        .await?;
+    let new_set = refreshed.and_then(|(_, set)| set);
 
-    let sampled: bool = sqlx::query_scalar("SELECT public.record_claim_overlap_sample()")
+    if let Some((scored, _)) = refreshed {
+        if primer_stats_rust_enabled() {
+            match stats_shadow(&pool).await {
+                Ok((rust, table, mismatched)) => info!(
+                    rust,
+                    table, mismatched, "primer claim stats rust compute checked against the table"
+                ),
+                Err(e) => warn!(error = %e, "primer claim stats rust compute skipped"),
+            }
+        }
+        let (contested, eligible): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE contested), count(*) FILTER (WHERE weighted_voters >= 3) \
+             FROM public.primer_claim_stats",
+        )
         .fetch_one(&pool)
         .await?;
+        info!(
+            scored,
+            eligible,
+            contested,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "primer claim statistics refreshed"
+        );
+
+        if let (Some(set_id), true) = (new_set, anchor_rust_enabled()) {
+            match anchor_shadow(&pool, set_id).await {
+                Ok(same) => info!(
+                    set_id,
+                    same, "anchor set rust compute checked against the SQL"
+                ),
+                Err(e) => warn!(error = %e, "anchor set rust compute skipped"),
+            }
+        }
+        if let Some(set_id) = new_set {
+            let size: i32 = sqlx::query_scalar(
+                "SELECT claim_count FROM public.anchor_claim_sets WHERE id = $1",
+            )
+            .bind(set_id)
+            .fetch_one(&pool)
+            .await?;
+            if size < ANCHOR_MIN {
+                warn!(
+                    set_id,
+                    size,
+                    "new anchor set is smaller than {ANCHOR_MIN}: too few claims have enough voters"
+                );
+            } else {
+                info!(
+                    set_id,
+                    size,
+                    forced = force_anchors,
+                    "new anchor set chosen"
+                );
+            }
+        }
+    }
+
+    // Off: no sample is recorded (counted as skipped), so there is none to read back.
+    let sampled: bool = pg_bin_writes::run(PgWriteSite::ClaimOverlapSample, async {
+        sqlx::query_scalar("SELECT public.record_claim_overlap_sample()")
+            .fetch_one(&pool)
+            .await
+    })
+    .await?
+    .unwrap_or(false);
     if sampled {
         let (users, share): (i32, Option<f64>) = sqlx::query_as(
             "SELECT users, share FROM public.claim_overlap_samples ORDER BY sampled_at DESC LIMIT 1",

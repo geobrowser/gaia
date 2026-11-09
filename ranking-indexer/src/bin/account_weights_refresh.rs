@@ -24,6 +24,8 @@ use tracing::info;
 use ranking_indexer::account_weights_compute::{self, Params, VoterAgg};
 use ranking_indexer::account_weights_mirror::{self, AccountWeight};
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use uuid::Uuid;
 
 fn rust_compute_enabled() -> bool {
@@ -79,9 +81,14 @@ async fn main() -> Result<(), IndexerError> {
 
     let started = Instant::now();
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let scored: i32 = sqlx::query_scalar("SELECT public.refresh_account_weights()")
-        .fetch_one(&pool)
-        .await?;
+    // Off: the refresh is skipped and counted; the reads, mirror and shadows below still run
+    // against the table as it stands.
+    let scored: Option<i32> = pg_bin_writes::run(PgWriteSite::AccountWeightsRefresh, async {
+        sqlx::query_scalar("SELECT public.refresh_account_weights()")
+            .fetch_one(&pool)
+            .await
+    })
+    .await?;
     let (excluded, reduced): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE weight = 0), count(*) FILTER (WHERE weight > 0 AND weight < 1) \
          FROM public.account_weights",
@@ -163,12 +170,18 @@ async fn main() -> Result<(), IndexerError> {
             _ => tracing::warn!("account vote weight rust twin skipped: read failed"),
         }
     }
-    info!(
-        scored,
-        excluded,
-        reduced,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "account weights refreshed"
-    );
+    match scored {
+        Some(scored) => info!(
+            scored,
+            excluded,
+            reduced,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "account weights refreshed"
+        ),
+        None => info!(
+            excluded,
+            reduced, "account weights refresh skipped: RANKING_INDEXER_PG_WRITES is off"
+        ),
+    }
     Ok(())
 }

@@ -31,7 +31,9 @@ use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::external_interest_mirror::{self, Ident, Signal};
+use ranking_indexer::metrics::PgWriteSite;
 use ranking_indexer::not_interested;
+use ranking_indexer::pg_bin_writes;
 
 #[derive(Debug, Default, PartialEq)]
 struct Options {
@@ -132,29 +134,35 @@ async fn main() -> Result<(), IndexerError> {
     };
     // Any error (including the SQL's refusal of a wholly unplaced snapshot) returns Err: the Job fails, and
     // nothing was written.
-    let r = not_interested::apply(
-        &pool,
-        &signals,
-        options.allow_unplaced,
-        options.dry_run,
-        None,
+    // Off: the replace is skipped and counted; the mirror below still runs.
+    let applied = pg_bin_writes::run(
+        PgWriteSite::NotInterestedApply,
+        not_interested::apply(
+            &pool,
+            &signals,
+            options.allow_unplaced,
+            options.dry_run,
+            None,
+        ),
     )
     .await?;
-    info!(
-        source_rows = rows.len(),
-        unparseable,
-        rows_in = r.rows_in,
-        placed = r.placed,
-        unplaced = r.rows_in - r.placed,
-        inserted = r.inserted,
-        updated = r.updated,
-        removed = r.removed,
-        users_recomputed = r.users_recomputed,
-        signal_rows = r.signal_rows,
-        dry_run = options.dry_run,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "Not interested synced"
-    );
+    if let Some(r) = &applied {
+        info!(
+            source_rows = rows.len(),
+            unparseable,
+            rows_in = r.rows_in,
+            placed = r.placed,
+            unplaced = r.rows_in - r.placed,
+            inserted = r.inserted,
+            updated = r.updated,
+            removed = r.removed,
+            users_recomputed = r.users_recomputed,
+            signal_rows = r.signal_rows,
+            dry_run = options.dry_run,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "Not interested synced"
+        );
+    }
     if let Some(mirror) = &mirror {
         // Read after the replace committed; a read error skips the mirror, never the job.
         match sqlx::query_as::<_, Signal>(external_interest_mirror::SELECT_SQL)
@@ -173,7 +181,7 @@ async fn main() -> Result<(), IndexerError> {
             Err(e) => warn!(error = %e, "external interest mirror skipped: read failed"),
         }
     }
-    if options.dry_run {
+    if let (true, Some(r)) = (options.dry_run, &applied) {
         println!(
             "Dry run, rolled back: {} rows from geo-chat ({} unparseable), {} on a personal space; would insert {}, update {}, remove {}, and recompute {} users",
             rows.len(),

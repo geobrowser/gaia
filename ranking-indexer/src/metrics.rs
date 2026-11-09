@@ -39,7 +39,7 @@ impl Topic {
     }
 }
 
-/// A `Storage` write skipped because `RANKING_INDEXER_PG_WRITES` is off.
+/// A Postgres write skipped because `RANKING_INDEXER_PG_WRITES` is off.
 #[derive(Debug, Clone, Copy)]
 pub enum PgWriteSite {
     AddMember,
@@ -52,10 +52,25 @@ pub enum PgWriteSite {
     ReplaceRankingItems,
     ReplaceRankPositionProjection,
     ReplaceRankingScores,
+    AccountExclusionsReplace,
+    AccountWeightsRefresh,
+    AgendaListingsRefresh,
+    FeedCompositionRenderedSample,
+    FeedCompositionWindowSample,
+    FeedSignalsApply,
+    FeedSignalsRecord,
+    NotInterestedApply,
+    PrimerClaimsRefresh,
+    ClaimOverlapSample,
+    TopicInterestSweep,
+    TopicInterestRefit,
+    TopicRankingReconcile,
+    TopicSuggestionsRefresh,
+    StanceMapRun,
 }
 
 impl PgWriteSite {
-    const ALL: [PgWriteSite; 10] = [
+    pub(crate) const ALL: [PgWriteSite; 25] = [
         PgWriteSite::AddMember,
         PgWriteSite::RemoveMember,
         PgWriteSite::AddEditor,
@@ -66,9 +81,24 @@ impl PgWriteSite {
         PgWriteSite::ReplaceRankingItems,
         PgWriteSite::ReplaceRankPositionProjection,
         PgWriteSite::ReplaceRankingScores,
+        PgWriteSite::AccountExclusionsReplace,
+        PgWriteSite::AccountWeightsRefresh,
+        PgWriteSite::AgendaListingsRefresh,
+        PgWriteSite::FeedCompositionRenderedSample,
+        PgWriteSite::FeedCompositionWindowSample,
+        PgWriteSite::FeedSignalsApply,
+        PgWriteSite::FeedSignalsRecord,
+        PgWriteSite::NotInterestedApply,
+        PgWriteSite::PrimerClaimsRefresh,
+        PgWriteSite::ClaimOverlapSample,
+        PgWriteSite::TopicInterestSweep,
+        PgWriteSite::TopicInterestRefit,
+        PgWriteSite::TopicRankingReconcile,
+        PgWriteSite::TopicSuggestionsRefresh,
+        PgWriteSite::StanceMapRun,
     ];
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             PgWriteSite::AddMember => "add_member",
             PgWriteSite::RemoveMember => "remove_member",
@@ -80,6 +110,21 @@ impl PgWriteSite {
             PgWriteSite::ReplaceRankingItems => "replace_ranking_items",
             PgWriteSite::ReplaceRankPositionProjection => "replace_rank_position_projection",
             PgWriteSite::ReplaceRankingScores => "replace_ranking_scores",
+            PgWriteSite::AccountExclusionsReplace => "account_exclusions_replace",
+            PgWriteSite::AccountWeightsRefresh => "account_weights_refresh",
+            PgWriteSite::AgendaListingsRefresh => "agenda_listings_refresh",
+            PgWriteSite::FeedCompositionRenderedSample => "feed_composition_rendered_sample",
+            PgWriteSite::FeedCompositionWindowSample => "feed_composition_window_sample",
+            PgWriteSite::FeedSignalsApply => "feed_signals_apply",
+            PgWriteSite::FeedSignalsRecord => "feed_signals_record",
+            PgWriteSite::NotInterestedApply => "not_interested_apply",
+            PgWriteSite::PrimerClaimsRefresh => "primer_claims_refresh",
+            PgWriteSite::ClaimOverlapSample => "claim_overlap_sample",
+            PgWriteSite::TopicInterestSweep => "topic_interest_sweep",
+            PgWriteSite::TopicInterestRefit => "topic_interest_refit",
+            PgWriteSite::TopicRankingReconcile => "topic_ranking_reconcile",
+            PgWriteSite::TopicSuggestionsRefresh => "topic_suggestions_refresh",
+            PgWriteSite::StanceMapRun => "stance_map_run",
         }
     }
 }

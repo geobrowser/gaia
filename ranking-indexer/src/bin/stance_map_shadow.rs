@@ -24,6 +24,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::ranking_config;
 use ranking_indexer::stance_map::{evaluate, Dataset, EvalConfig, Obs, Seed};
 
@@ -106,11 +108,14 @@ async fn main() -> Result<(), IndexerError> {
     let mut metrics = serde_json::to_value(&eval)
         .map_err(|e| IndexerError::Config(format!("serialising metrics: {e}")))?;
     metrics["elapsed_ms"] = serde_json::json!(started.elapsed().as_millis() as u64);
-    let gate_met: bool =
+    // Off: the run is not recorded and there is no gate decision (logged as `None`).
+    let gate_met: Option<bool> = pg_bin_writes::run(PgWriteSite::StanceMapRun, async {
         sqlx::query_scalar("SELECT personalization.record_stance_map_run($1::jsonb)")
             .bind(&metrics)
             .fetch_one(&pool)
-            .await?;
+            .await
+    })
+    .await?;
 
     // STANCE_MAP_CONFIG_SOURCE=configmap (default postgres): log whether the mounted thresholds match the
     // table row the gate above was decided from. The gate itself still reads the table.
@@ -161,7 +166,7 @@ async fn main() -> Result<(), IndexerError> {
         auc_tendencies = ?eval.auc_tendencies,
         auc_lift = ?eval.auc_lift,
         split_correlation = ?eval.split_correlation,
-        gate_met,
+        gate_met = ?gate_met,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "stance map evaluated (shadow)"
     );

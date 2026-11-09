@@ -34,6 +34,8 @@ use ranking_indexer::feed_signals::{self, Cutoff};
 use ranking_indexer::feed_signals_compute as compute;
 use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
 use ranking_indexer::feed_user_seen_mirror::{self, Seen};
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::ranking_config;
 
 #[derive(Debug, Default, PartialEq)]
@@ -162,6 +164,21 @@ async fn mirror_runs(pool: &PgPool) {
     }
 }
 
+/// `feed_signals::record` behind the `RANKING_INDEXER_PG_WRITES` switch.
+async fn record_run(
+    pool: &PgPool,
+    status: &str,
+    cutoff: Option<&Cutoff>,
+    error: Option<&str>,
+) -> Result<(), IndexerError> {
+    pg_bin_writes::run(
+        PgWriteSite::FeedSignalsRecord,
+        feed_signals::record(pool, status, cutoff, error),
+    )
+    .await
+    .map(|_| ())
+}
+
 async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), IndexerError> {
     let started = Instant::now();
     let data_through = cutoff.data_through()?;
@@ -173,7 +190,7 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
             "analytics has published nothing new; nothing to do"
         );
         if !options.dry_run {
-            feed_signals::record(pool, "unchanged", Some(cutoff), None).await?;
+            record_run(pool, "unchanged", Some(cutoff), None).await?;
         }
         return Ok(());
     }
@@ -217,35 +234,42 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
         Some(m) => ranking_indexer::entity_scores_mirror::debate_watch_prior(m, pool).await,
         None => None,
     };
-    let r = feed_signals::apply(
-        pool,
-        &cutoff.generation,
-        &window,
-        &items,
-        &users,
-        options.allow_empty,
-        options.dry_run,
+    // Off: the replace and the debate-watch refresh are skipped as one write (they share a
+    // transaction); the mirrors below still run.
+    let applied = pg_bin_writes::run(
+        PgWriteSite::FeedSignalsApply,
+        feed_signals::apply(
+            pool,
+            &cutoff.generation,
+            &window,
+            &items,
+            &users,
+            options.allow_empty,
+            options.dry_run,
+        ),
     )
     .await?;
-    info!(
-        generation = %cutoff.generation,
-        window_start = %window.window_start,
-        data_through = %window.window_end,
-        previous_data_through = ?window.last_data_through,
-        item_rows = r.item_rows,
-        user_rows_in = r.user_rows_in,
-        user_rows_placed = r.user_rows_placed,
-        user_rows_unplaced = r.user_rows_in - r.user_rows_placed,
-        user_rows = r.user_rows,
-        item_rows_expired = r.item_rows_expired,
-        user_rows_expired = r.user_rows_expired,
-        debates_rescored = r.debates_rescored,
-        dry_run = options.dry_run,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "feed signals replaced"
-    );
-    if compute::shadow_enabled() {
-        shadow(pool, data_through, &window, &items, &users, &r).await;
+    if let Some(r) = &applied {
+        info!(
+            generation = %cutoff.generation,
+            window_start = %window.window_start,
+            data_through = %window.window_end,
+            previous_data_through = ?window.last_data_through,
+            item_rows = r.item_rows,
+            user_rows_in = r.user_rows_in,
+            user_rows_placed = r.user_rows_placed,
+            user_rows_unplaced = r.user_rows_in - r.user_rows_placed,
+            user_rows = r.user_rows,
+            item_rows_expired = r.item_rows_expired,
+            user_rows_expired = r.user_rows_expired,
+            debates_rescored = r.debates_rescored,
+            dry_run = options.dry_run,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "feed signals replaced"
+        );
+        if compute::shadow_enabled() {
+            shadow(pool, data_through, &window, &items, &users, r).await;
+        }
     }
     if let Some(mirror) = &mirror {
         // Read after the replace committed; a read error skips the mirror, never the job.
@@ -279,7 +303,7 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
             Err(e) => warn!(error = %e, "feed user seen mirror skipped: read failed"),
         }
     }
-    if options.dry_run {
+    if let (true, Some(r)) = (options.dry_run, &applied) {
         println!(
             "Dry run, rolled back: generation {} through {}, window from {}: {} item-hours, {} of {} per-user rows on a personal space ({} user-days written), {} item and {} per-user rows past retention, {} debates re-scored",
             cutoff.generation,
@@ -324,7 +348,7 @@ async fn main() -> Result<(), IndexerError> {
         Ok(c) => c,
         Err(e) => {
             if !options.dry_run {
-                let _ = feed_signals::record(&pool, "failed", None, Some(&e.to_string())).await;
+                let _ = record_run(&pool, "failed", None, Some(&e.to_string())).await;
                 mirror_runs(&pool).await;
             }
             return Err(e);
@@ -334,8 +358,7 @@ async fn main() -> Result<(), IndexerError> {
         error!(error = %e, "feed signals run failed; nothing was written");
         if !options.dry_run {
             // Best effort: the run log is how a failure shows up next to the successes.
-            let _ =
-                feed_signals::record(&pool, "failed", Some(&cutoff), Some(&e.to_string())).await;
+            let _ = record_run(&pool, "failed", Some(&cutoff), Some(&e.to_string())).await;
             mirror_runs(&pool).await;
         }
         return Err(e);
