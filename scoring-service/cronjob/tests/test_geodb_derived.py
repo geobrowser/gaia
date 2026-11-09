@@ -190,7 +190,7 @@ class TestTableSelection:
     def test_writer_skips_unselected_tables(self) -> None:
         mirror = DerivedMirror(["x"], tables=("global_scores", "space_scores"))
         calls: list[str] = []
-        mirror.put = lambda table, rows: calls.append(table)  # type: ignore[method-assign]
+        mirror.put = lambda table, rows, progress=None: calls.append(table)  # type: ignore[method-assign]
         w = ScoringDataWriter("postgresql://x", derived=mirror)
         s = Space(id=S1, created_at=datetime.now())
         s.space_score = 2.0
@@ -316,7 +316,7 @@ class TestWriterIntegration:
         mirror = MagicMock()
         mirror.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}
         mirror.skipped = MagicMock()
-        mirror.put.side_effect = lambda table, rows: order.append(table)
+        mirror.put.side_effect = lambda table, rows, progress=None: order.append(table)
         w = self._writer(mirror)
         s = Space(id=S1, created_at=datetime.now())
         s.space_score = 2.0
@@ -358,16 +358,19 @@ class _StatMirror:
     def skipped(self, error, table: str = "") -> None:
         self.stats["skipped"] += 1
 
-    def put(self, table: str, rows) -> None:
+    def put(self, table: str, rows, progress=None) -> None:
         rows = list(rows)
         self.sent[table] = rows
         if table == self.drop:
             self.stats["dropped"] += len(rows)
         else:
             self.stats["puts"] += len(rows)
+            if rows and progress:
+                progress(rows[-1].key)
 
 
 E3 = "44444444-4444-4444-8444-444444444444"
+MIRROR = ["global_scores", "local_scores", "space_scores"]
 S2 = "55555555-5555-4555-8555-555555555555"
 
 
@@ -382,15 +385,17 @@ class TestChangedOnlyMirror:
         sp.space_score = 2.0
         return ents, [sp]
 
-    def _write(self, mirror, synced, changed):
+    def _write(self, mirror, synced, changed, resume=None):
         w = ScoringDataWriter("postgresql://x", derived=mirror)
         ents, sp = self._data()
-        marks: list[tuple[list[str], bool]] = []
+        marks: list[tuple[str, bool, str | None]] = []
+        state = {t: (True, None) for t in synced}
+        state.update({t: (False, a) for t, a in (resume or {}).items()})
         with (
             patch("src.scoring_data_writer.scoring_data_writer.psycopg.connect") as c,
-            patch.object(ScoringDataWriter, "_synced_tables", return_value=set(synced)),
+            patch.object(ScoringDataWriter, "_mirror_state", return_value=state),
             patch.object(ScoringDataWriter, "_changed_keys", side_effect=lambda conn, t, e: changed[t]),
-            patch.object(ScoringDataWriter, "_set_synced", side_effect=lambda conn, t, v: marks.append((list(t), v))),
+            patch.object(ScoringDataWriter, "_set_state", side_effect=lambda conn, entries: marks.extend(entries)),
         ):
             c.return_value.__enter__.return_value = MagicMock()
             w.write_all(ents, sp)
@@ -403,8 +408,7 @@ class TestChangedOnlyMirror:
         assert len(m.sent["local_scores"]) == 3
         assert len(m.sent["space_scores"]) == 1
         # Marked unsynced inside the write, synced after a clean mirror.
-        assert marks == [(["global_scores", "local_scores", "space_scores"], False),
-                         (["global_scores", "local_scores", "space_scores"], True)]
+        assert marks == [(t, False, None) for t in MIRROR] + [(t, True, None) for t in MIRROR]
 
     def test_synced_tables_send_only_changed_keys(self) -> None:
         m = _StatMirror()
@@ -422,11 +426,150 @@ class TestChangedOnlyMirror:
     def test_a_dropped_table_stays_unsynced(self) -> None:
         m = _StatMirror(drop="local_scores")
         marks = self._write(m, set(), {})
-        assert marks[-1] == (["global_scores", "space_scores"], True)
+        final = {t: (sy, r) for t, sy, r in marks[3:]}
+        assert final["global_scores"] == (True, None) and final["space_scores"] == (True, None)
+        assert final["local_scores"] == (False, None)  # nothing went through, no resume point
 
     def test_unsynced_state_is_not_marked_when_mirror_is_off(self) -> None:
         marks = self._write(MagicMock(**{"enabled.return_value": False, "stats": {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}}), set(), {})
-        assert all(t == [] for t, _ in marks)
+        assert marks == []
+
+
+class TestResumableMirror:
+    """A budget-cut run resumes at the last key geo-db answered; nothing sent is sent again."""
+
+    _data = TestChangedOnlyMirror._data
+    _write = TestChangedOnlyMirror._write
+
+    def _hex(self, *ids: str) -> str:
+        return b"".join(uuid.UUID(i).bytes for i in ids).hex()
+
+    def test_rows_go_out_in_key_order(self) -> None:
+        m = _StatMirror()
+        ents = [entity(E3, 0.1), entity(E2, 0.6, [persp(E2, S1, 0.9)]),
+                entity(E1, 0.5, [persp(E1, S2, 0.8), persp(E1, S1, 0.7)])]
+        w = ScoringDataWriter("postgresql://x", derived=m)
+        w._mirror_to_geodb(ents, [], {}, [])
+        for t in ("global_scores", "local_scores"):
+            keys = [r.key for r in m.sent[t]]
+            assert keys == sorted(keys) and len(keys) == len(set(keys))
+        assert len(m.sent["local_scores"]) == 3
+
+    def test_resume_sends_rows_past_the_cursor_and_changed_earlier_ones(self) -> None:
+        m = _StatMirror()
+        cur = self._hex(E1)  # E1 landed last night
+        # E1 unchanged, E2 and E3 past the cursor; E1/S2 changed since.
+        self._write(m, set(), {"global_scores": set(), "local_scores": {(E1, S2)}},
+                    resume={"global_scores": cur, "local_scores": self._hex(E1, S1)})
+        assert [r.key for r in m.sent["global_scores"]] == [uuid.UUID(E2).bytes, uuid.UUID(E3).bytes]
+        assert [r.key for r in m.sent["local_scores"]] == [
+            uuid.UUID(E1).bytes + uuid.UUID(S2).bytes,
+            uuid.UUID(E2).bytes + uuid.UUID(S1).bytes,
+        ]
+
+    def test_a_changed_row_before_the_cursor_is_sent(self) -> None:
+        m = _StatMirror()
+        self._write(m, set(), {"global_scores": {E1}, "local_scores": set()},
+                    resume={"global_scores": self._hex(E2), "local_scores": self._hex(E3, S1)})
+        assert [r.key for r in m.sent["global_scores"]] == [uuid.UUID(E1).bytes, uuid.UUID(E3).bytes]
+        assert m.sent["local_scores"] == []
+
+    def test_a_cut_run_records_its_last_key_and_a_clean_one_marks_synced(self) -> None:
+        m = _StatMirror()
+        marks = self._write(m, set(), {})
+        final = {t: (sy, r) for t, sy, r in marks[3:]}
+        assert final["global_scores"] == (True, None)
+        # A table that ends unclean after sending rows keeps the last key it sent.
+        class Cut(_StatMirror):
+            def put(self, table, rows, progress=None):
+                super().put(table, rows, progress)
+                if table == "global_scores":
+                    self.stats["dropped"] += 1
+        marks = self._write(Cut(), set(), {})
+        final = {t: (sy, r) for t, sy, r in marks[3:]}
+        assert final["global_scores"] == (False, uuid.UUID(E3).bytes.hex())
+
+    def test_untouched_resume_point_survives_a_run_that_sent_nothing(self) -> None:
+        m = _StatMirror(drop="global_scores")
+        cur = self._hex(E2)
+        marks = self._write(m, set(), {"global_scores": set(), "local_scores": set()},
+                            resume={"global_scores": cur, "local_scores": self._hex(E2, S1)})
+        final = {t: (sy, r) for t, sy, r in marks[3:]}
+        assert final["global_scores"] == (False, cur)
+        # A changed row at or before the cursor was not sent, so the cursor may not stand.
+        m = _StatMirror(drop="global_scores")
+        marks = self._write(m, set(), {"global_scores": {E1}, "local_scores": set()},
+                            resume={"global_scores": cur})
+        final = {t: (sy, r) for t, sy, r in marks[3:]}
+        assert final["global_scores"] == (False, None)
+
+    def test_progress_is_written_while_sending(self) -> None:
+        m = _StatMirror()
+        saved: list[list] = []
+        w = ScoringDataWriter("postgresql://x", derived=m)
+        with (
+            patch("src.scoring_data_writer.scoring_data_writer.PROGRESS_EVERY_S", 0.0),
+            patch.object(ScoringDataWriter, "_save_state", side_effect=lambda e: saved.append(e)),
+        ):
+            w._mirror_to_geodb([entity(E1, 0.5), entity(E2, 0.6)], [], {}, ["global_scores"])
+        assert saved[0] == [("global_scores", False, uuid.UUID(E2).bytes.hex())]
+        assert saved[-1] == [("global_scores", True, None)]
+
+
+class TestProgressCallback:
+    def test_progress_is_the_last_key_of_each_request_answered_ok(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, batch=True, batch_rows=4, budget=60)
+        seen: list[bytes] = []
+        m.put("global_scores", _rows(10), progress=seen.append)
+        assert seen == [_rows(10)[3].key, _rows(10)[7].key, _rows(10)[9].key]
+
+    def test_a_failed_request_is_not_progress(self, tmp_path) -> None:
+        argv = _script(tmp_path, "import sys\nprint('ready', flush=True)\nsys.stdin.readline()\nprint('-4', flush=True)\nprint('nope', flush=True)\n")
+        m = DerivedMirror(argv)
+        seen: list[bytes] = []
+        m.put("global_scores", _rows(10), progress=seen.append)
+        assert seen == [] and m.stats["puts"] == 0 and m.stats["errors"] == 1 and m.stats["dropped"] == 10
+
+    def test_a_budget_cut_reports_progress_only_for_what_was_sent(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, batch=True, batch_rows=4, budget=-1)  # spent after the first request
+        seen: list[bytes] = []
+        m.put("global_scores", _rows(10), progress=seen.append)
+        assert seen == [_rows(10)[3].key] and m.stats["dropped"] == 6
+
+    def test_an_error_in_the_callback_does_not_fail_the_send(self, tmp_path) -> None:
+        argv, _ = _logging_child(tmp_path)
+        m = DerivedMirror(argv, batch=True, batch_rows=4, budget=60)
+        m.put("global_scores", _rows(10), progress=lambda k: 1 / 0)
+        assert m.stats["puts"] == 10 and m.stats["errors"] == 0
+
+
+class TestStateColumn:
+    def _conn(self, fail_first: bool):
+        conn = MagicMock()
+        calls: list[str] = []
+        cur = conn.cursor.return_value.__enter__.return_value
+
+        def execute(sql, *a):
+            calls.append(sql)
+            if fail_first and "resume_after" in sql:
+                raise RuntimeError('column "resume_after" does not exist')
+
+        cur.execute.side_effect = execute
+        cur.executemany.side_effect = execute
+        cur.fetchall.return_value = [("global_scores", False)]
+        return conn, calls
+
+    def test_state_reads_without_the_column_before_the_migration(self) -> None:
+        conn, calls = self._conn(True)
+        assert ScoringDataWriter._mirror_state(conn, ["global_scores"]) == {"global_scores": (False, None)}
+        assert "resume_after" in calls[0] and "resume_after" not in calls[1]
+
+    def test_state_writes_without_the_column_before_the_migration(self) -> None:
+        conn, calls = self._conn(True)
+        ScoringDataWriter._set_state(conn, [("global_scores", False, "ab")])
+        assert "resume_after" in calls[0] and "resume_after" not in calls[1]
 
 
 class TestLazySend:

@@ -1195,7 +1195,13 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   table): `synced` is set false in the Postgres commit and true only after a mirror with no drop and no error. A synced table
   sends only the keys whose score is new or different from what Postgres held before the upsert (diffed in SQL against a temp
   table, numeric equality); an unsynced or missing row sends the whole table. Log lines: `Diffed <table> ... N changed` and
-  `geodb_derived table=<t> mode=changed|full puts=N`. Without the table the cronjob still runs and sends everything.
+  `geodb_derived table=<t> mode=changed|full|resume puts=N`. Without the table the cronjob still runs and sends everything.
+  **Resumable (migration 0121, `score_mirror_state.resume_after`):** the big tables go out in key order and the hex key of the
+  last request geo-db answered ok is saved every 15 s and at the end. A run the budget cuts off leaves `synced` false with that key;
+  the next run (`mode=resume`) sends the rows past it plus any earlier row whose score changed, so a full fill takes
+  ceil(rows / (budget x send rate)) nights and then the changed-only path takes over. A failed request is never recorded. A crash
+  before the first save, or a run that sends nothing while a changed row sorts before the old key, starts the table over.
+  Without the column the cronjob falls back to the old synced-only behaviour.
 
 - api shadow, `GEODB_RANKING_SCORES_SHADOW` (manifest `"0"`, `api/src/geodb/rankingScoresShadow.ts`): `entity_ranking_scores` against
   the engaged-only overlay in derived collection 21 (plan 10.21 section 9). Every `GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS` (60 s)
