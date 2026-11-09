@@ -36,6 +36,15 @@ ends the table.
 ``GEODB_DERIVED_MIRROR_TABLES`` (comma separated, e.g. ``global_scores,space_scores``) picks which tables are
 mirrored. Unset or empty mirrors all three, as before. A name that is not one of the three is ignored with a
 warning; if none is valid, nothing is mirrored (the cap is a reason to fail closed).
+
+Pacing. The held pipe sends one request at a time and waits for its answer, so the mirror already
+runs as fast as geo-db answers, and a full table rewrite keeps the serve's write path busy for as
+long as it lasts. Two knobs, both off by default (behaviour is unchanged unless set):
+``GEODB_DERIVED_MAX_ROWS_PER_S`` (a number; 0 or unset is unlimited) makes each request take at least
+``rows / rate`` seconds, with no catching up after a slow one, and ``GEODB_DERIVED_BATCH_ROWS`` (1 to
+256; default 256) sets the rows in a batch request, so a smaller write holds the serve for less
+time. Time spent waiting for the pace is not counted against ``GEODB_DERIVED_BUDGET_MS``: the budget
+bounds the time spent sending, so a slower pace does not drop the rows a faster one would have sent.
 """
 
 import logging
@@ -219,8 +228,13 @@ class DerivedMirror:
         session_refresh: float = DEFAULT_SESSION_REFRESH_S,
         retries: int = DEFAULT_RETRIES,
         retry_delay: float = DEFAULT_RETRY_DELAY,
+        max_rows_per_s: float = 0.0,
+        batch_rows: int = BATCH_MAX,
     ):
         self.argv = argv
+        # 0 (or anything not a positive finite number) is unlimited.
+        self.max_rows_per_s = max_rows_per_s if math.isfinite(max_rows_per_s) and max_rows_per_s > 0 else 0.0
+        self.batch_rows = min(max(1, int(batch_rows)), BATCH_MAX)
         self.session_refresh = session_refresh
         self.retries = retries
         self.retry_delay = retry_delay
@@ -261,6 +275,8 @@ class DerivedMirror:
             return None
         refresh = _env_number(env, "GEODB_DERIVED_SESSION_REFRESH_S", DEFAULT_SESSION_REFRESH_S, float)
         retries = max(0, _env_number(env, "GEODB_DERIVED_RETRIES", DEFAULT_RETRIES, int))
+        rate = _env_number(env, "GEODB_DERIVED_MAX_ROWS_PER_S", 0.0, float)
+        batch_rows = _env_number(env, "GEODB_DERIVED_BATCH_ROWS", BATCH_MAX, int)
         return cls(
             [env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "derived", "pipe"],
             budget=ms / 1000,
@@ -268,6 +284,8 @@ class DerivedMirror:
             tables=tables,
             session_refresh=refresh,
             retries=retries,
+            max_rows_per_s=rate,
+            batch_rows=batch_rows,
         )
 
     # -- public ---------------------------------------------------------------------------
@@ -307,11 +325,12 @@ class DerivedMirror:
     def _send(self, table: str, lines: Iterable[str]) -> int:
         start = time.monotonic()
         sent = 0
-        size = BATCH_MAX if self.batch else CHUNK
+        size = self.batch_rows if self.batch else CHUNK
         reconnects = 0
+        paused = 0.0  # seconds spent waiting for the pace; not counted against the budget
         it = iter(lines)
         while chunk := list(islice(it, size)):
-            if sent > 0 and time.monotonic() - start > self.budget:
+            if sent > 0 and time.monotonic() - start - paused > self.budget:
                 dropped = len(chunk) + sum(1 for _ in it)
                 self.stats["dropped"] += dropped
                 logger.warning(
@@ -321,6 +340,7 @@ class DerivedMirror:
                 )
                 break
             reqs = [batch_request(chunk)] if self.batch and len(chunk) > 1 else chunk
+            chunk_start = time.monotonic()
             try:
                 reconnects = self._request_chunk(table, reqs, reconnects)
             except _CoolingDown:
@@ -333,6 +353,11 @@ class DerivedMirror:
                 self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
                 break
             sent += len(chunk)
+            if self.max_rows_per_s:
+                wait = len(chunk) / self.max_rows_per_s - (time.monotonic() - chunk_start)
+                if wait > 0:
+                    time.sleep(wait)
+                    paused += wait
         return sent
 
     def _request_chunk(self, table: str, reqs: list[str], reconnects: int) -> int:
