@@ -98,6 +98,10 @@ pub struct DerivedMirror {
     batch: bool,
     /// `None` mirrors every table; `Some` only the tables named (`GEODB_DERIVED_MIRROR_TABLES`).
     tables: Option<std::collections::HashSet<String>>,
+    /// Rows a second at most (`GEODB_DERIVED_MAX_ROWS_PER_S`); 0 is unlimited.
+    max_rows_per_s: f64,
+    /// Rows in a batch request, 1 to [`BATCH_MAX`] (`GEODB_DERIVED_BATCH_ROWS`).
+    batch_rows: usize,
 }
 
 /// One batch request from `lines` of a single kind: `putn<tab><n>` (or `deleten`), then the rows.
@@ -124,7 +128,30 @@ impl DerivedMirror {
             budget,
             batch: false,
             tables: None,
+            max_rows_per_s: 0.0,
+            batch_rows: BATCH_MAX,
         }
+    }
+
+    /// Paces a call: each request takes at least `rows / max_rows_per_s` seconds, with no catching
+    /// up after a slow one. 0, a negative or a non-finite rate is unlimited. Time spent waiting is
+    /// not counted against the call's budget, so a slower pace does not drop rows a faster one
+    /// would have sent. A bulk rewrite that is not paced keeps the serve's write path busy and
+    /// starves its reads.
+    pub fn with_max_rows_per_s(mut self, rate: f64) -> Self {
+        self.max_rows_per_s = if rate.is_finite() && rate > 0.0 {
+            rate
+        } else {
+            0.0
+        };
+        self
+    }
+
+    /// Rows in one batch request, clamped to 1..=[`BATCH_MAX`]: a smaller write holds the serve
+    /// for less time. Only used when batching is on.
+    pub fn with_batch_rows(mut self, rows: usize) -> Self {
+        self.batch_rows = rows.clamp(1, BATCH_MAX);
+        self
     }
 
     /// Restricts the mirror to the tables named (the `table` label every call carries). `None`, or
@@ -182,9 +209,17 @@ impl DerivedMirror {
             .filter(|n| !n.is_empty())
             .collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let rate = get("GEODB_DERIVED_MAX_ROWS_PER_S")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let batch_rows = get("GEODB_DERIVED_BATCH_ROWS")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(BATCH_MAX);
         Some(
             Self::new(cfg, Duration::from_millis(ms))
                 .with_batch(batch)
+                .with_max_rows_per_s(rate)
+                .with_batch_rows(batch_rows)
                 .with_tables(Some(&refs)),
         )
     }
@@ -270,9 +305,10 @@ impl DerivedMirror {
     async fn send(&self, table: &str, lines: &[String]) -> usize {
         let start = Instant::now();
         let mut sent = 0;
-        let size = if self.batch { BATCH_MAX } else { CHUNK };
+        let size = if self.batch { self.batch_rows } else { CHUNK };
+        let mut paused = Duration::ZERO; // waiting for the pace is not spending the budget
         for chunk in lines.chunks(size) {
-            if sent > 0 && start.elapsed() > self.budget {
+            if sent > 0 && start.elapsed().saturating_sub(paused) > self.budget {
                 let dropped = lines.len() - sent;
                 metrics::counter!("geodb_derived_mirror_dropped_total", "table" => table.to_string())
                     .increment(dropped as u64);
@@ -282,6 +318,7 @@ impl DerivedMirror {
                 );
                 break;
             }
+            let chunk_start = Instant::now();
             let one;
             let reqs: &[String] = if self.batch && chunk.len() > 1 {
                 one = [batch_request(chunk)];
@@ -302,6 +339,13 @@ impl DerivedMirror {
                 break;
             }
             sent += chunk.len();
+            if self.max_rows_per_s > 0.0 {
+                let want = Duration::from_secs_f64(chunk.len() as f64 / self.max_rows_per_s);
+                if let Some(wait) = want.checked_sub(chunk_start.elapsed()) {
+                    tokio::time::sleep(wait).await;
+                    paused += wait;
+                }
+            }
         }
         sent
     }
@@ -419,6 +463,68 @@ mod tests {
         m.put("t", &[row(3, 3.0)]).await;
         assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
         let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn pacing_spaces_requests_and_does_not_spend_the_budget() {
+        let log = tmp("paced");
+        let script = format!(
+            "echo ready; while IFS= read -r h; do n=${{h#*\t}}; printf '%s\\n' \"$h\" >> {0}; i=0; while [ $i -lt $n ]; do IFS= read -r r; i=$((i+1)); done; printf '+10\\napplied: 1'; done",
+            log.display()
+        );
+        // 40 rows in batches of 10 at 100 rows/s: 4 requests, at least 0.4 s; the 100 ms budget
+        // would drop the tail if the waits counted against it.
+        let m = fake(&script, Duration::from_millis(100))
+            .with_batch(true)
+            .with_batch_rows(10)
+            .with_max_rows_per_s(100.0);
+        let rows: Vec<_> = (0..40u16)
+            .map(|i| DerivedRow {
+                key: i.to_be_bytes().to_vec(),
+                ..row(0, 1.0)
+            })
+            .collect();
+        let t = Instant::now();
+        assert_eq!(m.put_counted("t", &rows).await, 40);
+        assert!(
+            t.elapsed() >= Duration::from_millis(380),
+            "{:?}",
+            t.elapsed()
+        );
+        let heads = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(heads.lines().filter(|l| l.starts_with("putn")).count(), 4);
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[test]
+    fn pacing_knobs_come_from_the_environment() {
+        let env = |k: &str| match k {
+            "GEODB_DERIVED_MIRROR" => Some("1".to_string()),
+            "GEODB_KEY_PATH" => Some("/k".to_string()),
+            "GEODB_BINDING_PATH" => Some("/b".to_string()),
+            "GEODB_DERIVED_MAX_ROWS_PER_S" => Some("250".to_string()),
+            "GEODB_DERIVED_BATCH_ROWS" => Some("9999".to_string()),
+            _ => None,
+        };
+        if let Some(m) = DerivedMirror::from_vars(env) {
+            assert_eq!(m.max_rows_per_s, 250.0);
+            assert_eq!(m.batch_rows, BATCH_MAX);
+        }
+        assert_eq!(
+            DerivedMirror::new(
+                Config {
+                    program: "sh".into(),
+                    args: vec![],
+                    collection: 0,
+                    timeout: Duration::from_secs(1),
+                    cooldown: Duration::from_secs(1)
+                },
+                Duration::from_secs(1)
+            )
+            .with_max_rows_per_s(f64::NAN)
+            .max_rows_per_s,
+            0.0
+        );
     }
 
     #[test]

@@ -1,0 +1,124 @@
+# One-off, read-only Job: row counts of the Postgres tables behind geo-db derived collections
+# 0, 1, 11 and 27 (`entity_type_ranking`, `entity_topic_ranking`, `ranks.ranking_scores`,
+# `personalization.external_interest_signals`). The counts decide whether an empty geo-db collection is
+# a defect (rows exist in Postgres) or correct (none do), and size the paced fills.
+#
+# Runs in the api image with the api's own Postgres wiring (DATABASE_URL from api-secrets, the CA
+# written by an init container). Every statement runs in a READ ONLY transaction with a 120 s statement
+# timeout; each table gets the planner estimate (instant) and an exact count(*). Prints counts only,
+# never a connection string. NOT part of any deploy; apply by hand and delete it afterwards:
+#
+#   kubectl apply -f geodb/k8s/v2/pg-row-counts-job.yaml
+#   kubectl -n gaia logs -f job/pg-row-counts
+#   kubectl -n gaia delete job pg-row-counts
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pg-row-counts
+  namespace: gaia
+  labels:
+    app: pg-row-counts
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: pg-row-counts
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/api:a59b5c48d0a253d4b0f4c698ee08c8b0ef113699
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: counts
+          image: registry.digitalocean.com/geo/api:a59b5c48d0a253d4b0f4c698ee08c8b0ef113699
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command:
+            - bun
+            - -e
+            - |
+              const {Client} = require("pg");
+              const c = new Client({connectionString: process.env.DATABASE_URL, statement_timeout: 120000});
+              const tables = [
+                ["ranks.ranking_scores", "ranks.ranking_scores"],
+                ["personalization.external_interest_signals", "personalization.external_interest_signals"],
+                ["public.entity_type_ranking", "entity_type_ranking"],
+                ["public.entity_topic_ranking", "entity_topic_ranking"],
+              ];
+              (async () => {
+                await c.connect();
+                await c.query("BEGIN READ ONLY");
+                for (const [label, rel] of tables) {
+                  try {
+                    const est = await c.query("SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass($1)", [rel]);
+                    console.log(label, "estimate", est.rows[0] && est.rows[0].n);
+                    const n = await c.query(`SELECT count(*) AS n FROM ${rel}`);
+                    console.log(label, "count", n.rows[0].n);
+                  } catch (e) {
+                    console.log(label, "error", e.message);
+                    await c.query("ROLLBACK"); await c.query("BEGIN READ ONLY");
+                  }
+                }
+                try {
+                  const k = await c.query("SELECT kind, count(*) AS n FROM personalization.external_interest_signals GROUP BY kind ORDER BY kind");
+                  for (const r of k.rows) console.log("external_interest_signals kind", r.kind, r.n);
+                } catch (e) { console.log("external_interest_signals by kind error", e.message); }
+                await c.query("ROLLBACK");
+                await c.end();
+              })().catch((e) => { console.log("failed", e.message); process.exit(1); });
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: NODE_EXTRA_CA_CERTS
+              value: /ssl/ca.crt
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
