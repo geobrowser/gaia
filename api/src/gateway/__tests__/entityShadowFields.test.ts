@@ -297,6 +297,77 @@ describe("the real Entity and EntityPage queries", () => {
 		})
 	})
 
+	describe("cross-space widening (GEODB_CROSS_SPACE_HOLDERS_SHADOW)", () => {
+		const both = () => [
+			...rowsFromGeoDbOutput(geoOutput(ENTITY_A), ENTITY_HEX, {names: true}).map((r) => ({
+				...r,
+				space: GEO_SPACE_A,
+			})),
+			...rowsFromGeoDbOutput(geoOutput(ENTITY_B), ENTITY_HEX, {names: true}).map((r) => ({
+				...r,
+				space: GEO_SPACE_B,
+			})),
+		]
+		function widened(
+			enabled: boolean,
+			opts: {rows?: ReturnType<typeof both>; geoSpaceOf?: (s: string) => Promise<string | null>} = {},
+		) {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const readCard = vi.fn(async ({entityId, names}: {geoSpaceId: string; entityId: string; names?: boolean}) =>
+				rowsFromGeoDbOutput(geoOutput(ENTITY_B), entityId, {names}),
+			)
+			const readCardSpaces = vi.fn(async () => (opts.rows ?? both()) as never)
+			const shadow = createEntityShadow({
+				geoDb: {readCard, readCardSpaces},
+				geoSpaceOf:
+					opts.geoSpaceOf ??
+					(async (space) => (space === SPACE_A ? GEO_SPACE_A : space === SPACE_B ? GEO_SPACE_B : null)),
+				log,
+				multiSpace: true,
+				crossSpaceHolders: enabled,
+			})
+			return {log, readCard, readCardSpaces, shadow}
+		}
+
+		it("flag off: the Name taken from another Space stays cross_space, no wide read", async () => {
+			const w = widened(false)
+			await run(w.shadow, ENTITY_B)
+			expect(w.readCardSpaces).not.toHaveBeenCalled()
+			expect(uncompared().cross_space).toBe(1)
+		})
+
+		it("flag on, geo-db holds the Name in the other Space: match and no longer cross_space", async () => {
+			const w = widened(true)
+			await run(w.shadow, ENTITY_B)
+			expect(results()).toEqual({match: 1})
+			expect(w.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(uncompared().cross_space).toBeUndefined()
+			expect(w.log.warn).not.toHaveBeenCalled()
+		})
+
+		it("flag on, geo-db holds no such Name in any Space: mismatch", async () => {
+			const rows = both().filter((r) => !(r.prop === NAME))
+			const w = widened(true, {rows})
+			await run(w.shadow, ENTITY_B)
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("flag on, a Space geo-db has not loaded: the read is not made, the comparison keeps cross_space", async () => {
+			const w = widened(true, {geoSpaceOf: async (space) => (space === SPACE_B ? GEO_SPACE_B : null)})
+			await run(w.shadow, ENTITY_B)
+			expect(w.readCardSpaces).not.toHaveBeenCalled()
+			expect(uncompared().cross_space).toBe(1)
+		})
+
+		it("flag on, a failed wide read keeps the first verdict", async () => {
+			const w = widened(true)
+			w.readCardSpaces.mockRejectedValueOnce(new Error("boom"))
+			await run(w.shadow, ENTITY_B)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared().cross_space).toBe(1)
+		})
+	})
+
 	it("EntityPage, space A: match, and the co-root relations field is uncompared", async () => {
 		const {shadow} = setup(geoOutput(PAGE_A))
 		await run(shadow, PAGE_A, ["entity", "relations"])

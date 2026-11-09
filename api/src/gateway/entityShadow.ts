@@ -1302,6 +1302,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	relationsTypeFilter?: boolean
 	/** Settle a nested name geo-db prints as none (named in a Space outside the read) from its Name in every Space (`GEODB_CROSS_SPACE_NAMES_SHADOW`). */
 	crossSpaceNames?: boolean
+	/** Re-judge a `cross_space` comparison against the card read across every Space the entity lives in (`GEODB_CROSS_SPACE_HOLDERS_SHADOW`; `widenCrossSpace`). */
+	crossSpaceHolders?: boolean
 	/** Compare the fields of a relation row's nested entity (`description`, `types`, `spaceIds`, lists) against one batched card read (`GEODB_NESTED_ENTITY_SHADOW`). */
 	nestedEntity?: boolean
 	/** Compare the `property { dataTypeId dataTypeName renderableTypeId renderableTypeName format isType }` metadata of a values row against one batched card read of the Properties (`GEODB_PROPERTY_INFO_SHADOW`). */
@@ -1652,6 +1654,56 @@ export async function compareDerivedWide(
 	return names ? compareDerived(plan, card, geo, scope, names) : first
 }
 
+/** A widened read of one entity's card, with the PostGraphile card put in the read's Space ids. */
+export type WidenedRead = {rows: GeoRow[]; scope: ReadScope; card: NonNullable<PostgresCard>}
+
+/**
+ * Reads the entity's card across every Space it lives in, for a comparison that left `cross_space` because PostGraphile
+ * answered from Spaces the first read did not cover. The Spaces are the ones PostGraphile names (`spacesToRead`, read as
+ * one multi-Space line); an answer that names too many, or none, is read across every Space geo-db has loaded, narrowed
+ * by `.args.holders` (`readEverySpace`), with the card's Space ids mapped to geo-db's as the light shadow does. Null when
+ * it cannot be read (the comparison keeps its `cross_space`). Never throws.
+ */
+export async function widenCrossSpace(
+	deps: EntityShadowDeps,
+	card: NonNullable<PostgresCard>,
+	entityId: string,
+	label: string,
+): Promise<WidenedRead | null> {
+	const named = spacesToRead({spaceId: null}, card)
+	if (named && named.length > 0 && named.length <= (deps.multiSpace === true ? MAX_LINE_SPACES : MAX_READ_SPACES)) {
+		const read = await readWide(deps, entityId, named, label)
+		if (read.ok) return {rows: read.rows, scope: read.scope, card}
+		if (read.result === "failed" || read.reason !== "many_spaces") return null
+	}
+	const every = await readEverySpace(deps, entityId, label)
+	if (!every.ok) return null
+	const geoSpace = async (id: string | null): Promise<string | null> =>
+		id === null ? null : ((await deps.geoSpaceOf(normalizeUuid(id))) ?? null)
+	const mapped: NonNullable<PostgresCard> = {...card}
+	if (card.spaceIds) {
+		const out: string[] = []
+		for (const id of card.spaceIds) {
+			const geo = await geoSpace(id)
+			if (geo) out.push(geo)
+		}
+		mapped.spaceIds = out
+	}
+	if (card.allValues)
+		mapped.allValues = {
+			...card.allValues,
+			rows: await Promise.all(card.allValues.rows.map(async (r) => ({...r, spaceId: await geoSpace(r.spaceId)}))),
+		}
+	if (card.allRelations)
+		mapped.allRelations = {
+			...card.allRelations,
+			rows: await Promise.all(
+				card.allRelations.rows.map(async (r) => ({...r, spaceId: await geoSpace(r.spaceId)})),
+			),
+		}
+	return {rows: every.rows, scope: every.scope, card: mapped}
+}
+
 /**
  * Asks geo-db for one entity's card (with names) and judges PostGraphile's card against it: the statement diff
  * plus the derived checks. When the plan has no space the entity's own spaces are all read and their cards are
@@ -1696,7 +1748,21 @@ export async function checkCard(
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 	const rows = read.rows
 	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows, {skipEmptyText: true})
-	const derived = await compareDerivedWide(deps, plan, postgres, rows, read.scope, label)
+	// A comparison left `cross_space` by the Spaces it did not read is judged again against the card read across every
+	// Space the entity lives in (the statement diff above stays on the Spaces asked for).
+	let judged: {card: NonNullable<PostgresCard>; rows: GeoRow[]; scope: ReadScope} = {
+		card: postgres,
+		rows,
+		scope: read.scope,
+	}
+	if (
+		deps.crossSpaceHolders === true &&
+		compareDerived(plan, postgres, rows, read.scope).uncompared.includes("cross_space")
+	) {
+		const wide = await widenCrossSpace(deps, postgres, entityId, label)
+		if (wide) judged = wide
+	}
+	const derived = await compareDerivedWide(deps, plan, judged.card, judged.rows, judged.scope, label)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
