@@ -50,6 +50,7 @@ import {createFeedRunsShadow, readFeedRunsShadowConfig} from "./src/geodb/feedRu
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
+import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
 	createPostgresRankedReadsSource,
 	createRankedReadsShadow,
@@ -480,6 +481,23 @@ if (configRevisionShadowConfig.enabled) {
 const feedRunsShadowConfig = readFeedRunsShadowConfig(process.env)
 if (feedRunsShadowConfig.enabled) {
 	createFeedRunsShadow({config: feedRunsShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
+}
+// GEODB_PRIVATE_READERS_SHADOW (off by default) samples one user on a timer and compares the twins of user_topic_weights (readWeights,
+// readOwnWeights) and feed_user_seen (readSeen), computed from geo-db's restricted collections 28 / 29, with Postgres
+// (gaia_api_private_readers_shadow_total). It needs GEODB_PRIVATE_KEY_PATH, a key whose principal has derived_read=28,29;
+// the shared reader key never does. Background only; the readers stay on Postgres. Counts only, never an id or value.
+const privateReadersShadowConfig = readPrivateReadersShadowConfig(process.env)
+if (privateReadersShadowConfig.enabled && !privateReadersShadowConfig.keyPath) {
+	log.warn("private readers shadow is on but GEODB_PRIVATE_KEY_PATH is not set; not mounted")
+} else if (privateReadersShadowConfig.enabled && privateReadersShadowConfig.keyPath) {
+	createPrivateReadersShadow({
+		config: privateReadersShadowConfig,
+		db,
+		reader: createDerivedReader({...geoDbCardConfig, keyPath: privateReadersShadowConfig.keyPath}),
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
 }
 const internalRoutes = mountInternalRoutes(
 	app,

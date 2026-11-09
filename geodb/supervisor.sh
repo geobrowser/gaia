@@ -34,8 +34,8 @@ CONFIGMAP="${GEODB_CONFIGMAP:-geodb-space-map}"
 SA=/var/run/secrets/kubernetes.io/serviceaccount
 
 # Collections 27, 28 and 29 hold per-person rows and are restricted (`derived_restricted`, geo-db 9b871ed4e4): only a
-# principal with write=*, the collection in derived= or in derived_read= may read them. No api reader exists yet, so
-# the reader key has no derived_read=.
+# principal with write=*, the collection in derived= or in derived_read= may read them. The shared reader key has no
+# derived_read=: every indexer mounts it. The api's private reader key (below, optional) is the only reader of 28 and 29.
 # The writer may publish (found) any Space; the reader reads and nothing else. The optional cursor key
 # (hermes's meta-cursor mirror, Secret geodb-cursor-key) may write derived collection 10 and nothing
 # else: no read, no graph write, no publish. Needs geodb-serve at geo-db d903c8e017 or later (`derived=`).
@@ -61,6 +61,13 @@ fi
 # (entity_type_ranking, entity_topic_ranking, global/local/space_scores, account_weights, ranks.ranking_scores, account_exclusions, space_topic_suggestions, then the per-user 27 external_interest_signals, 28 user_topic_signals, 29 feed_user_seen_daily) and nothing else (RUNBOOK section 12).
 if [ -n "${GEODB_SCORES_KEYID:-}" ]; then
 	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29" "$RUN/binding.txt"
+fi
+
+# The api's private reader key (Secret geodb-private-reader-key, k8s/v2/geodb-private-reader-key-job.yaml): reads the
+# restricted per-user collections 28 (user_topic_signals) and 29 (feed_user_seen_daily) and nothing else; no Space,
+# no write, no publish. Needs geodb-serve at geo-db 9b871ed4e4 or later (`derived_read=`).
+if [ -n "${GEODB_PRIVATE_READER_KEYID:-}" ]; then
+	sed -i "/^grant_ttl_s/i principal = $GEODB_PRIVATE_READER_KEYID read=- write=- publish=- derived_read=28,29" "$RUN/binding.txt"
 fi
 
 # Patch the two ids into the ConfigMap (create it if absent). Succeeds quietly where there is no cluster.
