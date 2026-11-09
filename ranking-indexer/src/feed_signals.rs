@@ -236,6 +236,8 @@ pub async fn apply(
     if dry_run {
         tx.rollback().await?;
     } else {
+        // Fence (GEODB_JOB_LEASE): refuse to commit unless this run still holds the job lease.
+        crate::job_lease::fence().await?;
         tx.commit().await?;
     }
     Ok(report)

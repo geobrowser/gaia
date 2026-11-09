@@ -31,6 +31,7 @@ pub mod feed_signals;
 pub mod feed_signals_compute;
 pub mod feed_signals_mirror;
 pub mod feed_user_seen_mirror;
+pub mod job_lease;
 pub mod lease;
 pub mod membership;
 pub mod metrics;

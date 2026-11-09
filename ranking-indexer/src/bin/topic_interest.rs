@@ -34,7 +34,36 @@ async fn main() -> Result<(), IndexerError> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // The sweep skips when busy (every 2 minutes); the nightly refit waits, then fails loudly.
+    let mode: Mode = env::args()
+        .nth(1)
+        .ok_or_else(|| IndexerError::Config("usage: topic_interest sweep|refit".into()))?
+        .parse()?;
+    let wait = if mode == Mode::Refit { 600 } else { 0 };
+    // Job lease (GEODB_JOB_LEASE, default off): if another run holds it, exit 0 without writing.
+    if matches!(
+        ranking_indexer::job_lease::guard(
+            ranking_indexer::job_lease::KEY_USER_TOPIC_INTEREST,
+            wait
+        )
+        .await?,
+        ranking_indexer::job_lease::Guard::Busy
+    ) {
+        if mode == Mode::Refit {
+            // A skipped nightly refit must not pass silently: fail the Job so the alert fires.
+            return Err(IndexerError::Config(
+                "job lease still held after waiting; the nightly refit did not run".into(),
+            ));
+        }
+        info!("job lease held by another run; exiting without writing");
+        return Ok(());
+    }
+    let result = run().await;
+    ranking_indexer::job_lease::finish().await;
+    result
+}
 
+async fn run() -> Result<(), IndexerError> {
     let mode: Mode = env::args()
         .nth(1)
         .ok_or_else(|| IndexerError::Config("usage: topic_interest sweep|refit".into()))?
