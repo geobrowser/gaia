@@ -261,7 +261,7 @@ impl Dependencies {
                     db_path = %rm.config().db_path.display(),
                     cache_size = rm.config().cache_size,
                     db_size_mb = db_size_mb,
-                    sqlite_entries = rm.sqlite_count(),
+                    store_entries = rm.store_count(),
                     "Relation map initialized"
                 );
 
