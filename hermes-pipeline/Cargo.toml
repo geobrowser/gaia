@@ -35,8 +35,10 @@ ethabi = "18.0.0"
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json", "tls-rustls", "uuid"] }
 serde_json = "1"
+metrics = "0.24"
 
 [dev-dependencies]
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 criterion = { version = "0.5", features = ["html_reports"] }
 # Pins collect_uris to the substream module the IPFS warmer consumes (see prefetch.rs tests).
 hermes-substream = { path = "../hermes-substream" }
