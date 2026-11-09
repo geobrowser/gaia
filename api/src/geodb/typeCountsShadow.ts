@@ -55,6 +55,9 @@ export const RESULTS = ["match", "mismatch", "not_served", "fallback", "failed"]
 export type Result = (typeof RESULTS)[number]
 
 /** The shape of a call, a fixed set: the blended rate hid that these fail for different reasons. */
+/** The most topic or Space ids a disagreement line carries. */
+const MAX_LOGGED_IDS = 8
+
 export const FORMS = ["plain", "debate", "spaces", "spaces_debate", "topics"] as const
 export type Form = (typeof FORMS)[number]
 
@@ -388,6 +391,9 @@ export function createTypeCountsShadow(deps: {
 					debate: call.debateTaggedClaims,
 					topics: call.topics.length,
 					spaces: call.spaces?.length ?? 0,
+					// The call itself, so a disagreement can be replayed against Postgres: the ids, capped to keep the line bounded.
+					topicIds: call.topics.slice(0, MAX_LOGGED_IDS),
+					spaceIds: call.spaces?.slice(0, MAX_LOGGED_IDS) ?? [],
 					types: pg.size,
 					walked: served.walked,
 					diffs,
