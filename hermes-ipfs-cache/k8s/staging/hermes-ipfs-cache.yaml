@@ -67,6 +67,11 @@ spec:
               mountPath: /ssl
               readOnly: true
           env:
+            # Postgres writes (ipfs_cache insert, meta cursor). "1" = on (default). "0" = off, the
+            # zero-Postgres cutover switch (plan 10.22): the object-store write-through and the geo-db
+            # cursor mirror keep running. Do not flip while hermes-pipeline's warmer_block reads meta.
+            - name: IPFS_CACHE_PG_WRITES
+              value: "1"
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL
