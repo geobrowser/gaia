@@ -60,6 +60,7 @@ CREATE OR REPLACE FUNCTION pg_temp.p(place integer, days integer DEFAULT 0) RETU
 --   A0B     an agenda in S2 today naming DM first.
 --   AU      an agenda in S2 today naming DU1, DU2 and DY2 with no positions at all.
 --   AY      yesterday's agenda in S1, placing DY, DY2 and DDEM first, second and third.
+--   AT      tomorrow's agenda in S2, placing DU2 first.
 --   All of these debates are 30 days old except DSTRONG.
 --   LC      a claim on A0's block, with debate DLC (10 days old): lifted through its claim only.
 --   ORG     an organic debate on UNL created today, with 40 votes, named by nothing.
@@ -68,7 +69,7 @@ CREATE TEMP TABLE ids AS
 SELECT k, ('b1220000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['UNL','LC','NOTD','D1','D2','D3','DM','DSTRONG','DY','DLC','ORG',
                   'DNULL','DDEM','DU1','DU2','DY2',
-                  'A0','A0B','AU','AY','S1','S2']) WITH ORDINALITY AS u(k, n)
+                  'A0','A0B','AU','AY','S1','S2','AT']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -155,6 +156,7 @@ SELECT pg_temp.agenda('A0', 'S1', 0, ARRAY['LC']);
 SELECT pg_temp.agenda('A0B', 'S2', 0, ARRAY[]::text[]);
 SELECT pg_temp.agenda('AU', 'S2', 0, ARRAY[]::text[]);
 SELECT pg_temp.agenda('AY', 'S1', 1, ARRAY[]::text[]);
+SELECT pg_temp.agenda('AT', 'S2', -1, ARRAY[]::text[]);
 
 SELECT pg_temp.debate(k, 'UNL', 30) FROM ids WHERE k IN ('D1','D2','D3','DM','DY','DNULL','DDEM','DU1','DU2','DY2');
 SELECT pg_temp.debate('DSTRONG', 'UNL', 0), pg_temp.debate('ORG', 'UNL', 0), pg_temp.debate('DLC', 'LC', 10);
@@ -167,6 +169,7 @@ SELECT pg_temp.names('A0B', 'DM', 'S2'), pg_temp.place('A0B', 'DM', 'a0');
 SELECT pg_temp.names('AU', k, 'S2') FROM ids WHERE k IN ('DU1','DU2','DY2');
 SELECT pg_temp.names('AY', k, 'S1') FROM ids WHERE k IN ('DY','DY2','DDEM');
 SELECT pg_temp.place('AY', 'DY', 'a0'), pg_temp.place('AY', 'DY2', 'a1'), pg_temp.place('AY', 'DDEM', 'a2');
+SELECT pg_temp.names('AT', 'DU2', 'S2'), pg_temp.place('AT', 'DU2', 'a0');
 
 SELECT trending.refresh_agenda_listings(false);
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('ORG'), pg_temp.i('D3')]);
@@ -215,6 +218,8 @@ SELECT assert(pg_temp.near(pg_temp.trend('DY2'), pg_temp.b() + pg_temp.p(2, 1)),
 SELECT assert(pg_temp.trend('DDEM') = pg_temp.b() + pg_temp.p(5),
               '2: placed today, today''s place replaces yesterday''s');
 SELECT assert(pg_temp.trend('D3') = 0, '2: an unnamed debate gets nothing');
+SELECT assert(pg_temp.stored_place('AT', 'DU2') = 1 AND pg_temp.trend('DU2') = pg_temp.b(),
+              '2: tomorrow''s place is stored but lifts nothing before its Date');
 
 -- ---------------------------------------------------------------------------
 -- 3. Only named debates; best place; the slots.
@@ -254,6 +259,26 @@ SELECT trending.refresh_agenda_listings(true);
 SELECT assert(pg_temp.near(pg_temp.trend('DY'), pg_temp.b() * pg_temp.f(1)) AND pg_temp.trend('D1') = pg_temp.b() + pg_temp.p(2),
               '4: a day factor of 0 makes the order today only');
 UPDATE entity_ranking_config SET trending_position_day_factor = 0.65 WHERE id;
+SELECT trending.refresh_agenda_listings(true);
+
+-- Unlinking from today's agenda: DSTRONG D1 D2 DM DDEM loses D2 and DDEM, so DM moves up to third.
+SELECT pg_temp.unname('A0', 'D2'), pg_temp.unname('A0', 'DDEM');
+SELECT assert(trending.refresh_agenda_listings(false) = 3, '4: an hourly run re-scores the unlinked debates and the one that moved up');
+SELECT assert(pg_temp.stored_place('A0', 'D2') IS NULL AND pg_temp.stored_place('A0', 'DDEM') IS NULL
+              AND pg_temp.stored_place('A0', 'DM') = 3,
+              '4: the table drops the unlinked places');
+SELECT assert(pg_temp.trend('D2') = 0, '4: unlinked with no other listing, a debate loses the boost and the term');
+SELECT assert(pg_temp.near(pg_temp.trend('DDEM'), pg_temp.b() * pg_temp.f(1) + pg_temp.p(3, 1)),
+              '4: unlinked today, a debate goes back to yesterday''s place, faded');
+SELECT pg_temp.names('A0', 'D2', 'S1'), pg_temp.place('A0', 'D2', 'a1'),
+       pg_temp.names('A0', 'DDEM', 'S1'), pg_temp.place('A0', 'DDEM', 'a4');
+SELECT trending.refresh_agenda_listings(false);
+
+-- Tomorrow's agenda arrives: its Date is today, and the day's full pass applies its place.
+UPDATE values SET datetime_utc = to_timestamp(pg_temp.midnight(0))
+WHERE entity_id = pg_temp.i('AT') AND property_id = '52665f3e-fb7d-48d5-8b6b-abb21b0d36db'::uuid;
+SELECT trending.refresh_agenda_listings(true);
+SELECT assert(pg_temp.trend('DU2') = pg_temp.b() + pg_temp.p(1), '4: on its Date, the agenda''s place applies');
 
 -- ---------------------------------------------------------------------------
 -- 5. Off.
