@@ -24,11 +24,13 @@
  * - the before side of `entity_diff`, always: also an as-of read. It is not counted, because it never could be.
  * - `no_after` (entity_diff) / `no_base` (review): the diff has nothing on the side that can be compared.
  * - `unmapped_space`, `client` (a geo-db client without the reads), `busy` (the pool or the in-flight bound).
- * Block changes and statements in other Spaces are not compared; the diff's relation removals are not compared
- * either, since a removed relation's type and target can still be held by another relation row.
+ * Block changes and statements in other Spaces are not compared.
+ * Removed relations are compared by id at the head: geo-db's relation-by-id read (`readRelationEntity`) returns an
+ * empty page for a closed relation, so each removal must read empty (`removed_open` when geo-db still holds it).
+ * A client without that read skips the removals (and counts `unsupported{client}` when they are all there is).
  *
  * `gaia_api_entity_diff_shadow_total{route,result}`: match, mismatch, unsupported or failed.
- * `..._mismatch_total{route,field}`: after_missing (entity_diff) or base_missing (review).
+ * `..._mismatch_total{route,field}`: after_missing and removed_open (entity_diff) or base_missing (review).
  * `..._statements_total{route,outcome}`: found or missing, the statements compared.
  * `..._unsupported_total{route,reason}` and `..._skipped_total{reason}` (sample, rate) as in the proposal-diff shadow.
  */
@@ -62,7 +64,7 @@ export function readEntityDiffShadowConfig(env: Record<string, string | undefine
 
 export const ROUTES = ["entity_diff", "review"] as const
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
-export const MISMATCH_FIELDS = ["after_missing", "base_missing"] as const
+export const MISMATCH_FIELDS = ["after_missing", "base_missing", "removed_open"] as const
 export const OUTCOMES = ["found", "missing"] as const
 export const UNSUPPORTED_REASONS = ["not_head", "no_after", "no_base", "unmapped_space", "client", "busy"] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
@@ -156,6 +158,7 @@ export type ServedEntityDiff = {
 	toEditId: string
 	values: readonly {propertyId: string; spaceId: string; before: string | null; after: string | null}[]
 	relations: readonly {
+		relationId: string
 		typeId: string
 		spaceId: string
 		before?: {toEntityId: string} | null
@@ -181,7 +184,16 @@ export type EntityDiffShadow = {
 	review(served: ServedReviewDiff): void
 }
 
-type AfterStatements = {entityId: string; values: string[]; relations: {prop: string; target: string}[]}
+type AfterStatements = {
+	entityId: string
+	values: string[]
+	relations: {prop: string; target: string}[]
+	/** Relations the diff removes, by id: at the head each must be closed in geo-db. */
+	removedRelations: string[]
+}
+
+/** Most removed relations read from geo-db for one diff (one read each). */
+const MAX_REMOVED = 16
 
 /** The after-side statements (a value or relation the diff adds or updates) in the request's Space, after the id remap. */
 export function afterStatements(served: ServedEntityDiff): AfterStatements {
@@ -196,6 +208,10 @@ export function afterStatements(served: ServedEntityDiff): AfterStatements {
 				prop: conformingId("entity", r.typeId),
 				target: conformingId("entity", (r.after as {toEntityId: string}).toEntityId),
 			})),
+		removedRelations: served.relations
+			.filter((r) => r.before && !r.after && r.spaceId === served.spaceId)
+			.map((r) => conformingId("entity", r.relationId))
+			.slice(0, MAX_REMOVED),
 	}
 }
 
@@ -256,9 +272,18 @@ export function createEntityDiffShadow(deps: {
 			const rows = log100.filter((r) => r.space === geoSpaceId)
 			if (compact(rows[0]?.editId ?? "") !== compact(served.toEditId))
 				return recordUnsupported("entity_diff", "not_head")
-			const card = await geoDb.readCard({geoSpaceId, entityId: after.entityId})
+			const hasStatements = after.values.length + after.relations.length > 0
+			if (!hasStatements && !geoDb.readRelationEntity) return recordUnsupported("entity_diff", "client")
+			const card = hasStatements ? await geoDb.readCard({geoSpaceId, entityId: after.entityId}) : []
 			const {found, missing} = compareAfter(after, card)
-			finish("entity_diff", "after_missing", 1, found, missing)
+			// A removed relation is closed in geo-db at the head: its by-id read returns an empty page.
+			let open = 0
+			let closed = 0
+			if (geoDb.readRelationEntity)
+				for (const relationId of after.removedRelations)
+					(await geoDb.readRelationEntity({relationId})).length === 0 ? closed++ : open++
+			if (open > 0) bump(mismatches, "entity_diff\tremoved_open")
+			finish("entity_diff", "after_missing", 1, found + closed, missing + open)
 		} catch (error) {
 			failure("entity_diff", error)
 		}
@@ -319,7 +344,7 @@ export function createEntityDiffShadow(deps: {
 			try {
 				if (!admit("entity_diff")) return
 				const after = afterStatements(served)
-				if (after.values.length + after.relations.length === 0) {
+				if (after.values.length + after.relations.length + after.removedRelations.length === 0) {
 					inFlight--
 					return recordUnsupported("entity_diff", "no_after")
 				}
