@@ -15,21 +15,25 @@ fn operator_bins_never_touch_the_pool_directly() {
             continue;
         }
         let src = fs::read_to_string(&path).expect("read bin source");
-        for (n, line) in src.lines().enumerate() {
-            let code = line.split("//").next().unwrap_or("");
-            assert!(
-                !code.contains(".pool"),
-                "{}:{} reaches the pool outside the budget helper; use storage.begin_operator_tx()",
-                path.display(),
-                n + 1
-            );
-            assert!(
-                !code.contains(".begin_with_timeout("),
-                "{}:{} uses the server budget; operator bins use begin_operator_tx()",
-                path.display(),
-                n + 1
-            );
-        }
+        // Strip line comments, then all whitespace, so a call split across lines
+        // (`storage\n    .pool`, `storage.\npool`) cannot dodge the scan.
+        let code: String = src
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<String>()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(
+            !code.contains(".pool"),
+            "{} reaches the pool outside the budget helper; use storage.begin_operator_tx()",
+            path.display()
+        );
+        assert!(
+            !code.contains(".begin_with_timeout("),
+            "{} uses the server budget; operator bins use begin_operator_tx()",
+            path.display()
+        );
         checked += 1;
     }
     assert!(checked >= 6, "expected the operator bins, found {checked}");
