@@ -19,10 +19,23 @@
  *    rate, not one count;
  *  - failed: a read failed.
  *
+ * `gaia_api_ranked_read_shadow_stage_seconds_{sum,count}{stage}`: wall time of each source call (one Postgres transaction), so a
+ * slow statement shows as slow rather than as a random failure, and a failure log names the stage it came from.
+ *
+ * Statement budget. Every source call runs in its own read-only transaction with `SET LOCAL statement_timeout`
+ * (GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS, default 5 min). Without it the shadow had no budget of its own: its pool goes through
+ * the transaction-mode PgBouncer, where the PostGraphile pool's session-level `SET statement_timeout` stays on whichever server
+ * connection it ran on, so about a third of the shadow's statements inherited a 30s limit and the rest ran unbounded. A slow statement
+ * then failed on some passes and not others. `SET LOCAL` ends with the transaction, so nothing leaks to the next client either.
+ * The default is generous on purpose: this is a background comparison that runs every few minutes, not a request path, and its feed stage
+ * has taken minutes on the full ranking tables. A slow stage now shows in the stage metric below instead of as a random `failed`.
+ *
  * Counts only: no entity id, space id or name is logged or labelled.
  */
 
+import {randomUUID} from "node:crypto"
 import {sql} from "drizzle-orm"
+import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import type {Database} from "../forYou/queries"
 import {
 	FEED_READS,
@@ -60,7 +73,7 @@ export type Read = (typeof READS)[number]
 export const RESULTS = ["match", "mismatch", "failed"] as const
 export type Result = (typeof RESULTS)[number]
 
-export type RankedReadsShadowConfig = {enabled: boolean; intervalMs: number; spaces: number}
+export type RankedReadsShadowConfig = {enabled: boolean; intervalMs: number; spaces: number; statementTimeoutMs: number}
 
 const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
 	const n = Number(raw)
@@ -73,6 +86,7 @@ export function readRankedReadsShadowConfig(env: Record<string, string | undefin
 		enabled: flag === "1" || flag === "on" || flag === "true",
 		intervalMs: wholeNumber(env.GEODB_RANKED_READS_SHADOW_INTERVAL_MS, 300_000, 86_400_000),
 		spaces: wholeNumber(env.GEODB_RANKED_READS_SHADOW_SPACES, 5, 50),
+		statementTimeoutMs: wholeNumber(env.GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS, 300_000, 600_000),
 	}
 }
 
@@ -105,6 +119,46 @@ let active = false
 const results = new Map<string, number>()
 const bump = (read: Read, result: Result): void =>
 	void results.set(`${read}|${result}`, (results.get(`${read}|${result}`) ?? 0) + 1)
+const stageSeconds = new Map<string, {sum: number; count: number}>()
+const timeStage = (stage: string, seconds: number): void => {
+	const s = stageSeconds.get(stage) ?? {sum: 0, count: 0}
+	s.sum += seconds
+	s.count++
+	stageSeconds.set(stage, s)
+}
+
+/** An error from a source call, tagged with the call (stage) it came from so the failure log can name it. */
+const STAGE = Symbol("rankedReadsShadowStage")
+const stageOf = (error: unknown): string | undefined =>
+	typeof error === "object" && error !== null ? (error as {[STAGE]?: string})[STAGE] : undefined
+
+/**
+ * `source` with every method timed into the stage metric under `prefix + name`, and any error it throws tagged with that stage.
+ * Pure wrapper; exported for tests.
+ */
+export function timedSource<S extends object>(source: S, prefix = "", now: () => number = () => performance.now()): S {
+	const out = {} as Record<string, unknown>
+	for (const [name, fn] of Object.entries(source)) {
+		if (typeof fn !== "function") {
+			out[name] = fn
+			continue
+		}
+		const stage = prefix + name
+		out[name] = async (...args: unknown[]) => {
+			const start = now()
+			try {
+				return await fn.apply(source, args)
+			} catch (error) {
+				if (typeof error === "object" && error !== null && stageOf(error) === undefined)
+					Object.defineProperty(error, STAGE, {value: stage})
+				throw error
+			} finally {
+				timeStage(stage, (now() - start) / 1000)
+			}
+		}
+	}
+	return out as S
+}
 
 /** Empty until the shadow is mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
 export function renderRankedReadsShadowMetrics(): string {
@@ -118,12 +172,23 @@ export function renderRankedReadsShadowMetrics(): string {
 			lines.push(
 				`gaia_api_ranked_read_shadow_total{read="${read}",result="${result}"} ${results.get(`${read}|${result}`) ?? 0}`,
 			)
+	if (stageSeconds.size > 0) {
+		lines.push(
+			"# HELP gaia_api_ranked_read_shadow_stage_seconds Wall time of each ranked reads shadow source call (one Postgres transaction), by stage.",
+			"# TYPE gaia_api_ranked_read_shadow_stage_seconds summary",
+		)
+		for (const [stage, s] of [...stageSeconds.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+			lines.push(`gaia_api_ranked_read_shadow_stage_seconds_sum{stage="${stage}"} ${s.sum}`)
+			lines.push(`gaia_api_ranked_read_shadow_stage_seconds_count{stage="${stage}"} ${s.count}`)
+		}
+	}
 	return lines.join("\n")
 }
 
 export function __resetRankedReadsShadowMetricsForTests(): void {
 	active = false
 	results.clear()
+	stageSeconds.clear()
 }
 
 export type RankedReadsShadow = {runOnce(): Promise<void>; start(): () => void}
@@ -133,7 +198,11 @@ export function createRankedReadsShadow(deps: {
 	source: RankedReadsSource
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
 }): RankedReadsShadow {
-	const {config, source, log} = deps
+	const {config, log} = deps
+	const source: RankedReadsSource = {
+		...timedSource(deps.source),
+		feeds: deps.source.feeds === undefined ? undefined : timedSource(deps.source.feeds, "feeds."),
+	}
 	active = true
 	let running = false
 	let logged = 0
@@ -147,7 +216,7 @@ export function createRankedReadsShadow(deps: {
 	}
 	const fail = (read: Read, error: unknown) => {
 		bump(read, "failed")
-		log.warn("ranked reads shadow failed", {read, error: String(error)})
+		log.warn("ranked reads shadow failed", {read, stage: stageOf(error), error: String(error)})
 	}
 
 	async function runOnce(): Promise<void> {
@@ -304,11 +373,12 @@ export function createPostgresFeedsSource(db: Database): FeedsShadowSource {
 				),
 			)
 			// A random user by index range scan on the leading user_id column (ORDER BY random() reads every vote row),
-			// wrapping to the first user when the random point is past the last one.
+			// wrapping to the first user when the random point is past the last one. The point is drawn here and bound as a
+			// constant: gen_random_uuid() is volatile, so in the WHERE clause it is re-drawn per row and cannot bound the scan.
 			const user = (
 				rowsOf(
 					await db.execute(
-						sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 AND user_id >= gen_random_uuid() ORDER BY user_id LIMIT 1`,
+						sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 AND user_id >= ${randomUUID()}::uuid ORDER BY user_id LIMIT 1`,
 					),
 				)[0] ??
 				rowsOf(
@@ -511,6 +581,48 @@ export function createPostgresFeedsSource(db: Database): FeedsShadowSource {
 			)[0]
 			return r === undefined ? null : String(r.id)
 		},
+	}
+}
+
+/** A database that can open transactions: what the budgeted source needs. */
+export type TransactionalDatabase = Database & Pick<NodePgDatabase<Record<string, unknown>>, "transaction">
+
+/**
+ * `make(db)` with every method run in its own read-only transaction that first sets `SET LOCAL statement_timeout = ms`. Each call
+ * builds a fresh source on the transaction handle, so no statement escapes the budget and nothing outlives the transaction.
+ */
+export function budgeted<S extends object>(db: TransactionalDatabase, ms: number, make: (tx: Database) => S): S {
+	if (!Number.isSafeInteger(ms) || ms < 1)
+		throw new Error(`statement timeout must be a positive whole number of ms: ${ms}`)
+	const out = {} as Record<string, unknown>
+	for (const [name, value] of Object.entries(make(db))) {
+		if (typeof value !== "function") continue
+		out[name] = (...args: unknown[]) =>
+			db.transaction(
+				async (tx) => {
+					await tx.execute(sql.raw(`SET LOCAL statement_timeout = ${ms}`))
+					const fn = (make(tx) as Record<string, (...a: unknown[]) => unknown>)[name] as (
+						...a: unknown[]
+					) => unknown
+					return fn(...args)
+				},
+				{accessMode: "read only"},
+			)
+	}
+	return out as S
+}
+
+/** The Postgres source with every call budgeted (see the statement budget note at the top of this file). */
+export function createBudgetedPostgresRankedReadsSource(
+	db: TransactionalDatabase,
+	statementTimeoutMs: number,
+): RankedReadsSource {
+	return {
+		...budgeted(db, statementTimeoutMs, (tx) => {
+			const {feeds: _feeds, ...reads} = createPostgresRankedReadsSource(tx)
+			return reads
+		}),
+		feeds: budgeted(db, statementTimeoutMs, createPostgresFeedsSource),
 	}
 }
 

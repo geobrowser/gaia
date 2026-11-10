@@ -63,7 +63,7 @@ import {
 	readProposalDiffShadowConfig,
 } from "./src/geodb/proposalDiffShadow"
 import {
-	createPostgresRankedReadsSource,
+	createBudgetedPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
@@ -498,7 +498,11 @@ if (entityColumnsShadowConfig.enabled) {
 // them to the SQL functions (gaia_api_ranked_read_shadow_total). Background only; reads stay on Postgres.
 const rankedReadsShadowConfig = readRankedReadsShadowConfig(process.env)
 if (rankedReadsShadowConfig.enabled) {
-	createRankedReadsShadow({config: rankedReadsShadowConfig, source: createPostgresRankedReadsSource(db), log}).start()
+	createRankedReadsShadow({
+		config: rankedReadsShadowConfig,
+		source: createBudgetedPostgresRankedReadsSource(db, rankedReadsShadowConfig.statementTimeoutMs),
+		log,
+	}).start()
 }
 // GEODB_ENTITIES_BEST_ORDER_SHADOW (off by default) builds pages of entities_in_best_order / entities_ordered_by_score from geo-db's
 // derived collections 2, 3 and 21 and compares the id ORDER with Postgres (gaia_api_entities_best_order_shadow_total). Background only.
