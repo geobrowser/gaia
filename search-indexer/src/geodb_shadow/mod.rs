@@ -71,7 +71,7 @@ pub const SHADOW: &str = "search_indexer_geodb_shadow_total";
 /// `entities_for_spaces` only, `extra_relation_only` (geo-db holds the entity through relations
 /// alone, which Postgres's `values` rule never lists: expected, not a disagreement).
 pub const SHADOW_MISMATCH: &str = "search_indexer_geodb_shadow_mismatch_total";
-/// Comparisons not made: `lookup`, `reason` = `busy` | `space_not_loaded` | `space_map_unreadable` | `too_large`.
+/// Comparisons not made: `lookup`, `reason` = `busy` | `space_not_loaded` | `space_map_unreadable` | `too_large` | `geodb_ahead`.
 pub const SHADOW_SKIPPED: &str = "search_indexer_geodb_shadow_skipped_total";
 
 pub const SPACES_FOR_ENTITIES: &str = "spaces_for_entities";
@@ -93,7 +93,7 @@ pub fn describe() {
     metrics::describe_counter!(
         SHADOW_SKIPPED,
         "Shadow comparisons not made, by lookup and reason \
-         (busy, space_not_loaded, space_map_unreadable, too_large)"
+         (busy, space_not_loaded, space_map_unreadable, too_large, geodb_ahead)"
     );
     // Register every series at zero, so a shadow that is on but has not yet sampled renders
     // zeroes instead of nothing. The twinned lookups run only on score, relation-removal and
@@ -115,6 +115,7 @@ pub fn describe() {
             "space_not_loaded",
             "space_map_unreadable",
             "too_large",
+            "geodb_ahead",
         ] {
             metrics::counter!(SHADOW_SKIPPED, "lookup" => lookup, "reason" => reason).increment(0);
         }
@@ -232,6 +233,10 @@ pub struct Outcome {
     pub unmapped: u64,
     /// Items skipped because a Space was past the scan cap; feeds [`SHADOW_SKIPPED`] `too_large`.
     pub oversized: u64,
+    /// Relations Postgres still holds live that geo-db no longer has at all; feeds [`SHADOW_SKIPPED`]
+    /// `geodb_ahead`. Every caller of `docs_for_relations` is resolving a relation removal, and the
+    /// feeder applies a block before kg-indexer commits it, so this is the expected order, not a gap.
+    pub geodb_ahead: u64,
     /// One line per disagreeing or failed item, for the log.
     pub notes: Vec<String>,
 }
@@ -277,6 +282,7 @@ pub fn record(lookup: &'static str, o: &Outcome) {
     }
     skipped(lookup, "space_not_loaded", o.unmapped);
     skipped(lookup, "too_large", o.oversized);
+    skipped(lookup, "geodb_ahead", o.geodb_ahead);
     if o.mismatched > 0 || o.failed > 0 {
         warn!(
             event = "geodb_shadow_mismatch",
@@ -630,6 +636,12 @@ pub async fn compare_docs_for_relations(
         }
         let sid = conforming_id("statement", relation);
         match statement_owners(reader, spaces.all(), &sid).await {
+            // Every relation here is being removed (the lookup resolves RemoveRelationById). Postgres
+            // still has it live because kg-indexer has not committed the block; geo-db, fed
+            // earlier, has already dropped it. That order is expected, so it is counted apart
+            // rather than as a disagreement. A statement geo-db holds with another owner or Space
+            // still compares as a mismatch.
+            Ok(got) if got.is_empty() && !expected.is_empty() => o.geodb_ahead += 1,
             Ok(got) => {
                 let (missing, extra) = diff(&expected, &got);
                 o.item(format_args!("relation {relation}"), missing, extra);
@@ -1157,12 +1169,12 @@ mod tests {
         let spaces = map(&[1, 2]);
         let sample = vec![
             (r1, vec![(a, sp(1))]), // live, agrees
-            (r2, vec![(a, sp(1))]), // live in Postgres, absent in geo-db
+            (r2, vec![(a, sp(1))]), // live in Postgres, absent in geo-db: geo-db is ahead
             (r3, vec![(a, sp(2))]), // owner differs
         ];
         let o = compare_docs_for_relations(&f, &spaces, &sample).await;
-        assert_eq!((o.matched, o.mismatched), (1, 2));
-        assert_eq!((o.missing, o.extra), (2, 1));
+        assert_eq!((o.matched, o.mismatched, o.geodb_ahead), (1, 1, 1));
+        assert_eq!((o.missing, o.extra), (1, 1));
     }
 
     #[tokio::test]
