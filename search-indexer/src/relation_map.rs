@@ -303,6 +303,36 @@ impl RelationMap {
         self.metrics.inserts.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Put mappings in the LRU cache only, so a lookup later in the same batch finds them
+    /// before `insert_many` writes them to the store.
+    pub fn remember(&self, relation_id: Uuid, entity_id: Uuid, space_id: Uuid) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.put(relation_id, (entity_id, space_id));
+        }
+    }
+
+    /// Insert many relation mappings: all into the LRU cache, and all into the store in
+    /// one transaction, so a batch costs one commit rather than one per relation.
+    /// Never fails: logs errors and continues.
+    pub fn insert_many(&self, rows: &[(Uuid, Uuid, Uuid)]) {
+        if rows.is_empty() {
+            return;
+        }
+        if let Ok(mut cache) = self.cache.lock() {
+            for (r, e, s) in rows {
+                cache.put(*r, (*e, *s));
+            }
+        }
+        if let Err(e) = self.write_batch(rows, &[]) {
+            error!(error = %e, rows = rows.len(), "Failed to insert batch into relation map store");
+            self.metrics.store_errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        self.metrics
+            .inserts
+            .fetch_add(rows.len() as u64, Ordering::Relaxed);
+    }
+
     /// Look up a relation mapping. Checks LRU cache first, then the store.
     /// Returns None if not found in either or on error.
     pub fn lookup(&self, relation_id: &Uuid) -> Option<(Uuid, Uuid)> {
@@ -634,6 +664,41 @@ mod tests {
 
         let m = map.metrics_snapshot();
         assert!(m.store_hits > 0, "Should have hit the store");
+    }
+
+    #[test]
+    fn test_insert_many_writes_one_batch_that_survives_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = test_config(&dir);
+        let sid = Uuid::new_v4();
+        let rows: Vec<(Uuid, Uuid, Uuid)> = (0..50)
+            .map(|_| (Uuid::new_v4(), Uuid::new_v4(), sid))
+            .collect();
+
+        {
+            let map = RelationMap::open(config.clone()).expect("open");
+            map.insert_many(&[]);
+            map.insert_many(&rows);
+            assert_eq!(map.store_count(), 50);
+            assert_eq!(map.metrics_snapshot().inserts, 50);
+            map.checkpoint();
+        }
+
+        let map = RelationMap::open(config).expect("reopen");
+        for (r, e, s) in &rows {
+            assert_eq!(map.lookup(r), Some((*e, *s)));
+        }
+    }
+
+    #[test]
+    fn test_remember_is_cache_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let map = RelationMap::open(test_config(&dir)).expect("open");
+        let (rid, eid, sid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+
+        map.remember(rid, eid, sid);
+        assert_eq!(map.lookup(&rid), Some((eid, sid)));
+        assert_eq!(map.store_count(), 0, "remember must not write the store");
     }
 
     #[test]
