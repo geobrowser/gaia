@@ -58,12 +58,17 @@ const SCAN_PAGE: usize = 512;
 /// it (on either side) is skipped and counted `too_large`, never compared on a part.
 const MAX_SCAN_PAGES: usize = 8;
 const MAX_SCAN_ENTITIES: usize = SCAN_PAGE * MAX_SCAN_PAGES;
+/// Extras of one Space classified by the card check; the rest stay plain `extra_in_geodb`. One batch
+/// of the card read's `ids` limit.
+const MAX_EXTRA_CHECKS: usize = 32;
 /// Most Spaces one request line may scope (`geodb-client pipe`, as the api's client caps it).
 const MAX_LINE_SPACES: usize = 1024;
 
 /// One per sampled item: `lookup`, `result` = `match` | `mismatch` | `failed`.
 pub const SHADOW: &str = "search_indexer_geodb_shadow_total";
-/// One per disagreeing element: `lookup`, `kind` = `missing_in_geodb` | `extra_in_geodb`.
+/// One per disagreeing element: `lookup`, `kind` = `missing_in_geodb` | `extra_in_geodb`, or, for
+/// `entities_for_spaces` only, `extra_relation_only` (geo-db holds the entity through relations
+/// alone, which Postgres's `values` rule never lists: expected, not a disagreement).
 pub const SHADOW_MISMATCH: &str = "search_indexer_geodb_shadow_mismatch_total";
 /// Comparisons not made: `lookup`, `reason` = `busy` | `space_not_loaded` | `space_map_unreadable` | `too_large`.
 pub const SHADOW_SKIPPED: &str = "search_indexer_geodb_shadow_skipped_total";
@@ -82,7 +87,7 @@ pub fn describe() {
     metrics::describe_counter!(
         SHADOW_MISMATCH,
         "Elements where geo-db disagreed with Postgres, by lookup and kind \
-         (missing_in_geodb, extra_in_geodb)"
+         (missing_in_geodb, extra_in_geodb, extra_relation_only)"
     );
     metrics::describe_counter!(
         SHADOW_SKIPPED,
@@ -101,7 +106,7 @@ pub fn describe() {
         for result in ["match", "mismatch", "failed"] {
             metrics::counter!(SHADOW, "lookup" => lookup, "result" => result).increment(0);
         }
-        for kind in ["missing_in_geodb", "extra_in_geodb"] {
+        for kind in ["missing_in_geodb", "extra_in_geodb", "extra_relation_only"] {
             metrics::counter!(SHADOW_MISMATCH, "lookup" => lookup, "kind" => kind).increment(0);
         }
         for reason in [
@@ -221,6 +226,8 @@ pub struct Outcome {
     pub failed: u64,
     pub missing: u64,
     pub extra: u64,
+    /// Extras geo-db holds through relations alone; counted, not a mismatch.
+    pub relation_only: u64,
     pub unmapped: u64,
     /// Items skipped because a Space was past the scan cap; feeds [`SHADOW_SKIPPED`] `too_large`.
     pub oversized: u64,
@@ -258,7 +265,11 @@ pub fn record(lookup: &'static str, o: &Outcome) {
     total("match", o.matched);
     total("mismatch", o.mismatched);
     total("failed", o.failed);
-    for (kind, n) in [("missing_in_geodb", o.missing), ("extra_in_geodb", o.extra)] {
+    for (kind, n) in [
+        ("missing_in_geodb", o.missing),
+        ("extra_in_geodb", o.extra),
+        ("extra_relation_only", o.relation_only),
+    ] {
         if n > 0 {
             metrics::counter!(SHADOW_MISMATCH, "lookup" => lookup, "kind" => kind).increment(n);
         }
@@ -492,14 +503,56 @@ async fn space_entities(
     Ok(None)
 }
 
+/// Which of `entities` (at most [`MAX_EXTRA_CHECKS`], geo-db ids) `space` holds through relations
+/// alone: two batched card reads, every statement and the reference statements only, and an entity
+/// whose counts are equal (and not zero) has no literal. Postgres's rule reads `values`, so such an
+/// entity is not one it would list.
+async fn relation_only(
+    reader: &dyn GeoDbReader,
+    space: &str,
+    entities: &[String],
+) -> Result<BTreeSet<String>, ShadowError> {
+    let scope = [space.to_string()];
+    let ids = entities
+        .iter()
+        .map(|e| format!("\"{e}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut counts = Vec::new();
+    for narrow in ["", ", .relations = true"] {
+        let doc = format!(
+            ".{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", \
+             .args = .{{ .ids = .{{ {ids} }}{narrow} }} }} }} }}"
+        );
+        let body = reader.query(&scope, &doc).await?;
+        let mut per: HashMap<String, usize> = HashMap::new();
+        for cells in rows(&body) {
+            let entity = cells
+                .get(3)
+                .filter(|e| e.len() == 32)
+                .ok_or_else(|| ShadowError::BadRow(cells.join("\t")))?;
+            *per.entry((*entity).to_string()).or_default() += 1;
+        }
+        counts.push(per);
+    }
+    Ok(counts[0]
+        .iter()
+        .filter(|(e, all)| counts[1].get(*e) == Some(*all))
+        .map(|(e, _)| e.clone())
+        .collect())
+}
+
 /// Twin of `entities_for_spaces`: for each `(Space, Postgres entities)`, the entities geo-db holds
 /// in that Space, one Space a read scope (the read answers one row an entity, so a union scope
 /// would lose which Space held it).
 ///
 /// Postgres reads `values` only while geo-db counts any visible statement, relations included, so
 /// an entity whose only footprint in a Space is an outgoing relation shows as `extra_in_geodb`, as
-/// in [`compare_spaces_for_entities`]. A Space past the scan cap on either side is skipped
-/// (`too_large`), and the sample stops at its first failed read.
+/// in [`compare_spaces_for_entities`]. So the extras are classified (the first
+/// [`MAX_EXTRA_CHECKS`] of a Space, by [`relation_only`]): those holding relations alone count
+/// `extra_relation_only` and are no mismatch; the rest, past the cap or after a failed check, stay
+/// `extra_in_geodb`. A Space past the scan cap on either side is skipped (`too_large`), and the
+/// sample stops at its first failed scan.
 pub async fn compare_entities_for_spaces(
     reader: &dyn GeoDbReader,
     spaces: &Spaces,
@@ -521,8 +574,20 @@ pub async fn compare_entities_for_spaces(
             .collect();
         match space_entities(reader, geo).await {
             Ok(Some(got)) => {
-                let (missing, extra) = diff(&expected, &got);
-                o.item(format_args!("space {space}"), missing, extra);
+                let extras: Vec<String> = got.difference(&expected).cloned().collect();
+                let check = &extras[..extras.len().min(MAX_EXTRA_CHECKS)];
+                let rel = if check.is_empty() {
+                    BTreeSet::new()
+                } else {
+                    relation_only(reader, geo, check).await.unwrap_or_default()
+                };
+                o.relation_only += rel.len() as u64;
+                let missing = expected.difference(&got).count();
+                o.item(
+                    format_args!("space {space}"),
+                    missing,
+                    extras.len() - rel.len(),
+                );
             }
             Ok(None) => o.oversized += 1,
             Err(e) => {
@@ -788,6 +853,8 @@ mod tests {
         statements: HashMap<String, Vec<(String, String)>>,
         /// Space -> the entities its `space_entities` scan holds, in the scan's order.
         scans: HashMap<String, Vec<String>>,
+        /// (Space, entity) -> its statements, each `true` when a reference (a relation).
+        cards: HashMap<(String, String), Vec<bool>>,
         calls: Mutex<Vec<usize>>,
         fail: bool,
     }
@@ -806,7 +873,19 @@ mod tests {
             }
             let multi = spaces.len() > 1;
             let mut out = String::from("# plan\n");
-            if let Some(at) = doc.find(".space_entities = ") {
+            if let Some(at) = doc.find(".ids = .{ ") {
+                let rel_only = doc.contains(".relations = true");
+                let list = &doc[at + ".ids = .{ ".len()..];
+                let list = &list[..list.find('}').unwrap()];
+                for id in list.split('"').filter(|t| t.len() == 32) {
+                    let stmts = self.cards.get(&(spaces[0].clone(), id.to_string()));
+                    for is_ref in stmts.into_iter().flatten() {
+                        if *is_ref || !rel_only {
+                            out.push_str(&format!("\t\t\t{id}\n"));
+                        }
+                    }
+                }
+            } else if let Some(at) = doc.find(".space_entities = ") {
                 let rest = &doc[at + ".space_entities = ".len()..];
                 let limit: usize = rest
                     .split(|c: char| !c.is_ascii_digit())
@@ -932,7 +1011,61 @@ mod tests {
         assert_eq!((o.matched, o.mismatched, o.failed), (1, 2, 0));
         assert_eq!((o.missing, o.extra, o.unmapped, o.oversized), (1, 1, 1, 0));
         // One Space a read, so the answer is (entity, Space) pairs, never a union.
-        assert_eq!(*f.calls.lock().unwrap(), vec![1, 1, 1, 1, 1, 1]);
+        assert_eq!(f.calls.lock().unwrap().len(), 8); // + 2 card reads for sp(3)'s extra
+    }
+
+    #[tokio::test]
+    async fn relation_only_extras_get_their_own_reason_and_are_not_a_mismatch() {
+        let (a, b, c) = (u(5001), u(5002), u(5003));
+        let mut f = Fixture::default();
+        // Postgres lists only a. b holds a relation alone; c holds a value and a relation.
+        f.scans.insert(g(1), vec![hex(&a), hex(&b), hex(&c)]);
+        f.cards.insert((g(1), hex(&b)), vec![true, true]);
+        f.cards.insert((g(1), hex(&c)), vec![false, true]);
+        let o = compare_entities_for_spaces(&f, &map(&[1]), &[(sp(1), vec![a])]).await;
+        assert_eq!((o.relation_only, o.extra, o.missing), (1, 1, 0));
+        assert_eq!((o.matched, o.mismatched), (0, 1));
+        // Only relation-only extras: the Space agrees with what SQL lists.
+        let o = compare_entities_for_spaces(&f, &map(&[1]), &[(sp(1), vec![a, c])]).await;
+        assert_eq!(
+            (o.relation_only, o.extra, o.matched, o.mismatched),
+            (1, 0, 1, 0)
+        );
+        // Two batched card reads (all statements, relations only) after the scan's two pages.
+        assert_eq!(f.calls.lock().unwrap().len(), 2 + 2 + 2 + 2);
+    }
+
+    #[tokio::test]
+    async fn extras_past_the_check_cap_or_a_failed_check_stay_plain_extras() {
+        let mut f = Fixture::default();
+        let n = MAX_EXTRA_CHECKS as u128 + 3;
+        f.scans.insert(g(1), many(n));
+        for e in many(n) {
+            f.cards.insert((g(1), e), vec![true]);
+        }
+        let o = compare_entities_for_spaces(&f, &map(&[1]), &[(sp(1), vec![])]).await;
+        assert_eq!((o.relation_only, o.extra), (MAX_EXTRA_CHECKS as u64, 3));
+    }
+
+    #[tokio::test]
+    async fn a_card_read_that_fails_leaves_the_extras_plain_and_is_not_a_failed_item() {
+        struct ScanOnly(Fixture);
+        #[async_trait]
+        impl GeoDbReader for ScanOnly {
+            async fn query(&self, s: &[String], d: &str) -> Result<String, ShadowError> {
+                if d.contains(".ids = ") {
+                    return Err(ShadowError::Refused("no".into()));
+                }
+                self.0.query(s, d).await
+            }
+        }
+        let mut f = Fixture::default();
+        f.scans.insert(g(1), vec![hex(&u(5002))]);
+        let o = compare_entities_for_spaces(&ScanOnly(f), &map(&[1]), &[(sp(1), vec![])]).await;
+        assert_eq!(
+            (o.relation_only, o.extra, o.failed, o.mismatched),
+            (0, 1, 0, 1)
+        );
     }
 
     #[tokio::test]
@@ -1125,6 +1258,7 @@ mod tests {
             "search_indexer_geodb_shadow_skipped_total{lookup=\"empty_in_space\",reason=\"busy\"} 0",
             "search_indexer_geodb_shadow_total{lookup=\"entities_for_spaces\",result=\"failed\"} 0",
             "search_indexer_geodb_shadow_skipped_total{lookup=\"entities_for_spaces\",reason=\"too_large\"} 0",
+            "search_indexer_geodb_shadow_mismatch_total{lookup=\"entities_for_spaces\",kind=\"extra_relation_only\"} 0",
         ] {
             assert!(out.contains(line), "missing `{line}` in:\n{out}");
         }
