@@ -14,12 +14,14 @@
 //! | [`participation_score`] | `public.entity_participation_score` | 0078 |
 //! | [`ranking_score`] | `public.entity_ranking_score` | 0079 |
 //! | [`score`] | the `computed` CTE and the upsert's `CASE` | 0113 |
-//! | [`trending_terms`] | the `inputs` and `terms` CTEs of `trending.entity_trending_terms` | 0113 |
+//! | [`trending_terms`] | the `inputs` and `terms` CTEs of `trending.entity_trending_terms` | 0113, 0118, 0122 |
 //!
 //! `public.wilson_lower_bound` is [`crate::sql_helpers::wilson_lower_bound`].
 //!
-//! Pinned to the SQL by `tests/fixtures/entity_ranking_score_golden.txt`: 1,200 rows that a scratch Postgres
-//! 16 returned from the migrations' own function definitions. The SQL does this in `numeric` and the twin in
+//! Pinned to the SQL by `tests/fixtures/entity_ranking_score_golden.txt`: 2,736 rows that a scratch Postgres
+//! 16 returned from the migrations' own function definitions (the `G` rows, 1,536 of them, are the listing score
+//! with the position term of migration 0122: the same `CASE`, evaluated in `numeric` over configs, days, places
+//! and day counts). The SQL does this in `numeric` and the twin in
 //! `f64`, so the comparison is to 1e-9 (relative above 1), not bitwise; the largest terms are about 4e4.
 //!
 //! A shadow in `agenda_listings_refresh` (flag `ENTITY_RANKING_SCORE_RUST_COMPUTE`, default off) recomputes
@@ -186,6 +188,11 @@ pub struct TrendConfig {
     pub debate_factor: f64,
     pub horizon_days: i32,
     pub tau_seconds: f64,
+    /// `trending_position_base`, `_step`, `_slots` and `_day_factor` (migration 0122).
+    pub position_base: f64,
+    pub position_step: f64,
+    pub position_slots: i32,
+    pub position_day_factor: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -200,6 +207,9 @@ pub struct TrendInputs {
     /// Midnight of the last listed date in the trending time zone, as an epoch.
     pub listed_epoch: Option<i64>,
     pub created_epoch: Option<i64>,
+    /// A debate's place on its newest ordered day (`trending.debate_positions`), and the days since that day.
+    pub position: Option<i32>,
+    pub position_days: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -210,6 +220,18 @@ pub struct TrendTerms {
     pub source: Option<&'static str>,
     pub listing_score: f64,
     pub topic_score: f64,
+}
+
+/// `(base + step × (slots − place + 1)) × day_factor^days` for a place within the slots whose day is inside
+/// the horizon, else 0. Added to the listing score only while the debate's own listing is inside the horizon.
+fn position_term(cfg: &TrendConfig, t: &TrendInputs, beyond: &impl Fn(i64) -> bool) -> f64 {
+    match (t.position, t.position_days) {
+        (Some(place), Some(days)) if place <= cfg.position_slots && !beyond(days) => {
+            (cfg.position_base + cfg.position_step * f64::from(cfg.position_slots - place + 1))
+                * cfg.position_day_factor.powi(days as i32)
+        }
+        _ => 0.0,
+    }
 }
 
 pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
@@ -226,6 +248,7 @@ pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
             cfg.boost
                 * cfg.day_factor.powi(d as i32)
                 * cfg.debate_factor.powi(t.debates.unwrap_or(0) as i32)
+                + position_term(cfg, t, &beyond)
         }
         _ => 0.0,
     };
@@ -483,6 +506,58 @@ mod tests {
         }
     }
 
+    /// The position fields of a config that has no position term: the T grid has no positions anyway.
+    const POSITIONS_OFF: TrendConfig = TrendConfig {
+        boost: 0.0,
+        topic_boost: 0.0,
+        day_factor: 0.0,
+        debate_factor: 0.0,
+        horizon_days: 0,
+        tau_seconds: 1.0,
+        position_base: 2500.0,
+        position_step: 100.0,
+        position_slots: 50,
+        position_day_factor: 0.3,
+    };
+
+    /// The listing score with the position term (migration 0122), over a grid of configs, days, places and
+    /// day counts, as `numeric` evaluated the CASE in a scratch Postgres 16.
+    #[test]
+    fn position_term_matches_the_sql() {
+        let g = rows("G");
+        assert!(g.len() >= 1500, "grid missing: {}", g.len());
+        let (mut placed, mut lifted) = (0, 0);
+        for (a, o) in g {
+            let cfg = TrendConfig {
+                boost: f(a[0]).unwrap(),
+                day_factor: f(a[1]).unwrap(),
+                debate_factor: f(a[2]).unwrap(),
+                horizon_days: i(a[5]).unwrap() as i32,
+                position_base: f(a[6]).unwrap(),
+                position_step: f(a[7]).unwrap(),
+                position_slots: i(a[8]).unwrap() as i32,
+                position_day_factor: f(a[9]).unwrap(),
+                ..POSITIONS_OFF
+            };
+            let t = TrendInputs {
+                listed: true,
+                days: i(a[4]),
+                debates: i(a[3]),
+                listed_epoch: Some(0),
+                created_epoch: Some(0),
+                position: a.get(10).and_then(|x| i(x)).map(|x| x as i32),
+                position_days: a.get(11).and_then(|x| i(x)),
+                ..Default::default()
+            };
+            let r = trending_terms(&cfg, &t);
+            check("listing", r.listing_score, o[0], &a);
+            check("trending", r.trending_score, o[0], &a);
+            placed += i32::from(t.position.is_some());
+            lifted += i32::from(r.listing_score > 100.0);
+        }
+        assert!(placed > 1000 && lifted > 200, "{placed} {lifted}");
+    }
+
     #[test]
     fn trending_terms_match_the_sql() {
         let g = rows("T");
@@ -495,6 +570,7 @@ mod tests {
                 debate_factor: f(a[3]).unwrap(),
                 horizon_days: i(a[4]).unwrap() as i32,
                 tau_seconds: f(a[5]).unwrap(),
+                ..POSITIONS_OFF
             };
             let t = TrendInputs {
                 listed: i(a[9]).is_some(),
@@ -503,6 +579,7 @@ mod tests {
                 topic_days: i(a[8]),
                 listed_epoch: i(a[9]),
                 created_epoch: i(a[10]),
+                ..Default::default()
             };
             let r = trending_terms(&cfg, &t);
             check("age_credit", r.age_credit, o[0], &a);

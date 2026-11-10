@@ -12,21 +12,28 @@
 //! | [`Graph::entity_listings`] | `trending.entity_listings` (with `newest_listings`, `claim_listings`) | 0118 |
 //! | [`Graph::topic_listings`] | `trending.entity_topic_listings` | 0113 |
 //! | [`Graph::debate_links`], [`Graph::claims_and_debates`] | `trending.debate_links`, `trending.claims_and_debates` | 0113 |
-//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms` | 0118 |
+//! | [`Graph::debate_positions`] | `trending.debate_positions` | 0122 |
+//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms`, with the position term | 0118, 0122 |
+//!
+//! Since 0122 the sweep also keeps `trending.agenda_debate_positions` (a debate's place in its agenda's
+//! Debates relation) in step: [`Position`] is a row of it, and [`rescore_ids`] re-scores the debates whose
+//! place within the slots was added, removed or moved, while the position term is on.
 //!
 //! The arithmetic of the terms (age credit, the listing and topic boosts, which of them is the source) is
-//! [`crate::entity_ranking_score_compute::trending_terms`] from #1303, called here unchanged.
+//! [`crate::entity_ranking_score_compute::trending_terms`] from #1303, which since 0122 also adds the position
+//! term to a listed debate's listing score.
 //!
 //! Not ported, still SQL: reading the graph, the advisory lock, the `trending.agenda_listings` DELETE and
 //! INSERT, the `trending.refresh_state` write, and `public.refresh_entity_ranking_scores` itself (its table
 //! reads, the upsert and the two reconciles). Nothing here writes anything.
 //!
 //! Pinned to the SQL by `tests/fixtures/agenda_rescore_golden.txt`: the migrations' own `trending.*` function
-//! bodies (as 0113 and 0118 leave them) on a scratch Postgres 16, over a seeded graph and 18 scenarios of
-//! stored listings, incoming listings, stored scores, config and full-pass flag. The scratch database stubs
-//! only the two boundaries: `trending.current_agenda_listings()` returns the scenario's incoming rows (that is
-//! [`crate::agenda_listings_compute`]'s job) and `public.refresh_entity_ranking_scores(ids)` records the ids it
-//! was handed instead of scoring them.
+//! bodies (as 0113, 0118 and 0122 leave them) on a scratch Postgres 16, over a seeded graph and scenarios of
+//! stored listings, incoming listings, stored and incoming positions, stored scores, config and full-pass
+//! flag. The scratch database stubs only the boundaries: `trending.current_agenda_listings()` and
+//! `trending.current_agenda_debate_positions(since)` return the scenario's incoming rows (that is
+//! [`crate::agenda_listings_compute`]'s job, and for positions the numbering in `agenda_contents`) and
+//! `public.refresh_entity_ranking_scores(ids)` records the ids it was handed instead of scoring them.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -48,6 +55,16 @@ pub fn is_full_pass(last_full_pass_on: Option<NaiveDate>, today: NaiveDate) -> b
     last_full_pass_on != Some(today)
 }
 
+/// A row of `trending.agenda_debate_positions`: the place of a named debate in an agenda's Debates relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Position {
+    pub agenda_id: Uuid,
+    pub space_id: Uuid,
+    pub entity_id: Uuid,
+    pub listed_on: NaiveDate,
+    pub position: i32,
+}
+
 /// A row of `entity_ranking_scores` that still carries a term. Only these matter to the sweep: a missing row
 /// and a zero row both read as "carries nothing".
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -64,6 +81,11 @@ pub struct Sweep {
     pub horizon_days: i32,
     /// `entity_ranking_config.trending_boost`.
     pub boost: f64,
+    /// `trending_position_base`, `_step` and `_slots`: the term is on while the base or the step is above 0,
+    /// and only places within the slots re-score a debate.
+    pub position_base: f64,
+    pub position_step: f64,
+    pub position_slots: i32,
     pub full_pass: bool,
 }
 
@@ -280,11 +302,38 @@ impl Graph {
         best
     }
 
+    /// `trending.debate_positions(ids)`: per debate in `ids`, its newest arrived ordered day and its lowest place
+    /// on that day, as `(listed_on, place)`.
+    pub fn debate_positions(
+        positions: &BTreeSet<Position>,
+        ids: &HashSet<Uuid>,
+        today: NaiveDate,
+    ) -> HashMap<Uuid, (NaiveDate, i32)> {
+        let mut best: HashMap<Uuid, (NaiveDate, i32)> = HashMap::new();
+        for p in positions {
+            if !ids.contains(&p.entity_id) || p.listed_on > today {
+                continue;
+            }
+            let better = |cur: &(NaiveDate, i32)| {
+                p.listed_on > cur.0 || (p.listed_on == cur.0 && p.position < cur.1)
+            };
+            match best.get(&p.entity_id) {
+                Some(cur) if !better(cur) => {}
+                _ => {
+                    best.insert(p.entity_id, (p.listed_on, p.position));
+                }
+            }
+        }
+        best
+    }
+
     /// `trending.entity_trending_terms(ids)`: one row per claim or debate among `ids` that a listing or a topic
     /// listing boosts (and that exists in `entities`). `now_epoch` is `extract(epoch FROM now())`.
+    #[allow(clippy::too_many_arguments)]
     pub fn trending_terms(
         &self,
         table: &BTreeSet<Listing>,
+        positions: &BTreeSet<Position>,
         ids: &HashSet<Uuid>,
         cfg: &TrendConfig,
         debate_window_days: i32,
@@ -293,6 +342,8 @@ impl Graph {
     ) -> BTreeMap<Uuid, TermsRow> {
         let li = self.entity_listings(table, ids, today);
         let tp = self.topic_listings(table, ids, today);
+        let li_ids: HashSet<Uuid> = li.keys().copied().collect();
+        let pos = Self::debate_positions(positions, &li_ids, today);
         let reach: HashSet<Uuid> = li.keys().chain(tp.keys()).copied().collect();
         let target = self.claims_and_debates(&reach);
 
@@ -319,6 +370,7 @@ impl Graph {
             };
             let l = li.get(entity);
             let t = tp.get(entity);
+            let p = pos.get(entity);
             let debates =
                 (*is_claim && l.is_some()).then(|| recent.get(entity).copied().unwrap_or(0));
             let inputs = TrendInputs {
@@ -328,6 +380,8 @@ impl Graph {
                 topic_days: t.map(|t| (today - t.1).num_days()),
                 listed_epoch: l.map(|l| midnight_epoch(l.0)),
                 created_epoch: *created,
+                position: p.map(|p| p.1),
+                position_days: p.map(|p| (today - p.0).num_days()),
             };
             out.insert(
                 *entity,
@@ -359,11 +413,14 @@ impl Graph {
 /// The ids `trending.refresh_agenda_listings` passes to `public.refresh_entity_ranking_scores`.
 ///
 /// `stored` is `trending.agenda_listings` before the call, `incoming` what the agendas name now (the table
-/// after it). `stored_terms` holds the `entity_ranking_scores` rows with `trending_score <> 0 OR age_credit <> 0`.
+/// after it); `stored_positions` and `incoming_positions` are the same pair for
+/// `trending.agenda_debate_positions`. `stored_terms` holds the `entity_ranking_scores` rows with `trending_score <> 0 OR age_credit <> 0`.
 pub fn rescore_ids(
     graph: &Graph,
     stored: &BTreeSet<Listing>,
     incoming: &BTreeSet<Listing>,
+    stored_positions: &BTreeSet<Position>,
+    incoming_positions: &BTreeSet<Position>,
     stored_terms: &[StoredTerm],
     sweep: &Sweep,
 ) -> BTreeSet<Uuid> {
@@ -395,6 +452,18 @@ pub fn rescore_ids(
         }
     }
 
+    // Debates whose place within the slots moved, came or went (a changed row of either side of the diff).
+    // Only while the term is on: with a base and a step of 0 a place changes no score.
+    let moved: BTreeSet<Uuid> = if sweep.position_step > 0.0 || sweep.position_base > 0.0 {
+        stored_positions
+            .symmetric_difference(incoming_positions)
+            .filter(|p| p.position <= sweep.position_slots)
+            .map(|p| p.entity_id)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+
     // Claims listed inside the horizon with a debate that does not carry the boost yet. Only while the boost
     // is on: at 0 every such debate would match every hour.
     if sweep.boost > 0.0 {
@@ -424,6 +493,7 @@ pub fn rescore_ids(
             .map(|(debate, _)| debate),
     );
     ids.extend(debate_ids);
+    ids.extend(moved);
     // Claims and debates tagged, in a DAO space, with one of the topics.
     let tagged: HashSet<Uuid> = graph
         .topic_links
@@ -474,12 +544,14 @@ mod tests {
     #[derive(Default)]
     struct Scenario {
         full: bool,
-        /// boost, topic boost, day factor, debate factor, tau
+        /// boost, topic boost, day factor, debate factor, tau, position base, step, slots, day factor
         cfg: Vec<f64>,
         horizon: i32,
         window: i32,
         stored: BTreeSet<Listing>,
         incoming: BTreeSet<Listing>,
+        stored_positions: BTreeSet<Position>,
+        incoming_positions: BTreeSet<Position>,
         terms: Vec<StoredTerm>,
         ids: BTreeSet<Uuid>,
         want: Vec<Vec<String>>,
@@ -499,6 +571,16 @@ mod tests {
             entity_id: id(p[4]),
             listed_on: day(p[5]),
             source: src(p[6]),
+        }
+    }
+
+    fn position(p: &[&str]) -> Position {
+        Position {
+            agenda_id: id(p[2]),
+            space_id: id(p[3]),
+            entity_id: id(p[4]),
+            listed_on: day(p[5]),
+            position: p[6].parse().unwrap(),
         }
     }
 
@@ -531,7 +613,7 @@ mod tests {
                         full: p[2] == "t",
                         horizon: p[3].parse().unwrap(),
                         window: p[8].parse().unwrap(),
-                        cfg: [4, 5, 6, 7, 9]
+                        cfg: [4, 5, 6, 7, 9, 10, 11, 12, 13]
                             .iter()
                             .map(|i| p[*i].parse().unwrap())
                             .collect(),
@@ -547,6 +629,12 @@ mod tests {
                         }
                         "I" => {
                             s.incoming.insert(listing(&p));
+                        }
+                        "PS" => {
+                            s.stored_positions.insert(position(&p));
+                        }
+                        "PI" => {
+                            s.incoming_positions.insert(position(&p));
                         }
                         "T" => s.terms.push(StoredTerm {
                             entity: id(p[2]),
@@ -573,26 +661,43 @@ mod tests {
     #[test]
     fn rescore_ids_match_the_sql() {
         let f = load();
-        assert_eq!(f.scenarios.len(), 18);
+        assert_eq!(f.scenarios.len(), 31);
         let mut total = 0;
         for (name, s) in &f.scenarios {
             let sweep = Sweep {
                 today: f.today,
                 horizon_days: s.horizon,
                 boost: s.cfg[0],
+                position_base: s.cfg[5],
+                position_step: s.cfg[6],
+                position_slots: s.cfg[7] as i32,
                 full_pass: s.full,
             };
-            let got = rescore_ids(&f.graph, &s.stored, &s.incoming, &s.terms, &sweep);
+            let got = rescore_ids(
+                &f.graph,
+                &s.stored,
+                &s.incoming,
+                &s.stored_positions,
+                &s.incoming_positions,
+                &s.terms,
+                &sweep,
+            );
             assert_eq!(got, s.ids, "scenario {name}");
             total += got.len();
         }
         assert!(total > 800, "the fixture lost its rows: {total}");
+        let positioned = f
+            .scenarios
+            .iter()
+            .filter(|(_, s)| !s.incoming_positions.is_empty())
+            .count();
+        assert_eq!(positioned, 13, "positioned scenarios");
     }
 
     #[test]
     fn trending_terms_match_the_sql() {
         let f = load();
-        let mut total = 0;
+        let (mut total, mut placed) = (0, 0);
         for (name, s) in &f.scenarios {
             let cfg = TrendConfig {
                 boost: s.cfg[0],
@@ -601,11 +706,21 @@ mod tests {
                 debate_factor: s.cfg[3],
                 horizon_days: s.horizon,
                 tau_seconds: s.cfg[4],
+                position_base: s.cfg[5],
+                position_step: s.cfg[6],
+                position_slots: s.cfg[7] as i32,
+                position_day_factor: s.cfg[8],
             };
             let all: HashSet<Uuid> = f.graph.created.keys().copied().collect();
-            let got = f
-                .graph
-                .trending_terms(&s.incoming, &all, &cfg, s.window, f.today, f.now);
+            let got = f.graph.trending_terms(
+                &s.incoming,
+                &s.incoming_positions,
+                &all,
+                &cfg,
+                s.window,
+                f.today,
+                f.now,
+            );
             assert_eq!(got.len(), s.want.len(), "scenario {name}: row count");
             for w in &s.want {
                 let row = got
@@ -639,9 +754,15 @@ mod tests {
                 assert_eq!(row.topic_id, opt(&w[11], id), "{what} topic");
                 assert_eq!(row.topic_listed_on, opt(&w[12], day), "{what} topic day");
                 total += 1;
+                placed += usize::from(row.terms.listing_score > 1000.0);
             }
         }
         assert!(total > 700, "the fixture lost its rows: {total}");
+        // The positioned scenarios (s18 on) must really carry a term, not only exist.
+        assert!(
+            placed >= 30,
+            "the positioned scenarios lost their lifts: {placed}"
+        );
     }
 
     fn src_kind(s: &str) -> &'static str {
