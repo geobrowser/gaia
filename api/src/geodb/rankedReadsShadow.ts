@@ -292,22 +292,31 @@ export function createPostgresFeedsSource(db: Database): FeedsShadowSource {
 			const types = ids(
 				rowsOf(
 					await db.execute(
-						sql`SELECT type_id::text AS id FROM public.entity_type_ranking WHERE ranking_score >= ${threshold}::numeric GROUP BY type_id ORDER BY count(*) DESC, type_id LIMIT 3`,
+						sql`SELECT type_id::text AS id FROM public.entity_type_ranking WHERE entity_id IN (SELECT entity_id FROM public.entity_ranking_scores WHERE ranking_score >= ${threshold}::numeric) GROUP BY type_id ORDER BY count(*) DESC, type_id LIMIT 3`,
 					),
 				),
 			)
 			const topics = ids(
 				rowsOf(
 					await db.execute(
-						sql`SELECT topic_id::text AS id FROM public.entity_topic_ranking WHERE ranking_score >= ${threshold}::numeric GROUP BY topic_id ORDER BY count(*) DESC, topic_id LIMIT 2`,
+						sql`SELECT topic_id::text AS id FROM public.entity_topic_ranking WHERE entity_id IN (SELECT entity_id FROM public.entity_ranking_scores WHERE ranking_score >= ${threshold}::numeric) GROUP BY topic_id ORDER BY count(*) DESC, topic_id LIMIT 2`,
 					),
 				),
 			)
-			const user = rowsOf(
-				await db.execute(
-					sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 ORDER BY random() LIMIT 1`,
-				),
-			)[0]?.id
+			// A random user by index range scan on the leading user_id column (ORDER BY random() reads every vote row),
+			// wrapping to the first user when the random point is past the last one.
+			const user = (
+				rowsOf(
+					await db.execute(
+						sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 AND user_id >= gen_random_uuid() ORDER BY user_id LIMIT 1`,
+					),
+				)[0] ??
+				rowsOf(
+					await db.execute(
+						sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 ORDER BY user_id LIMIT 1`,
+					),
+				)[0]
+			)?.id
 			const now = rowsOf(await db.execute(sql`SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS ms`))[0]
 				?.ms
 			return {
