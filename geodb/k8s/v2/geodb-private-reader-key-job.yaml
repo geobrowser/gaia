@@ -73,6 +73,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-private-reader-key
     spec:
       serviceAccountName: geodb-private-reader-keygen

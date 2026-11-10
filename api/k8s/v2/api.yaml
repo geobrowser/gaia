@@ -49,6 +49,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: api
     spec:
       # Spread replicas across nodes instead of leaving placement to the scheduler.

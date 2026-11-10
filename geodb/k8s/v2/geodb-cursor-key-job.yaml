@@ -56,6 +56,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-cursor-key
     spec:
       serviceAccountName: geodb-cursor-keygen

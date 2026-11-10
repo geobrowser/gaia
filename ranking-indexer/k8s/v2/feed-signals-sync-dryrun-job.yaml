@@ -22,6 +22,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         environment: testnet
     spec:
       restartPolicy: Never

@@ -34,6 +34,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: ranking-indexer-private-snapshot
         environment: testnet
     spec:

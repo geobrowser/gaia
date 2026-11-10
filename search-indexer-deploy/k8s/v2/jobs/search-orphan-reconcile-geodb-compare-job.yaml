@@ -33,6 +33,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: search-orphan-reconcile-geodb-compare
         environment: testnet
     spec:

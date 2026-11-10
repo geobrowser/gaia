@@ -14,6 +14,9 @@ spec:
       activeDeadlineSeconds: 290 # 10s gap before next 5-min CronJob invocation
       backoffLimit: 1 # Don't restart-loop on failure — try again in 5 min
       template:
+        metadata:
+          labels:
+            geodb-client: "true"
         spec:
           restartPolicy: Never # CronJob retries via next scheduled run, not restarts
           securityContext:

@@ -56,6 +56,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-outbox-key
     spec:
       serviceAccountName: geodb-outbox-keygen
