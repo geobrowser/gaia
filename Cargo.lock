@@ -5494,6 +5494,7 @@ dependencies = [
  "chrono",
  "dotenv",
  "futures 0.3.34",
+ "geodb-cursor",
  "grc-20",
  "hermes-instrumentation",
  "hermes-kafka",

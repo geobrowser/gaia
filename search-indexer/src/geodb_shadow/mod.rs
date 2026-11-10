@@ -19,7 +19,8 @@
 //! - `entities_for_spaces`: the `space_entities` scan, one Space at a time (see below).
 //!
 //! Left on SQL only, each with a comment at the lookup naming the read it waits for:
-//! `kg_applied_block` and the relation-map bootstrap.
+//! the relation-map bootstrap. `kg_applied_block` is shadowed separately, against the feeder's
+//! `cursors` row (see `lookup.rs`).
 //!
 //! `space_entities` is new in the engine and a serve that predates it refuses the argument. Until
 //! the serve is rolled onto it, every `entities_for_spaces` comparison counts `failed`; that is
