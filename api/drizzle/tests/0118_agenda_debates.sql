@@ -35,7 +35,8 @@ UPDATE trending.refresh_state SET last_full_pass_on = NULL WHERE id;
 UPDATE entity_ranking_config
    SET participation_weight = 4, participation_cap = 19, comment_weight = 0, comment_cap = 30,
        tau_seconds = 100000, trending_boost = 8, trending_topic_boost = 2.5, trending_day_factor = 0.65,
-       trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 16
+       trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 16,
+       trending_position_step = 0, trending_position_base = 0
  WHERE id;
 
 CREATE OR REPLACE FUNCTION pg_temp.b() RETURNS numeric LANGUAGE sql AS $$
