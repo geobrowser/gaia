@@ -604,6 +604,78 @@ lines((line) => {
 	})
 })
 
+describe("createPipeGeoDbClient, the version at an instant and cards at a version", () => {
+	const SPACE = "22222222222242228222222222222222"
+	const ENTITY = "11111111111141118111111111111111"
+	const OTHER_ENTITY = "55555555555545558555555555555555"
+	const PROP = "44444444444444448444444444444444"
+	const EDIT = "00000000000040008000000000000001"
+	const AUTHOR = "33333333333343338333333333333333"
+	const row = `9\t${"ab".repeat(32)}\t1700000000000000001\t${EDIT}\t-\t[${AUTHOR}]\t-\t${"cd".repeat(8)}\n`
+
+	it("sends `version-at\\t<space>\\t<at>` and parses the one version row", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (line === "version-at\\t${SPACE}\\tt:1700000000000000000") frame("+", ${JSON.stringify(row)})
+	else frame("-", "unexpected " + line)
+})`)
+		const version = await client.readVersionAt?.({geoSpaceId: SPACE, instantNs: "1700000000000000000"})
+		expect(version).toEqual({seq: 9, timestampNs: "1700000000000000001", editId: EDIT, authors: [AUTHOR]})
+		client.close()
+	})
+
+	it("rejects a malformed answer", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("+", "not a version row\\n"))`)
+		await expect(client.readVersionAt?.({geoSpaceId: SPACE, instantNs: "5"})).rejects.toBeDefined()
+		client.close()
+	})
+
+	it("refuses a bad Space or instant before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceId: "nope", instantNs: "5"},
+			{geoSpaceId: SPACE, instantNs: "-1"},
+			{geoSpaceId: SPACE, instantNs: "1.5"},
+			{geoSpaceId: SPACE, instantNs: ""},
+		])
+			await expect(client.readVersionAt?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+
+	it("reads several entities' cards in one Space at a version, each row keeping its entity", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope, doc] = line.split("\\t")
+	const ids = [...doc.matchAll(/"([0-9a-f]{32})"/g)].map((m) => m[1])
+	frame("+", ids.map((id) => ["${PROP}", scope.split("@")[1] + id.slice(0, 2), "stmt", id, "1"].join("\\t")).join("\\n") + "\\n")
+})`)
+		const rows = await client.readCardsAt?.({geoSpaceId: SPACE, entityIds: [ENTITY, OTHER_ENTITY], seq: 9})
+		expect(rows).toEqual([
+			{prop: PROP, raw: "9" + ENTITY.slice(0, 2), entity: ENTITY},
+			{prop: PROP, raw: "9" + OTHER_ENTITY.slice(0, 2), entity: OTHER_ENTITY},
+		])
+		client.close()
+	})
+
+	it("refuses bad cards-at arguments before they reach the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceId: "nope", entityIds: [ENTITY], seq: 1},
+			{geoSpaceId: SPACE, entityIds: [], seq: 1},
+			{geoSpaceId: SPACE, entityIds: ["nope"], seq: 1},
+			{geoSpaceId: SPACE, entityIds: [ENTITY], seq: 0},
+		])
+			await expect(client.readCardsAt?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})
+
 describe("createPipeGeoDbClient, several cards a line", () => {
 	const OTHER_ENTITY = "55555555555545558555555555555555"
 

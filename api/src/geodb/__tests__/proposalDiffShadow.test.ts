@@ -131,13 +131,60 @@ describe("createProposalDiffShadow", () => {
 		})
 	})
 
-	it("does not read an executed or closed base", async () => {
+	it("reads an executed or closed base at the version before its timestamp", async () => {
+		const readVersionAt = vi.fn(async () => ({seq: 7, timestampNs: "1", editId: ENTITY, authors: []}))
+		const readCardsAt = vi.fn(async () => geoRows())
+		const readCards = vi.fn(async () => geoRows())
+		const {shadow} = make({readVersionAt, readCardsAt, readCards})
+		shadow.diff(served({mode: "historical", baseTimestamp: 1_700_000_000n}))
+		await settle()
+		// strictly before the timestamp: the instant one nanosecond earlier
+		expect(readVersionAt).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, instantNs: "1699999999999999999"})
+		expect(readCardsAt).toHaveBeenCalledWith({
+			geoSpaceId: GEO_SPACE,
+			entityIds: [conformingId("entity", ENTITY)],
+			seq: 7,
+		})
+		expect(readCards).not.toHaveBeenCalled()
+		expect(result("match")).toBe(1)
+		expect(statements("found")).toBe(2)
+		expect(unsupported("as_of")).toBe(0)
+	})
+
+	it("counts a historical base statement the version lacks as a mismatch", async () => {
+		const {shadow} = make({
+			readVersionAt: async () => ({seq: 3, timestampNs: "1", editId: ENTITY, authors: []}),
+			readCardsAt: async () => [],
+		})
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
+		await settle()
+		expect(result("mismatch")).toBe(1)
+		expect(statements("missing")).toBe(2)
+	})
+
+	it("fails, without reading cards, when the version cannot be named", async () => {
+		const readCardsAt = vi.fn(async () => geoRows())
+		const {shadow} = make({
+			readVersionAt: async () => {
+				throw new GeoDbError("client_failed", "refused")
+			},
+			readCardsAt,
+		})
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
+		await settle()
+		expect(readCardsAt).not.toHaveBeenCalled()
+		expect(result("failed")).toBe(1)
+	})
+
+	it("leaves a historical diff with no base timestamp, or a client with no at-version read, unsupported", async () => {
 		const readCards = vi.fn(async () => geoRows())
 		const {shadow} = make({readCards})
 		shadow.diff(served({mode: "historical"}))
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
 		await settle()
 		expect(readCards).not.toHaveBeenCalled()
 		expect(unsupported("as_of")).toBe(1)
+		expect(unsupported("client")).toBe(1)
 	})
 
 	it("reports a page with nothing on the base side, an unmapped Space and an old client", async () => {

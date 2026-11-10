@@ -250,6 +250,41 @@ export type GeoVersionRow = {
 	total: number
 }
 
+/** One version of a Space as `version-at` answers it: the version an instant or a pin names. */
+export type GeoVersionAt = {
+	seq: number
+	/** Seal time in nanoseconds since the epoch; a decimal string, as it can pass 2^53. */
+	timestampNs: string
+	/** The sealing edit. */
+	editId: string
+	authors: string[]
+}
+
+/**
+ * `geodb-client pipe` output of a `version-at` line: the one version row, tab-separated (version_seq, VersionId,
+ * timestamp_ns, EditId, base, authors as `[a,b]`, label, reading), the `entity-versions` row without its Space and total.
+ */
+export function versionAtFromGeoDbOutput(output: string): GeoVersionAt {
+	const lines = output.split("\n").filter((line) => line !== "")
+	const cells = (lines[0] ?? "").split("\t")
+	const authors = /^\[(.*)\]$/.exec(cells[5] ?? "")
+	if (
+		lines.length !== 1 ||
+		cells.length !== 8 ||
+		!/^\d+$/.test(cells[0] ?? "") ||
+		!/^-?\d+$/.test(cells[2] ?? "") ||
+		!/^[0-9a-f]{32}$/.test(cells[3] ?? "") ||
+		!authors
+	)
+		throw new Error(`a version-at row is malformed: ${(lines[0] ?? "").slice(0, 60)}`)
+	return {
+		seq: Number(cells[0]),
+		timestampNs: cells[2] as string,
+		editId: cells[3] as string,
+		authors: (authors[1] ?? "") === "" ? [] : (authors[1] as string).split(","),
+	}
+}
+
 /**
  * `geodb-client pipe` output of an `entity-versions` line: one tab-separated row a version (Space, version_seq,
  * VersionId, timestamp_ns, EditId, base, authors as `[a,b]`, label, reading), then `total: N`.
