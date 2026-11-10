@@ -520,6 +520,8 @@ spec:
               value: "3000"
             - name: PG_STATEMENT_TIMEOUT_MS
               value: "30000"
+            - name: PG_REST_STATEMENT_TIMEOUT_MS
+              value: "30000"
             - name: PG_QUERY_TIMEOUT_MS
               value: "35000"
             - name: PG_POOL_PRESSURE_WAITING_THRESHOLD
