@@ -81,7 +81,8 @@ pub struct RefitReport {
     pub max_abs_diff: f64,
 }
 
-/// The app role's `statement_timeout` is 30s. A first sweep is a full backfill and the refit
+/// The app role sets no `statement_timeout` (`0`), and a session value left on a pooled connection
+/// by another client may or may not be there. A first sweep is a full backfill and the refit
 /// always is, so each run sets its own limit. `SET LOCAL` inside the run's transaction rather than
 /// a session `SET`: the connection may go through a transaction-mode pooler.
 const SWEEP_TIMEOUT: &str = "SET LOCAL statement_timeout = '5min'";
