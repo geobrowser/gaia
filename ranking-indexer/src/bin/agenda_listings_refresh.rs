@@ -375,8 +375,8 @@ async fn run() -> Result<(), IndexerError> {
     };
 
     let started = Instant::now();
-    // The app role's statement_timeout is 30s and a sweep over busy topics can pass it, so it gets
-    // its own limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
+    // The app role sets no statement_timeout (0) and a sweep over busy topics is long, so it gets
+    // its own explicit limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
     // session SET: the connection goes through a transaction-mode pooler.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     // Off: the refresh and its counts are skipped as one write (they share a transaction), so the

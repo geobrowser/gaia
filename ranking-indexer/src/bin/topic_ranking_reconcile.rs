@@ -327,8 +327,8 @@ async fn main() -> Result<(), IndexerError> {
         .await?;
 
     let started = Instant::now();
-    // The app role's statement_timeout is 30s and this pass takes 20-24s, so it gets its own
-    // limit. SET LOCAL inside one transaction rather than a session SET: the connection goes
+    // The app role sets no statement_timeout (0) and this pass takes 20-24s, so it gets its own
+    // explicit limit rather than whatever a pooled connection happens to carry. SET LOCAL inside one transaction rather than a session SET: the connection goes
     // through a transaction-mode pooler, where a session setting may land on another backend.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     // Off: the debate-score refresh and the reconcile are skipped as one write (they share a

@@ -36,7 +36,7 @@ pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
     )
 }
 
-/// Per-connection `statement_timeout` for the indexer pool, in milliseconds.
+/// Per-transaction `statement_timeout` for the indexer pool, in milliseconds.
 ///
 /// A block is written in ONE transaction (see `process_block`), so this budget
 /// has to cover the largest single edit we are willing to index, not a typical
@@ -49,11 +49,22 @@ pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
 const PG_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 300_000;
 
 fn statement_timeout_ms() -> u64 {
-    std::env::var("PG_STATEMENT_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
+    statement_timeout_ms_from(std::env::var("PG_STATEMENT_TIMEOUT_MS").ok().as_deref())
+}
+
+/// Parse `PG_STATEMENT_TIMEOUT_MS`. Only a positive integer counts; anything else (unset, empty,
+/// `0`, negative, `30s`) falls back to the default, so a typo can never turn the cap off.
+pub fn statement_timeout_ms_from(value: Option<&str>) -> u64 {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+}
+
+/// The statement that applies the budget inside a transaction. Always `SET LOCAL`, never a
+/// session `SET` — see `Storage::begin_with_timeout`.
+pub fn set_local_statement_timeout_sql(timeout_ms: u64) -> String {
+    format!("SET LOCAL statement_timeout = {timeout_ms}")
 }
 
 impl Storage {
@@ -64,19 +75,13 @@ impl Storage {
             "Initialising indexer pool"
         );
 
+        // No `after_connect` session `SET statement_timeout`: behind PgBouncer in transaction
+        // mode it stays on the server connection that ran it and leaks to every other client
+        // (other gaia services included) that is later handed that connection, while this
+        // pool's own statements only get it by luck. The budget is applied per transaction
+        // instead — see `begin_with_timeout`.
         let pool = PgPoolOptions::new()
             .max_connections(20)
-            .after_connect(move |conn, _meta| {
-                Box::pin(async move {
-                    // Best-effort: covers any statement run outside one of the
-                    // transactions opened by `begin_with_timeout`. It is NOT
-                    // sufficient on its own — see that method for why.
-                    sqlx::query(&format!("SET statement_timeout = {timeout_ms}"))
-                        .execute(conn)
-                        .await?;
-                    Ok(())
-                })
-            })
             .connect(database_url)
             .await?;
 
@@ -108,28 +113,25 @@ impl Storage {
     /// Begin a transaction with the indexer's statement-timeout budget applied
     /// as `SET LOCAL`.
     ///
-    /// This connects through **PgBouncer**, and a session-level
-    /// `SET statement_timeout` does not reliably survive to the next
-    /// transaction: in transaction pooling the server backend is returned to
-    /// the pool between transactions, so the setting applies to whichever
-    /// backend happened to serve the `SET` and not necessarily to the one that
-    /// runs the next statement. Measured against this database, a pool
-    /// configured for 300s still had its statements cancelled at the 30s
-    /// server default. (The pooler also rejects `options=-c statement_timeout`
-    /// as an unsupported startup parameter, so that route is closed too.)
+    /// This connects through **PgBouncer** in transaction mode, shared with
+    /// every other gaia service. A session-level `SET statement_timeout` is
+    /// wrong there twice over: it stays on whichever server connection ran it,
+    /// so the next statement here may land on one without it, and it leaks
+    /// onto whichever client is handed that connection next. (The pooler also
+    /// rejects `options=-c statement_timeout` as an unsupported startup
+    /// parameter, so that route is closed too.) The role and database default
+    /// is `0`, no limit.
     ///
     /// `SET LOCAL` is scoped to the enclosing transaction, so it always lands
-    /// on the backend that executes the work. Use this for every write path.
+    /// on the backend that executes the work and leaves nothing behind. Use
+    /// this for every statement, reads included.
     pub async fn begin_with_timeout(
         &self,
     ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(&format!(
-            "SET LOCAL statement_timeout = {}",
-            statement_timeout_ms()
-        ))
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(&set_local_statement_timeout_sql(statement_timeout_ms()))
+            .execute(&mut *tx)
+            .await?;
         Ok(tx)
     }
 
@@ -1694,9 +1696,13 @@ impl Storage {
     /// Get the current depth of the proposal tally queue.
     /// Useful for monitoring worker health and detecting backlogs.
     pub async fn get_tally_queue_depth(&self) -> Result<i64, IndexerError> {
+        // In a budgeted transaction like every other statement: a bare `fetch_one(&self.pool)`
+        // runs under whatever the server connection happens to carry.
+        let mut tx = self.begin_with_timeout().await?;
         let result: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM proposal_tally_queue"#)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await?;
+        tx.commit().await?;
 
         Ok(result.0)
     }
@@ -2094,5 +2100,43 @@ impl Storage {
         .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod statement_budget_tests {
+    use super::*;
+
+    #[test]
+    fn statement_timeout_takes_a_positive_integer() {
+        assert_eq!(statement_timeout_ms_from(Some("45000")), 45_000);
+        assert_eq!(statement_timeout_ms_from(Some(" 1 ")), 1);
+    }
+
+    #[test]
+    fn statement_timeout_falls_back_on_anything_that_would_weaken_the_cap() {
+        for raw in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("0"),
+            Some("-5"),
+            Some("1.5"),
+            Some("30s"),
+            Some("abc"),
+            Some("99999999999999999999999"),
+        ] {
+            assert_eq!(
+                statement_timeout_ms_from(raw),
+                PG_STATEMENT_TIMEOUT_MS_DEFAULT,
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn budget_is_applied_with_set_local_never_a_session_set() {
+        let sql = set_local_statement_timeout_sql(300_000);
+        assert_eq!(sql, "SET LOCAL statement_timeout = 300000");
     }
 }
