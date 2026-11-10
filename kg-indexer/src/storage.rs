@@ -55,10 +55,37 @@ fn statement_timeout_ms() -> u64 {
 /// Parse `PG_STATEMENT_TIMEOUT_MS`. Only a positive integer counts; anything else (unset, empty,
 /// `0`, negative, `30s`) falls back to the default, so a typo can never turn the cap off.
 pub fn statement_timeout_ms_from(value: Option<&str>) -> u64 {
+    parse_positive_ms(value).unwrap_or(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+}
+
+fn parse_positive_ms(value: Option<&str>) -> Option<u64> {
     value
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+}
+
+/// Per-transaction `statement_timeout` for the operator binaries (`src/bin/*`), in milliseconds.
+/// Long repairs and audits scan far more than the server's block writes do, so they get their
+/// own, larger budget (`KG_OPERATOR_STATEMENT_TIMEOUT_MS`) — bigger, never none.
+// Only the operator bins (src/bin/*) call this; the server binary compiles this module too.
+#[allow(dead_code)]
+pub const OPERATOR_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 600_000;
+
+/// Parse `KG_OPERATOR_STATEMENT_TIMEOUT_MS`; same rules as `statement_timeout_ms_from`.
+// Only the operator bins (src/bin/*) call this; the server binary compiles this module too.
+#[allow(dead_code)]
+pub fn operator_statement_timeout_ms_from(value: Option<&str>) -> u64 {
+    parse_positive_ms(value).unwrap_or(OPERATOR_STATEMENT_TIMEOUT_MS_DEFAULT)
+}
+
+// Only the operator bins (src/bin/*) call this; the server binary compiles this module too.
+#[allow(dead_code)]
+fn operator_statement_timeout_ms() -> u64 {
+    operator_statement_timeout_ms_from(
+        std::env::var("KG_OPERATOR_STATEMENT_TIMEOUT_MS")
+            .ok()
+            .as_deref(),
+    )
 }
 
 /// The statement that applies the budget inside a transaction. Always `SET LOCAL`, never a
@@ -128,8 +155,25 @@ impl Storage {
     pub async fn begin_with_timeout(
         &self,
     ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
+        self.begin_with_budget(statement_timeout_ms()).await
+    }
+
+    /// Like `begin_with_timeout`, but with the operator-binary budget
+    /// (`KG_OPERATOR_STATEMENT_TIMEOUT_MS`, default 10 minutes). Every statement the
+    /// `src/bin/*` tools send goes through this — a bin must never use `storage.pool` directly.
+    /// The server's own budget is unaffected.
+    #[allow(dead_code)]
+    pub async fn begin_operator_tx(&self) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
+        self.begin_with_budget(operator_statement_timeout_ms())
+            .await
+    }
+
+    async fn begin_with_budget(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(&set_local_statement_timeout_sql(statement_timeout_ms()))
+        sqlx::query(&set_local_statement_timeout_sql(timeout_ms))
             .execute(&mut *tx)
             .await?;
         Ok(tx)
@@ -2129,6 +2173,21 @@ mod statement_budget_tests {
             assert_eq!(
                 statement_timeout_ms_from(raw),
                 PG_STATEMENT_TIMEOUT_MS_DEFAULT,
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_budget_has_its_own_override_and_never_turns_off() {
+        assert_eq!(
+            operator_statement_timeout_ms_from(Some("1800000")),
+            1_800_000
+        );
+        for raw in [None, Some(""), Some("0"), Some("-1"), Some("10m")] {
+            assert_eq!(
+                operator_statement_timeout_ms_from(raw),
+                OPERATOR_STATEMENT_TIMEOUT_MS_DEFAULT,
                 "{raw:?}"
             );
         }

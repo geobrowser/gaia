@@ -142,7 +142,7 @@ async fn main() -> Result<(), IndexerError> {
     let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
         sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
             .bind(&uris)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
         .into_iter()
@@ -176,7 +176,7 @@ async fn main() -> Result<(), IndexerError> {
             "SELECT edit_id, version_key FROM edit_versions WHERE edit_id = ANY($1::uuid[])",
         )
         .bind(&plan_edit_ids)
-        .fetch_all(&storage.pool)
+        .fetch_all(&mut *storage.begin_operator_tx().await?)
         .await?
     };
     let version_key_by_edit_id: HashMap<Uuid, i64> = edit_version_keys.into_iter().collect();
@@ -275,7 +275,7 @@ async fn main() -> Result<(), IndexerError> {
         "SELECT id, valid_from_key, valid_to_key FROM value_versions WHERE id = ANY($1::uuid[])",
     )
     .bind(&opened_value_ids)
-    .fetch_all(&storage.pool)
+    .fetch_all(&mut *storage.begin_operator_tx().await?)
     .await?;
     let opened_value_map: HashMap<Uuid, (i64, Option<i64>)> = opened_values
         .into_iter()
@@ -305,7 +305,7 @@ async fn main() -> Result<(), IndexerError> {
     .bind(&vp)
     .bind(&vs)
     .bind(&vk)
-    .fetch_all(&storage.pool)
+    .fetch_all(&mut *storage.begin_operator_tx().await?)
     .await?;
     let closed_value_map: HashMap<(Uuid, Uuid, Uuid, i64), (Uuid, i64)> = closed_values
         .into_iter()
@@ -336,7 +336,7 @@ async fn main() -> Result<(), IndexerError> {
     let live_values: Vec<String> =
         sqlx::query_scalar("SELECT id FROM values WHERE id = ANY($1::text[])")
             .bind(&live_value_ids)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let live_value_set: HashSet<String> = live_values.into_iter().collect();
 
@@ -346,7 +346,7 @@ async fn main() -> Result<(), IndexerError> {
         "SELECT id, valid_from_key, valid_to_key FROM relation_versions WHERE id = ANY($1::uuid[])",
     )
     .bind(&opened_relation_ids)
-    .fetch_all(&storage.pool)
+    .fetch_all(&mut *storage.begin_operator_tx().await?)
     .await?;
     let opened_relation_map: HashMap<Uuid, (i64, Option<i64>)> = opened_relations
         .into_iter()
@@ -373,7 +373,7 @@ async fn main() -> Result<(), IndexerError> {
     .bind(&rr)
     .bind(&rs)
     .bind(&rk)
-    .fetch_all(&storage.pool)
+    .fetch_all(&mut *storage.begin_operator_tx().await?)
     .await?;
     let closed_relation_map: HashMap<(Uuid, Uuid, i64), (Uuid, i64)> = closed_relations
         .into_iter()
@@ -394,7 +394,7 @@ async fn main() -> Result<(), IndexerError> {
     let current_relations: Vec<(Uuid, Uuid)> =
         sqlx::query_as("SELECT id, space_id FROM relations WHERE id = ANY($1::uuid[])")
             .bind(&relation_ids)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let current_relation_space_map: HashMap<Uuid, Uuid> = current_relations.into_iter().collect();
 
@@ -517,7 +517,7 @@ async fn main() -> Result<(), IndexerError> {
     // longer exists by the time the sync statement runs. Dry-run rolls the
     // transaction back at the end, so the printed plan is always exactly
     // what --execute would do.
-    let mut tx = storage.pool.begin().await?;
+    let mut tx = storage.begin_operator_tx().await?;
 
     if !delete_value_version_ids.is_empty() {
         sqlx::query("DELETE FROM value_versions WHERE id = ANY($1::uuid[])")

@@ -98,7 +98,7 @@ async fn main() -> Result<(), IndexerError> {
     let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
         sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
             .bind(&uris)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
         .into_iter()
@@ -209,7 +209,7 @@ async fn main() -> Result<(), IndexerError> {
         .bind(&v_entity)
         .bind(&v_property)
         .bind(&v_space)
-        .fetch_all(&storage.pool)
+        .fetch_all(&mut *storage.begin_operator_tx().await?)
         .await?
     };
 
@@ -233,7 +233,7 @@ async fn main() -> Result<(), IndexerError> {
         )
         .bind(&r_relation)
         .bind(&r_space)
-        .fetch_all(&storage.pool)
+        .fetch_all(&mut *storage.begin_operator_tx().await?)
         .await?
     };
 
@@ -441,7 +441,7 @@ async fn main() -> Result<(), IndexerError> {
         let current_relation_spaces: Vec<(Uuid, Option<Uuid>)> =
             sqlx::query_as("SELECT id, space_id FROM relations WHERE id = ANY($1::uuid[])")
                 .bind(&zero_open_relation_ids)
-                .fetch_all(&storage.pool)
+                .fetch_all(&mut *storage.begin_operator_tx().await?)
                 .await?;
         let current_space_by_relation: HashMap<Uuid, Option<Uuid>> =
             current_relation_spaces.into_iter().collect();
@@ -489,7 +489,7 @@ async fn main() -> Result<(), IndexerError> {
         return Ok(());
     }
 
-    let mut tx = storage.pool.begin().await?;
+    let mut tx = storage.begin_operator_tx().await?;
 
     if !update_value_valid_to.is_empty() {
         let (ids, valid_tos): (Vec<Uuid>, Vec<Option<i64>>) =
