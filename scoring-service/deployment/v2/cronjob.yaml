@@ -23,6 +23,9 @@ spec:
               operator: In
               values: [3]
       template:
+        metadata:
+          labels:
+            geodb-client: "true"
         spec:
           restartPolicy: Never
           imagePullSecrets:

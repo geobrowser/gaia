@@ -32,6 +32,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-proposal-status-backfill
     spec:
       serviceAccountName: geodb
