@@ -1,5 +1,5 @@
 -- GEO-3606: the order of a Debate agenda's Debates relation sets the order of its debates at the top of
--- Best.
+-- Best, so a curator can build the head of the feed as a sequence.
 --
 -- WHY. 0118 lets an agenda name single debates, and each gets the full listing boost (8). Every named
 -- debate gets the same 8, so among themselves they fall back to their organic order (votes, watch
@@ -7,7 +7,8 @@
 --
 -- WHAT IT ADDS. A position term on a named debate's listing score:
 --
---   position term = position_step × max(0, position_slots − position + 1) × position_day_factor^days
+--   position term = (position_base + position_step × (position_slots − position + 1)) × position_day_factor^days
+--                   for position ≤ position_slots, else 0
 --
 --   position   the debate's place in the agenda's Debates relation, numbered 1.. over the targets that
 --              count (typed Debate, written in the agenda's own space) AND carry a relation position. In
@@ -30,47 +31,58 @@
 -- trendingScore sees it. Only a debate's own agenda_debates listing carries a position: claim listings,
 -- topic listings and debates lifted through their claim are unchanged.
 --
--- NUMBERS (defaults, all in entity_ranking_config):
---   trending_position_step        30  per place. The organic spread a step has to beat among debates
---                                     already given the same boost and age credit is about 29 points:
---                                     the watch term's ±8 (16), the fresh lift (5) and the participation
---                                     term's usual range among top debates. The top 40 debates Best
---                                     served on 9 Nov span 5 points, so 30 per place keeps the agenda's
---                                     order even against an outlier.
---   trending_position_slots       20  places that carry a term. Position 1 gets 20 steps (600), position
---                                     20 one step (30), position 21 on only the 0118 boost.
---   trending_position_day_factor 0.65  the order fades each day, at the listing boost's own rate (0113's
---                                     day_factor), so a day-old first place (390) sits level with
---                                     today's eighth and a two-day-old one (254) with today's twelfth.
---                                     It ends at the horizon (16 days), with the listing. 0 makes it
---                                     today only; 1 keeps it whole until the horizon.
--- A step of 0 turns the term off.
---
+-- NUMBERS (defaults, all in entity_ranking_config). They are sized against the organic score: everything
+-- in a debate's ranking score except this term. Between two debates that differs by at most about 90
+-- points: quality (ln of a floor of 0.01, 4.6), intrinsic (0.5), participation (cap ≤ 19), comments (cap
+-- 30), watch (±8, so 16) plus the fresh lift (5), the topic term (cap 2), a day of recency (86400 s / tau
+-- ≈ 2, the age credit levels the rest) and the other agenda boosts a debate can carry without a place
+-- (8 through its claim, 2.5 through a topic). The top 40 debates Best served on 9 Nov span 5 points.
+--   trending_position_base       2500  every place within the slots. It puts today's last place (2600)
+--                                      above any unplaced debate, and with the fade below, above
+--                                      yesterday's first place (0.3 × 7500 = 2250).
+--   trending_position_step        100  per place, above the ~90-point organic ceiling, so the agenda's
+--                                      order holds against any organic difference: position 1 is 50 steps
+--                                      (7500 with the base), position 50 one step (2600).
+--   trending_position_slots        50  places that carry a term; position 51 on gets only the 0118 boost.
+--   trending_position_day_factor  0.3  the order fades each day rather than lapsing at midnight, fast
+--                                      enough that each day's order sits as a block under the next day's:
+--                                      today's agenda, then yesterday's (780–2250), then the day before's
+--                                      (234–675), then organic Best from about the third day (≤ 202).
+--                                      It ends at the horizon (16 days), with the listing. 0 makes it today
+--                                      only; 1 keeps it whole until the horizon.
+-- So the head of Best, by design, is: today's ordered debates in the agenda's order, then yesterday's in
+-- theirs, then the rest. Debates named without a position get only the 0118 boost and sit with the rest.
+-- Several agendas the same day (one per space) interleave by place: two first places tie on the term.
+-- A base and a step of 0 turn the term off.
+
 -- STORAGE. trending.agenda_listings has no position and is read as is by the warehouse export (gaia#1131)
 -- and by the Rust and TypeScript twins of the listing functions, so positions get their own private table,
 -- trending.agenda_debate_positions, kept by the same hourly sweep: one row per agenda, space and named
 -- debate, for agendas dated within the horizon (or later). Every function 0118 defined keeps its
 -- signature.
 --
--- FRESHNESS. refresh_agenda_listings brings the positions table in step every hour and, while the step is
+-- FRESHNESS. refresh_agenda_listings brings the positions table in step every hour and, while the term is
 -- on, re-scores the debates whose position changed within the slots: reordering the Debates relation
 -- moves Best within the hour. The daily full pass already re-scores every listed debate, which is what
 -- moves each term to the new day's fade. A config change waits for the full pass, as every trending term's does.
 
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_position_step" numeric NOT NULL DEFAULT 30;
+  ADD COLUMN IF NOT EXISTS "trending_position_base" numeric NOT NULL DEFAULT 2500;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_position_slots" integer NOT NULL DEFAULT 20;
+  ADD COLUMN IF NOT EXISTS "trending_position_step" numeric NOT NULL DEFAULT 100;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_position_day_factor" numeric NOT NULL DEFAULT 0.65;
+  ADD COLUMN IF NOT EXISTS "trending_position_slots" integer NOT NULL DEFAULT 50;
+--> statement-breakpoint
+ALTER TABLE "entity_ranking_config"
+  ADD COLUMN IF NOT EXISTS "trending_position_day_factor" numeric NOT NULL DEFAULT 0.3;
 --> statement-breakpoint
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entity_ranking_config_trending_position_valid') THEN
     ALTER TABLE "entity_ranking_config" ADD CONSTRAINT "entity_ranking_config_trending_position_valid"
-      CHECK ("trending_position_step" >= 0 AND "trending_position_slots" >= 0
+      CHECK ("trending_position_base" >= 0 AND "trending_position_step" >= 0 AND "trending_position_slots" >= 0
              AND "trending_position_day_factor" >= 0 AND "trending_position_day_factor" <= 1);
   END IF;
 END
@@ -176,8 +188,9 @@ LANGUAGE sql STABLE AS $$
                                         * power(cfg.trending_debate_factor, COALESCE(x.debates, 0))
                    + CASE WHEN x.position IS NULL OR x.position > cfg.trending_position_slots
                                OR x.position_days > cfg.trending_horizon_days THEN 0
-                          ELSE cfg.trending_position_step * (cfg.trending_position_slots - x.position + 1)
-                                                          * power(cfg.trending_position_day_factor, x.position_days) END
+                          ELSE (cfg.trending_position_base
+                                + cfg.trending_position_step * (cfg.trending_position_slots - x.position + 1))
+                               * power(cfg.trending_position_day_factor, x.position_days) END
            END AS listing_score,
            CASE WHEN x.topic_id IS NULL OR x.topic_days > cfg.trending_horizon_days THEN 0
                 ELSE cfg.trending_topic_boost * power(cfg.trending_day_factor, x.topic_days) END AS topic_score
@@ -192,7 +205,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- 0118's sweep, plus keeping trending.agenda_debate_positions in step and, while the position step is on,
+-- 0118's sweep, plus keeping trending.agenda_debate_positions in step and, while the position term is on,
 -- re-scoring the debates whose place within the slots changed. Everything else is unchanged.
 CREATE OR REPLACE FUNCTION trending.refresh_agenda_listings(full_pass boolean DEFAULT NULL)
 RETURNS integer
@@ -206,14 +219,15 @@ DECLARE
   horizon integer;
   boost numeric;
   step numeric;
+  pbase numeric;
   slots integer;
   today date;
 BEGIN
   -- One writer at a time; the CronJob forbids overlap too.
   PERFORM pg_advisory_xact_lock(hashtext('trending.agenda_listings'));
-  SELECT c.trending_horizon_days, c.trending_boost, c.trending_position_step, c.trending_position_slots,
-         trending.today()
-    INTO horizon, boost, step, slots, today
+  SELECT c.trending_horizon_days, c.trending_boost, c.trending_position_step, c.trending_position_base,
+         c.trending_position_slots, trending.today()
+    INTO horizon, boost, step, pbase, slots, today
   FROM public.entity_ranking_config c WHERE c.id;
   full_pass := COALESCE(full_pass, (SELECT st.last_full_pass_on IS DISTINCT FROM today
                                     FROM trending.refresh_state st WHERE st.id));
@@ -261,10 +275,10 @@ BEGIN
     SELECT * FROM incoming_debate_positions
     EXCEPT SELECT p.agenda_id, p.space_id, p.entity_id, p.listed_on, p.position FROM trending.agenda_debate_positions p) x;
 
-  -- Debates whose place within the slots moved, came or went. Only while the step is on: at 0 a place
-  -- changes no score.
+  -- Debates whose place within the slots moved, came or went. Only while the term is on: with a base and
+  -- a step of 0 a place changes no score.
   moved_ids := '{}';
-  IF step > 0 THEN
+  IF step > 0 OR pbase > 0 THEN
     moved_ids := ARRAY(SELECT DISTINCT c.entity_id FROM changed_debate_positions c WHERE c.position <= slots);
   END IF;
 
