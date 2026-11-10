@@ -13,8 +13,9 @@
  * An executed or closed proposal, or a historical group, diffs against the versioned state at a resolved version key
  * (`resolveVersionKeyBeforeTimestamp`: the latest version strictly before the proposal's execution or end time, or a
  * group's earliest edit). geo-db reads a Space at a version, so the shadow resolves the same instant there: `version-at`
- * for the Space at the instant one nanosecond before that timestamp (`readVersionAt`), then the cards read at that
- * version's `seq` (`readCardsAt`), and counts the base statements as it does for the live base. Gaia's version key is
+ * for the Space at the instant one nanosecond before that timestamp (`readVersionAt`), or, where the diff names the
+ * edit that made the base, the version that edit sealed (`version-of-edit`, `readVersionOfEdit`, which needs no clock and
+ * falls back to the instant where it answers nothing), then the cards read at that version's `seq` (`readCardsAt`), and counts the base statements as it does for the live base. Gaia's version key is
  * global across Spaces and its timestamps whole seconds, geo-db's versions are per Space and sealed in nanoseconds, so a
  * version sealed within the same second as the timestamp is where the two can disagree, and a `mismatch` then names
  * that boundary or a real gap alike.
@@ -37,6 +38,7 @@
  * `..._mismatch_total{field}`: base_missing (a base statement the served diff claims is not in geo-db's card).
  * `..._statements_total{outcome}`: found or missing, the base statements compared.
  * `..._unsupported_total{reason}` and `..._skipped_total{reason}` (sample, rate) as in the versions shadow.
+ * `..._base_total{resolved}`: how a historical base was found, edit_id, timestamp, edit_miss or edit_unsupported.
  */
 
 import {conformingId, type GeoCardRow} from "./card"
@@ -70,11 +72,14 @@ export const MISMATCH_FIELDS = ["base_missing"] as const
 export const OUTCOMES = ["found", "missing"] as const
 export const UNSUPPORTED_REASONS = ["as_of", "unmapped_space", "no_base", "client", "busy"] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
+/** How a historical base was resolved: by the id of the edit that made it, or by the timestamp (and why not the id). */
+export const BASE_RESOLVED = ["edit_id", "timestamp", "edit_miss", "edit_unsupported"] as const
 type Result = (typeof RESULTS)[number]
 type MismatchField = (typeof MISMATCH_FIELDS)[number]
 type Outcome = (typeof OUTCOMES)[number]
 type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 type SkipReason = (typeof SKIP_REASONS)[number]
+type BaseResolved = (typeof BASE_RESOLVED)[number]
 
 /** Most entities compared from one page: one geo-db card line. */
 const MAX_ENTITIES = MAX_CARD_IDS
@@ -85,6 +90,7 @@ const mismatches = new Map<MismatchField, number>()
 const outcomes = new Map<Outcome, number>()
 const unsupported = new Map<UnsupportedReason, number>()
 const skipped = new Map<SkipReason, number>()
+const baseResolved = new Map<BaseResolved, number>()
 const bump = <K>(map: Map<K, number>, key: K, by = 1): void => {
 	map.set(key, (map.get(key) ?? 0) + by)
 }
@@ -125,6 +131,12 @@ export function renderProposalDiffShadowMetrics(): string {
 	)
 	for (const k of SKIP_REASONS)
 		lines.push(`gaia_api_proposal_diff_shadow_skipped_total{reason="${k}"} ${skipped.get(k) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_proposal_diff_shadow_base_total Historical bases resolved in geo-db, by how: edit_id (the version that edit sealed), timestamp (version-at the instant; no edit id known), edit_miss (the Space holds no version of that edit, so the timestamp) or edit_unsupported (the client or node cannot read it, so the timestamp).",
+		"# TYPE gaia_api_proposal_diff_shadow_base_total counter",
+	)
+	for (const b of BASE_RESOLVED)
+		lines.push(`gaia_api_proposal_diff_shadow_base_total{resolved="${b}"} ${baseResolved.get(b) ?? 0}`)
 	return lines.join("\n")
 }
 
@@ -135,6 +147,7 @@ export function __resetProposalDiffShadowMetricsForTests(): void {
 	outcomes.clear()
 	unsupported.clear()
 	skipped.clear()
+	baseResolved.clear()
 }
 
 /** The part of a served entity diff the shadow reads. */
@@ -155,6 +168,8 @@ export type ServedProposalDiff = {
 	mode: "active" | "historical"
 	/** A historical base's timestamp in whole seconds: the diff was laid against the state strictly before it. */
 	baseTimestamp?: bigint
+	/** The edit whose version key the base resolved to (the latest edit before `baseTimestamp`), when the row carried it. */
+	baseEditId?: string
 	entities: readonly ServedDiffEntity[]
 }
 
@@ -208,20 +223,48 @@ export function compareBase(
 }
 
 /**
- * The cards of `entityIds` as geo-db's Space stood just before `baseTimestamp` (whole seconds): the version at the instant
- * one nanosecond earlier, named by `version-at`, then the cards at its `seq`.
+ * The cards of `entityIds` as geo-db's Space stood at the base. With the id of the base's last edit, the version that edit
+ * sealed in the Space (`version-of-edit`, exact: no clock), where gaia's whole seconds against geo-db's nanoseconds blur a
+ * boundary. Without one, or where that read answers nothing (no such edit in the Space, a client without the read, a node
+ * older than the opcode), the version at the instant one nanosecond before `baseTimestamp` (`version-at`). Then the cards
+ * at its `seq`. Any other failure (a timeout, overload) is the comparison's, not a reason to read it another way.
  */
 async function readBaseAt(
 	geoDb: GeoDbCardClient,
 	geoSpaceId: string,
 	entityIds: string[],
 	baseTimestamp: bigint,
+	baseEditId: string | undefined,
 ): Promise<GeoCardRow[]> {
-	const version = await (geoDb.readVersionAt as NonNullable<GeoDbCardClient["readVersionAt"]>)({
-		geoSpaceId,
-		instantNs: (baseTimestamp * 1_000_000_000n - 1n).toString(),
-	})
-	return (geoDb.readCardsAt as NonNullable<GeoDbCardClient["readCardsAt"]>)({geoSpaceId, entityIds, seq: version.seq})
+	let seq: number | undefined
+	let resolved: BaseResolved = "timestamp"
+	if (baseEditId !== undefined) {
+		if (!geoDb.readVersionOfEdit) resolved = "edit_unsupported"
+		else {
+			try {
+				const found = await geoDb.readVersionOfEdit({
+					geoSpaceId,
+					editId: baseEditId.replaceAll("-", "").toLowerCase(),
+				})
+				if (found) {
+					seq = found.seq
+					resolved = "edit_id"
+				} else resolved = "edit_miss"
+			} catch (error) {
+				if (!(error instanceof GeoDbError && error.reason === "client_failed")) throw error
+				resolved = "edit_unsupported"
+			}
+		}
+	}
+	if (seq === undefined) {
+		const version = await (geoDb.readVersionAt as NonNullable<GeoDbCardClient["readVersionAt"]>)({
+			geoSpaceId,
+			instantNs: (baseTimestamp * 1_000_000_000n - 1n).toString(),
+		})
+		seq = version.seq
+	}
+	bump(baseResolved, resolved)
+	return (geoDb.readCardsAt as NonNullable<GeoDbCardClient["readCardsAt"]>)({geoSpaceId, entityIds, seq})
 }
 
 export function createProposalDiffShadow(deps: {
@@ -251,7 +294,7 @@ export function createProposalDiffShadow(deps: {
 			const entityIds = base.map((b) => b.entityId)
 			const rows =
 				historical && served.baseTimestamp !== undefined
-					? await readBaseAt(geoDb, geoSpaceId, entityIds, served.baseTimestamp)
+					? await readBaseAt(geoDb, geoSpaceId, entityIds, served.baseTimestamp, served.baseEditId)
 					: await (geoDb.readCards as NonNullable<GeoDbCardClient["readCards"]>)({
 							geoSpaceIds: [geoSpaceId],
 							entityIds,

@@ -80,6 +80,13 @@ export type GeoDbCardClient = {
 	 */
 	readVersionAt?(args: {geoSpaceId: string; instantNs: string; timeoutMs?: number}): Promise<GeoVersionAt>
 	/**
+	 * The version a Space sealed for one edit (`version-of-edit\t<space>\t<edit>` pipe line, geo-db wire revision 16): the
+	 * same row as `readVersionAt`, or null where the Space holds no version of that edit (an unknown edit, or one past
+	 * the Space's floor). Both ids are 32 lowercase hex digits. A geodb-client or node built before the line refuses it,
+	 * which rejects with `client_failed`. Absent on a client that cannot do it.
+	 */
+	readVersionOfEdit?(args: {geoSpaceId: string; editId: string; timeoutMs?: number}): Promise<GeoVersionAt | null>
+	/**
 	 * The card across several Spaces in one read (`pipe` line `<space>,<space>\t<geoql>`): the rows of every
 	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
@@ -469,6 +476,8 @@ type Request = {
 	versions?: boolean
 	/** A version-at read: the answer is the one version row, as a single `GeoVersionAt` in a one-element answer. */
 	versionAt?: boolean
+	/** A version-of-edit read: `versionAt`'s row, or an empty answer (no such version) as a zero-element answer. */
+	versionOfEdit?: boolean
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
@@ -655,34 +664,36 @@ export function createPipeGeoDbClient(
 			const answered = performance.now()
 			let outcome: GeoCardRow[] | GeoDbError
 			try {
-				outcome = request.versionAt
-					? ([versionAtFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
-					: request.versions
-						? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-						: request.count
-							? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
-							: request.ids
-								? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-								: request.page
-									? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-									: request.holders
-										? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
-												prop: "",
-												raw,
-											}))
-										: request.cards
-											? rowsFromGeoDbOutput(payload, null, {
-													names: request.names,
-													spaces: request.spaces && !request.legacy,
-												})
-											: request.backlinks
-												? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
-														spaces: request.spaces,
-													})
-												: rowsFromGeoDbOutput(payload, request.entityId, {
+				outcome = request.versionOfEdit
+					? ((payload.trim() === "" ? [] : [versionAtFromGeoDbOutput(payload)]) as unknown as GeoCardRow[])
+					: request.versionAt
+						? ([versionAtFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
+						: request.versions
+							? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+							: request.count
+								? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
+								: request.ids
+									? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+									: request.page
+										? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+										: request.holders
+											? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
+													prop: "",
+													raw,
+												}))
+											: request.cards
+												? rowsFromGeoDbOutput(payload, null, {
 														names: request.names,
-														spaces: request.spaces,
+														spaces: request.spaces && !request.legacy,
 													})
+												: request.backlinks
+													? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
+															spaces: request.spaces,
+														})
+													: rowsFromGeoDbOutput(payload, request.entityId, {
+															names: request.names,
+															spaces: request.spaces,
+														})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -761,6 +772,7 @@ export function createPipeGeoDbClient(
 		versions = false,
 		count = false,
 		versionAt = false,
+		versionOfEdit = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -780,6 +792,7 @@ export function createPipeGeoDbClient(
 				...(versions ? {versions} : {}),
 				...(count ? {count} : {}),
 				...(versionAt ? {versionAt} : {}),
+				...(versionOfEdit ? {versionOfEdit} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -913,6 +926,28 @@ export function createPipeGeoDbClient(
 				true,
 			)
 			return rows[0] as unknown as GeoVersionAt
+		},
+		async readVersionOfEdit({geoSpaceId, editId, timeoutMs}) {
+			if (!HEX32.test(geoSpaceId) || !HEX32.test(editId))
+				throw new GeoDbError("bad_request", "a Space and an edit of 32 lowercase hex digits")
+			const rows = await submit(
+				`version-of-edit\t${geoSpaceId}\t${editId}\n`,
+				NO_ENTITY,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				true,
+			)
+			return (rows[0] as unknown as GeoVersionAt | undefined) ?? null
 		},
 		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

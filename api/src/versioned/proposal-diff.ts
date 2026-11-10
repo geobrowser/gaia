@@ -333,15 +333,21 @@ export function getProposalStatus(proposal: ProposalWithAction["proposal"]): Pro
  * Space at the same instant (`geodb/proposalDiffShadow.ts`). Absent for an active diff, whose base is the live graph.
  */
 const baseTimestamps = new WeakMap<object, bigint>()
-export const recordBaseTimestamp = (diff: object, timestamp: bigint): void => {
+/** The base version's own edit (`edit_versions.edit_id`), where the base resolved to one: the geo-db shadow looks up the version it sealed. */
+const baseEditIds = new WeakMap<object, string>()
+export const recordBaseTimestamp = (diff: object, timestamp: bigint, editId?: string): void => {
 	baseTimestamps.set(diff, timestamp)
+	if (editId !== undefined) baseEditIds.set(diff, editId)
 }
 export const baseTimestampOf = (diff: object): bigint | undefined => baseTimestamps.get(diff)
+export const baseEditIdOf = (diff: object): string | undefined => baseEditIds.get(diff)
 
-/** A copy of a diff (the route spreads it to add names) keeps the base timestamp of the diff it was made from. */
+/** A copy of a diff (the route spreads it to add names) keeps the base timestamp and edit of the diff it was made from. */
 export function withBaseTimestampOf<T extends object>(copy: T, from: object): T {
 	const at = baseTimestamps.get(from)
 	if (at !== undefined) baseTimestamps.set(copy, at)
+	const edit = baseEditIds.get(from)
+	if (edit !== undefined) baseEditIds.set(copy, edit)
 	return copy
 }
 
@@ -356,10 +362,25 @@ export function resolveVersionKeyBeforeTimestamp(
 	db: Database,
 	timestamp: bigint,
 ): Effect.Effect<bigint | null, QueryError> {
+	return resolveBaseBeforeTimestamp(db, timestamp).pipe(Effect.map((base) => base?.versionKey ?? null))
+}
+
+/** A resolved base: its version key and the edit that version is (absent where the row carries none). */
+export type ResolvedBase = {versionKey: bigint; editId?: string}
+
+/**
+ * `resolveVersionKeyBeforeTimestamp` with the edit the key belongs to, from the same row: geo-db seals each edit as a
+ * version of the Space it touched, so the shadow looks the base up by edit id where the timestamp's whole seconds are
+ * ambiguous against geo-db's nanoseconds.
+ */
+export function resolveBaseBeforeTimestamp(
+	db: Database,
+	timestamp: bigint,
+): Effect.Effect<ResolvedBase | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{version_key: string}>(sql`
-				SELECT version_key FROM edit_versions
+			const result = await db.execute<{version_key: string; edit_id?: string | null}>(sql`
+				SELECT version_key, edit_id FROM edit_versions
 				WHERE created_at < to_timestamp(${timestamp.toString()}::bigint)
 				ORDER BY version_key DESC
 				LIMIT 1
@@ -370,7 +391,7 @@ export function resolveVersionKeyBeforeTimestamp(
 				return null
 			}
 
-			return BigInt(row.version_key)
+			return {versionKey: BigInt(row.version_key), ...(row.edit_id ? {editId: String(row.edit_id)} : {})}
 		},
 		catch: (error) => new QueryError("resolveVersionKeyBeforeTimestamp", error),
 	}).pipe(
@@ -1134,9 +1155,12 @@ export function computeProposalDiff(
 		// in the base state, producing an empty diff.
 		let baseVersionKey: bigint | null = null
 		let baseTimestamp: bigint | undefined
+		let baseEditId: string | undefined
 		if (status !== "active") {
 			baseTimestamp = proposal.executedAt ?? proposal.endTime
-			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
+			const resolved = yield* resolveBaseBeforeTimestamp(db, baseTimestamp)
+			baseVersionKey = resolved?.versionKey ?? null
+			baseEditId = resolved?.editId
 		}
 
 		// 11. Batch fetch base states (values and relations for affected entities)
@@ -1255,7 +1279,7 @@ export function computeProposalDiff(
 				totalEntities: entityIds.length,
 			},
 		}
-		if (baseTimestamp !== undefined) recordBaseTimestamp(served, baseTimestamp)
+		if (baseTimestamp !== undefined) recordBaseTimestamp(served, baseTimestamp, baseEditId)
 		return served
 	}).pipe(
 		Effect.withSpan("proposal-diff.computeProposalDiff", {
@@ -1450,10 +1474,13 @@ export function computeGroupedProposalDiff(
 		// For historical mode: use versioned state before the earliest edit timestamp
 		let baseVersionKey: bigint | null = null
 		let baseTimestamp: bigint | undefined
+		let baseEditId: string | undefined
 		const firstEdit = decodedEdits[0]
 		if (mode === "historical" && firstEdit) {
 			baseTimestamp = editCreatedAtToSeconds(firstEdit.createdAt)
-			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
+			const resolved = yield* resolveBaseBeforeTimestamp(db, baseTimestamp)
+			baseVersionKey = resolved?.versionKey ?? null
+			baseEditId = resolved?.editId
 		}
 
 		// Use "active" status for fetchBaseData when mode is "active", "closed" otherwise
@@ -1558,7 +1585,7 @@ export function computeGroupedProposalDiff(
 				totalEntities: entityIds.length,
 			},
 		}
-		if (baseTimestamp !== undefined) recordBaseTimestamp(served, baseTimestamp)
+		if (baseTimestamp !== undefined) recordBaseTimestamp(served, baseTimestamp, baseEditId)
 		return served
 	}).pipe(
 		Effect.withSpan("proposal-diff.computeGroupedProposalDiff", {

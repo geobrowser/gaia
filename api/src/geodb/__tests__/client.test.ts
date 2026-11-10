@@ -625,6 +625,41 @@ lines((line) => {
 		client.close()
 	})
 
+	it("sends `version-of-edit\\t<space>\\t<edit>` and parses the one version row, an empty answer as null", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (line === "version-of-edit\\t${SPACE}\\t${EDIT}") frame("+", ${JSON.stringify(row)})
+	else if (line === "version-of-edit\\t${SPACE}\\t${OTHER_ENTITY}") frame("+", "")
+	else frame("-", "unexpected " + line)
+})`)
+		expect(await client.readVersionOfEdit?.({geoSpaceId: SPACE, editId: EDIT})).toEqual({
+			seq: 9,
+			timestampNs: "1700000000000000001",
+			editId: EDIT,
+			authors: [AUTHOR],
+		})
+		expect(await client.readVersionOfEdit?.({geoSpaceId: SPACE, editId: OTHER_ENTITY})).toBeNull()
+		client.close()
+	})
+
+	it("rejects a malformed version-of-edit answer, and a bad Space or edit before the worker", async () => {
+		const bad = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("+", "not a version row\\n"))`)
+		await expect(bad.client.readVersionOfEdit?.({geoSpaceId: SPACE, editId: EDIT})).rejects.toBeDefined()
+		bad.client.close()
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceId: "nope", editId: EDIT},
+			{geoSpaceId: SPACE, editId: "nope"},
+			{geoSpaceId: SPACE, editId: "0000000000004000800000000000000A"},
+		])
+			await expect(client.readVersionOfEdit?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+
 	it("rejects a malformed answer", async () => {
 		const {client} = fakePipe(`
 process.stdout.write("ready\\n")

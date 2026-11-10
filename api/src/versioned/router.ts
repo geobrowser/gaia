@@ -40,6 +40,7 @@ import type {
 	SpaceMismatchError,
 } from "./proposal-diff"
 import {
+	baseEditIdOf,
 	baseTimestampOf,
 	computeGroupedProposalDiff,
 	computeProposalDiff,
@@ -1219,6 +1220,7 @@ export function createVersionedRouter(
 						mode: diff.proposalStatus === "active" ? "active" : "historical",
 						entities: diff.entities,
 						baseTimestamp: baseTimestampOf(diff),
+						baseEditId: baseEditIdOf(diff),
 					})
 					return c.json(diff)
 				},
@@ -1287,6 +1289,7 @@ export function createVersionedRouter(
 						mode: diff.mode,
 						entities: diff.entities,
 						baseTimestamp: baseTimestampOf(diff),
+						baseEditId: baseEditIdOf(diff),
 					})
 					return c.json(diff)
 				},
