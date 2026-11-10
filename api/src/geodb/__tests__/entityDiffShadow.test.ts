@@ -20,6 +20,8 @@ const TYPE = "66666666-6666-4666-8666-666666666666"
 const TARGET = "77777777-7777-4777-8777-777777777777"
 const OTHER_SPACE = "88888888-8888-4888-8888-888888888888"
 const EDIT = "99999999-9999-4999-8999-999999999999"
+const REL_ADDED = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+const REL_REMOVED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const OLDER_EDIT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 const cid = (id: string) => conformingId("entity", id)
@@ -35,8 +37,8 @@ const served = (over: Partial<ServedEntityDiff> = {}): ServedEntityDiff => ({
 		{propertyId: TYPE, spaceId: OTHER_SPACE, before: null, after: "elsewhere"},
 	],
 	relations: [
-		{typeId: TYPE, spaceId: SPACE, before: null, after: {toEntityId: TARGET}},
-		{typeId: TYPE, spaceId: SPACE, before: {toEntityId: TARGET}, after: null},
+		{relationId: REL_ADDED, typeId: TYPE, spaceId: SPACE, before: null, after: {toEntityId: TARGET}},
+		{relationId: REL_REMOVED, typeId: TYPE, spaceId: SPACE, before: {toEntityId: TARGET}, after: null},
 	],
 	...over,
 })
@@ -115,6 +117,7 @@ describe("afterStatements and compareAfter (golden)", () => {
 			entityId: cid(ENTITY),
 			values: [cid(PROP)],
 			relations: [{prop: cid(TYPE), target: cid(TARGET)}],
+			removedRelations: [cid(REL_REMOVED)],
 		})
 	})
 
@@ -225,6 +228,67 @@ describe("createEntityDiffShadow: entity diff", () => {
 		shadow.entityDiff(served())
 		shadow.review(review())
 		expect(renderEntityDiffShadowMetrics()).not.toContain('result="match"} 1')
+	})
+})
+
+describe("createEntityDiffShadow: removed relations", () => {
+	const removed = (relations: ServedEntityDiff["relations"]) => served({values: [], relations})
+	const gone = {relationId: REL_REMOVED, typeId: TYPE, spaceId: SPACE, before: {toEntityId: TARGET}, after: null}
+
+	it("counts a removed relation closed in geo-db (an empty page) as found", async () => {
+		const readRelationEntity = vi.fn(async () => [] as GeoCardRow[])
+		const {shadow} = make({readEntityVersions: head(), readCard: async () => card(), readRelationEntity})
+		shadow.entityDiff(served())
+		await settle()
+		expect(readRelationEntity).toHaveBeenCalledWith({relationId: cid(REL_REMOVED)})
+		expect(result("entity_diff", "match")).toBe(1)
+		expect(outcome("entity_diff", "found")).toBe(3)
+	})
+
+	it("counts a removed relation geo-db still holds open as a removed_open mismatch", async () => {
+		const readRelationEntity = async () => [{entity: cid(ENTITY), prop: "", raw: ""}] as GeoCardRow[]
+		const {shadow, warn} = make({readEntityVersions: head(), readCard: async () => card(), readRelationEntity})
+		shadow.entityDiff(served())
+		await settle()
+		expect(result("entity_diff", "mismatch")).toBe(1)
+		expect(count("gaia_api_entity_diff_shadow_mismatch_total", {route: "entity_diff", field: "removed_open"})).toBe(
+			1,
+		)
+		expect(outcome("entity_diff", "missing")).toBe(1)
+		expect(warn).toHaveBeenCalledWith("entity diff shadow mismatch", {
+			route: "entity_diff",
+			entities: 1,
+			found: 2,
+			missing: 1,
+		})
+	})
+
+	it("compares a diff of only removed relations, and skips them when the client cannot read relations", async () => {
+		const {shadow} = make({
+			readEntityVersions: head(),
+			readCard: async () => card(),
+			readRelationEntity: async () => [],
+		})
+		shadow.entityDiff(removed([gone]))
+		await settle()
+		expect(result("entity_diff", "match")).toBe(1)
+		const old = make({readEntityVersions: head(), readCard: async () => card()})
+		old.shadow.entityDiff(removed([gone]))
+		await settle()
+		expect(unsupported("entity_diff", "client")).toBe(1)
+	})
+
+	it("counts a failed relation read as failed", async () => {
+		const {shadow} = make({
+			readEntityVersions: head(),
+			readCard: async () => card(),
+			readRelationEntity: async () => {
+				throw new GeoDbError("timeout", "slow")
+			},
+		})
+		shadow.entityDiff(served())
+		await settle()
+		expect(result("entity_diff", "failed")).toBe(1)
 	})
 })
 
