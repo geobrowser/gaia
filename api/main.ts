@@ -41,6 +41,7 @@ import {
 	readEntityAtVersionShadowConfig,
 } from "./src/geodb/entityAtVersionShadow"
 import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
+import {createEntityDiffShadow, type EntityDiffShadow, readEntityDiffShadowConfig} from "./src/geodb/entityDiffShadow"
 import {
 	createEntityFeedConfigReaders,
 	createEntityFeedConfigShadow,
@@ -226,12 +227,16 @@ const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: nu
 // GEODB_ENTITY_AT_VERSION_SHADOW (off by default) likewise compares a sampled `/versioned/entities/:id` snapshot and the v2 diff's
 // name enrichment with geo-db (gaia_api_entity_at_version_shadow_total).
 const entityAtVersionShadowRef: {current: EntityAtVersionShadow | null} = {current: null}
+// GEODB_ENTITY_DIFF_SHADOW (off by default) checks a sampled `/entities/:id/diff` after side and a v2 `POST /review` base side
+// against geo-db, counts only (gaia_api_entity_diff_shadow_total). Never changes a response.
+const entityDiffShadowRef: {current: EntityDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
 		versions: (served) => entityVersionsShadowRef.current?.versions(served),
 		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
+		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
 	}),
 )
 log.info("Versioned entity routes enabled")
@@ -239,7 +244,11 @@ log.info("Versioned entity routes enabled")
 // Mount v2 versioned entities router (additive enrichments over v1)
 app.route(
 	"/v2/versioned",
-	createVersionedV2Router(db, runtime, {names: (served) => entityAtVersionShadowRef.current?.names(served)}),
+	createVersionedV2Router(db, runtime, {
+		names: (served) => entityAtVersionShadowRef.current?.names(served),
+		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
+		review: (served) => entityDiffShadowRef.current?.review(served),
+	}),
 )
 log.info("Versioned v2 entity routes enabled")
 
@@ -310,6 +319,16 @@ const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
 if (entityAtVersionShadowConfig.enabled) {
 	entityAtVersionShadowRef.current = createEntityAtVersionShadow({
 		config: entityAtVersionShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
+	})
+}
+
+const entityDiffShadowConfig = readEntityDiffShadowConfig(process.env)
+if (entityDiffShadowConfig.enabled) {
+	entityDiffShadowRef.current = createEntityDiffShadow({
+		config: entityDiffShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
 		log,

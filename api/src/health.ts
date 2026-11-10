@@ -10,6 +10,7 @@ import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityAtVersionShadowMetrics} from "./geodb/entityAtVersionShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
+import {renderEntityDiffShadowMetrics} from "./geodb/entityDiffShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
 import {renderEntityVersionsShadowMetrics} from "./geodb/entityVersionsShadow"
 import {renderFeedRunsShadowMetrics} from "./geodb/feedRunsShadow"
@@ -178,6 +179,8 @@ function renderPrometheusMetrics(): string {
 		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
 		renderRelationLookupShadowMetrics(),
 		renderEntityAtVersionShadowMetrics(),
+		// Entity diff after side and review base side checked against geo-db (GEODB_ENTITY_DIFF_SHADOW) — see geodb/entityDiffShadow.ts.
+		renderEntityDiffShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
 		renderForYouConfigMetrics(),
 		// entity_ranking_config tau_seconds from geo-db against the served one (GEODB_ENTITY_RANKING_CONFIG_SHADOW) — see forYou/entityRankingConfigShadow.ts.

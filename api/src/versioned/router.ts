@@ -20,6 +20,7 @@ type AppEnv = {
 }
 
 import type {ServedSnapshot} from "../geodb/entityAtVersionShadow"
+import type {ServedEntityDiff} from "../geodb/entityDiffShadow"
 import type {ServedVersions} from "../geodb/entityVersionsShadow"
 import type {ServedProposalDiff} from "../geodb/proposalDiffShadow"
 import {getProfilesBySpaceIds} from "../profile/queries"
@@ -319,6 +320,8 @@ export function createVersionedRouter(
 		versions(served: ServedVersions): void
 		proposalDiff?(served: ServedProposalDiff): void
 		entityAt?(served: ServedSnapshot): void
+		/** GEODB_ENTITY_DIFF_SHADOW: checks a served `/entities/:id/diff` after side against geo-db. */
+		entityDiff?(served: ServedEntityDiff): void
 	},
 ) {
 	const router = new Hono<AppEnv>()
@@ -943,6 +946,16 @@ export function createVersionedRouter(
 				onRight: (diff) => {
 					// Spread dynamic groups at root level per spec
 					const {groups, ...rest} = diff
+					// Fire and forget (GEODB_ENTITY_DIFF_SHADOW): after the response is built, swallows its own errors.
+					if (rawSpaceId && rawToEditId)
+						shadow?.entityDiff?.({
+							route: "entity_diff",
+							spaceId: rawSpaceId,
+							entityId: rawEntityId,
+							toEditId: rawToEditId,
+							values: diff.values,
+							relations: diff.relations,
+						})
 					return c.json({...rest, ...groups} as DiffResponse)
 				},
 			})
