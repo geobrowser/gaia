@@ -66,6 +66,12 @@ export type Config = {
 	 */
 	legacyIdMap: boolean
 	/**
+	 * GEODB_APPLIED_BLOCK: mirror the applied chain block into geo-db's `cursors` row `geodb-feeder-applied` (appliedBlock.ts,
+	 * geo-db plan 10.22 section 19). Off by default. The feeder's own key has no `derived=` grant, so it writes with the
+	 * `geodb-cursor-key` at GEODB_APPLIED_BLOCK_KEY_PATH, required when the flag is on.
+	 */
+	appliedBlock: {enabled: boolean; keyPath: string}
+	/**
 	 * GEODB_RECORD_KEYS: write gaia's chain-indexed rows as natural-key records (geo-db plan 10.12) in the feeder's
 	 * system Spaces, and allow the `put` intent. Default off. Needs serve at geo-db 9d97069a78 or later (which knows
 	 * `put` and admits a retract of an unseen id); turn it on only after that serve is rolled. Today it moves the
@@ -152,6 +158,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		legacyIdMap: flag(env.GEODB_LEGACY_ID_MAP),
+		appliedBlock: flag(env.GEODB_APPLIED_BLOCK)
+			? {enabled: true, keyPath: required(env, "GEODB_APPLIED_BLOCK_KEY_PATH")}
+			: {enabled: false, keyPath: ""},
 		recordKeys: flag(env.GEODB_RECORD_KEYS),
 		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-spaces.published.json`,
 		membership: {
