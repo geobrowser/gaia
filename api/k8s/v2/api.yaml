@@ -314,6 +314,11 @@ spec:
             # under the every-Space budget. Shadow only; never changes a response.
             - name: GEODB_RELATIONS_MEMBERSHIP_SHADOW
               value: "on"
+            # Judge an `entity` comparison that came out `cross_space` again against the card read across every Space the
+            # entity lives in, so its name, description, Types and lists are compared instead of skipped. One more read per
+            # such comparison. Shadow only; never changes a response.
+            - name: GEODB_CROSS_SPACE_HOLDERS_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
