@@ -988,3 +988,30 @@ lines((line) => frame(line.startsWith("*\\t") ? "-" : "+", line.startsWith("*\\t
 		client.close()
 	})
 })
+
+describe("readRelationEntity", () => {
+	const REL = "990a4147a92855e88e630e542faf1c72"
+	const FROM = "aa000000000040008000000000000001"
+
+	it("sends one every-Space statement line and reads the from-entity cell; an empty page is a closed relation", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope, doc] = line.split("\\t")
+	const ok = scope === "*" && doc.includes('.field = "entity"') && doc.includes('.args = .{ .statement = "${REL}" }')
+	frame(ok ? "+" : "-", ok ? "${PROP}\\t<ref>\\t${SPACE}:${ENTITY}\\t${FROM}\\t1\\n" : "bad line " + line)
+})
+`)
+		const rows = await client.readRelationEntity?.({relationId: REL})
+		expect(rows?.map((r) => r.entity)).toEqual([FROM])
+		client.close()
+	})
+
+	it("refuses a bad id before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const bad of ["", "x", 'x" } }', REL.toUpperCase().slice(1)])
+			await expect(client.readRelationEntity?.({relationId: bad})).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})

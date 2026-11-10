@@ -67,6 +67,7 @@ import {
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
+import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -103,6 +104,7 @@ import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
+import {setRelationLookupObserver} from "./src/versioned/proposal-diff"
 import {entityHasLiveStatements} from "./src/versioned/queries"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
@@ -292,6 +294,16 @@ if (proposalDiffShadowConfig.enabled) {
 		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
 		log,
 	})
+}
+
+const relationLookupShadowConfig = readRelationLookupShadowConfig(process.env)
+if (relationLookupShadowConfig.enabled) {
+	const relationLookupShadow = createRelationLookupShadow({
+		config: relationLookupShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		log,
+	})
+	setRelationLookupObserver((relationIds, served) => relationLookupShadow.lookup(relationIds, served))
 }
 
 const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
