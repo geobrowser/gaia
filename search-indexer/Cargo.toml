@@ -12,6 +12,7 @@ hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
 indexer_utils = { path = "../indexer_utils" }
+geodb-cursor = { path = "../geodb-cursor" }
 sdk = { path = "../sdk" }
 
 # GRC-20 decoding
