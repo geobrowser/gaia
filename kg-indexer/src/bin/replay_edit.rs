@@ -116,7 +116,7 @@ async fn main() -> Result<(), IndexerError> {
     let row: (Option<Vec<u8>>, bool) =
         sqlx::query_as("SELECT data, is_errored FROM ipfs_cache WHERE uri = $1")
             .bind(&args.uri)
-            .fetch_one(&storage.pool)
+            .fetch_one(&mut *storage.begin_operator_tx().await?)
             .await
             .map_err(|e| match e {
                 sqlx::Error::RowNotFound => {
@@ -164,7 +164,7 @@ async fn main() -> Result<(), IndexerError> {
 
     // 4. Replicate kg-indexer's real process_message(KgMessage::Edit) path
     //    exactly (see main.rs), in one transaction.
-    let mut tx = storage.begin_with_timeout().await?;
+    let mut tx = storage.begin_operator_tx().await?;
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *tx)
         .await?;
