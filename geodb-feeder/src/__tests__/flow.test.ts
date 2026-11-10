@@ -238,6 +238,37 @@ describe("handleMessage", () => {
 		expect(store.hasStatement(hex(3))).toBe(true)
 	})
 
+	it("names the edit's chain block to the applied-block writer only after every chunk applied", async () => {
+		const store = new Store(tmp())
+		const fake = fakeDb(() => ok)
+		const noted: [number, number | null][] = []
+		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b])}
+		// field 8 (blockchain_metadata) = { block_number (3) = 300 }
+		const withBlock = {offset: "5", value: Uint8Array.from([...message("5").value!, 0x42, 3, 0x18, 0xac, 0x02])}
+		await handleMessage({...deps(store, fake), chunk: 1, appliedBlock}, 3, withBlock)
+		expect(fake.applied).toHaveLength(3)
+		expect(noted).toEqual([[3, 300]])
+		// an edit with no metadata names no block
+		await handleMessage({...deps(store, fake), appliedBlock}, 3, message("6"))
+		expect(noted[1]).toEqual([3, null])
+	})
+
+	it("names no block for an edit that failed to apply or decode", async () => {
+		const store = new Store(tmp())
+		const noted: unknown[] = []
+		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b])}
+		const down = fakeDb(() => ({rc: 1, out: "", err: "ConnectionRefused"}))
+		const sleep = async () => {
+			throw new Error("stop")
+		}
+		await expect(handleMessage({...deps(store, down), sleep, appliedBlock}, 0, message("9"))).rejects.toThrow()
+		const bad: Decode = async () => {
+			throw new Error("bad edit")
+		}
+		expect(await handleMessage({...deps(store, fakeDb(() => ok), bad), appliedBlock}, 0, message("10"))).toBe("dead_letter")
+		expect(noted).toEqual([])
+	})
+
 	it("a replay after a crash mid-message resumes at the stored progress", async () => {
 		const store = new Store(tmp())
 		// The message translates to 3 intents (create_entity, set, add); a crashed attempt got 2 of them in.

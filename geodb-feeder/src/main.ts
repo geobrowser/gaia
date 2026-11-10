@@ -10,6 +10,7 @@ import * as grc from "@geoprotocol/grc-20"
 import kafkajs from "kafkajs"
 import {createLock} from "./apply.js"
 import {type Config, loadConfig} from "./config.js"
+import {createAppliedBlockWriter} from "./appliedBlock.js"
 import {GeoDb, spawnRunner} from "./geodb.js"
 import {type Decode, handleMessage} from "./handle.js"
 import {errorFields, log} from "./log.js"
@@ -74,6 +75,12 @@ async function main(config: Config): Promise<void> {
 		{runDir: config.runDir},
 		spawnRunner({clientBin: config.clientBin, keyPath: config.keyPath, bindingPath: config.bindingPath, cwd: config.runDir}),
 	)
+	const appliedBlock = config.appliedBlock.enabled
+		? createAppliedBlockWriter({
+				run: spawnRunner({clientBin: config.clientBin, keyPath: config.appliedBlock.keyPath, bindingPath: config.bindingPath, cwd: config.runDir}),
+				onResult: (ok) => metrics.appliedBlockPuts.inc({result: ok ? "ok" : "failed"}),
+			})
+		: undefined
 	const publisher = new SpaceMapPublisher(config.spaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics)
 	publisher.start()
 	publisher.publish(renderSpaceMap(store.spaces, backfilledSpaces(store.dir)))
@@ -163,7 +170,7 @@ async function main(config: Config): Promise<void> {
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
-				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap}
+				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
 				let outcome: string
 				for (;;) {
 					try {
@@ -186,6 +193,7 @@ async function main(config: Config): Promise<void> {
 				await commits.done(batch.partition, offset)
 			}
 			await commits.flush()
+			await appliedBlock?.flush()
 		},
 	})
 	consumerRunning = true
