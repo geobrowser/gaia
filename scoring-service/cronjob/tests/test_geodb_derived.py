@@ -663,6 +663,32 @@ for l in sys.stdin:
         assert "mirror_failed" in caplog.text
         m.close()
 
+    def test_default_retries_ride_out_a_minute_long_outage(self) -> None:
+        # The backoff before resend n is retry_delay * 2 ** (n - 1): the defaults wait out about a minute.
+        m = DerivedMirror(["x"])
+        assert sum(m.retry_delay * 2 ** (n - 1) for n in range(1, m.retries + 1)) >= 60
+
+    def test_a_session_that_cannot_open_for_a_few_attempts_is_ridden_out(self, tmp_path) -> None:
+        # The child dies before "ready" on its first five launches, then behaves (the 05:20 outage's shape).
+        launches = tmp_path / "launches"
+        body = f"""
+import sys
+launches = {str(launches)!r}
+open(launches, "a").write("x")
+if len(open(launches).read()) <= 5:
+    sys.exit(0)
+print("ready", flush=True)
+for l in sys.stdin:
+    sys.stdout.write("+0\\n")
+    sys.stdout.flush()
+"""
+        m = DerivedMirror(_script(tmp_path, body), timeout=5, retry_delay=0)
+        m.put("global_scores", self._rows(10))
+        assert m.stats["errors"] == 0
+        assert m.stats["dropped"] == 0
+        assert m.stats["reconnects"] == 5
+        m.close()
+
     def test_other_refusals_are_not_retried(self, tmp_path) -> None:
         argv = _script(
             tmp_path,
@@ -712,7 +738,7 @@ for l in sys.stdin:
         env["GEODB_DERIVED_RETRIES"] = "junk"
         del env["GEODB_DERIVED_SESSION_REFRESH_S"]
         m = DerivedMirror.from_env(env)
-        assert (m.session_refresh, m.retries) == (240.0, 3)
+        assert (m.session_refresh, m.retries) == (240.0, 6)
 
 
 def _env(**extra) -> dict:
