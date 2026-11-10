@@ -10,15 +10,25 @@
 --   position term = position_step × max(0, position_slots − position + 1) × position_day_factor^days
 --
 --   position   the debate's place in the agenda's Debates relation, numbered 1.. over the targets that
---              count (typed Debate, written in the agenda's own space), as agenda_contents numbers them
---              and currentDebateAgendas returns them (itemPosition). With the debate named by more than
---              one agenda on its newest listing day, the best (lowest) of those positions.
---   days       as the listing's: New York days since that listing day.
+--              count (typed Debate, written in the agenda's own space) AND carry a relation position. In
+--              the usual case, every link ordered, that is currentDebateAgendas' itemPosition.
+--   days       New York days since the agenda's Date.
+--
+-- WHICH PLACE. A debate's newest ordered day: the latest arrived Date on which an agenda placed it, and
+-- on that day its best (lowest) place if several agendas did. So today's place replaces yesterday's,
+-- even a lower one (the curator moved it down), and a debate placed yesterday keeps yesterday's place,
+-- faded, until an agenda places it again.
+--
+-- FALLBACKS. With no order there is no term, only the 0118 boost, and the debates order among themselves
+-- as they do today:
+--   - an agenda whose Debates links carry no positions places nothing: numbering them by relation id
+--     would hand out the biggest lifts at random;
+--   - in a partly ordered list, the ordered links are places 1..k and the unordered ones get no place;
+--   - with no agenda today, the last placed order fades (see the day factor) rather than stopping.
 --
 -- It is added to the listing score, so trending_source stays 'listing' and every reader of
 -- trendingScore sees it. Only a debate's own agenda_debates listing carries a position: claim listings,
--- topic listings and debates lifted through their claim are unchanged. A debate named on its newest
--- listing day but whose listing that day came through its claim gets the position too: it was named.
+-- topic listings and debates lifted through their claim are unchanged.
 --
 -- NUMBERS (defaults, all in entity_ranking_config):
 --   trending_position_step        30  per place. The organic spread a step has to beat among debates
@@ -29,10 +39,11 @@
 --                                     order even against an outlier.
 --   trending_position_slots       20  places that carry a term. Position 1 gets 20 steps (600), position
 --                                     20 one step (30), position 21 on only the 0118 boost.
---   trending_position_day_factor   0  today only. power(0, 0) = 1 on the agenda's Date and 0 after it,
---                                     so yesterday's order never sits above today's. A named debate
---                                     keeps 0118's decaying boost after its day. Raise it (up to 1) to
---                                     let an order carry into later days when spaces skip a day.
+--   trending_position_day_factor 0.65  the order fades each day, at the listing boost's own rate (0113's
+--                                     day_factor), so a day-old first place (390) sits level with
+--                                     today's eighth and a two-day-old one (254) with today's twelfth.
+--                                     It ends at the horizon (16 days), with the listing. 0 makes it
+--                                     today only; 1 keeps it whole until the horizon.
 -- A step of 0 turns the term off.
 --
 -- STORAGE. trending.agenda_listings has no position and is read as is by the warehouse export (gaia#1131)
@@ -44,7 +55,7 @@
 -- FRESHNESS. refresh_agenda_listings brings the positions table in step every hour and, while the step is
 -- on, re-scores the debates whose position changed within the slots: reordering the Debates relation
 -- moves Best within the hour. The daily full pass already re-scores every listed debate, which is what
--- ends a term at midnight. A config change waits for the full pass, as every trending term's does.
+-- moves each term to the new day's fade. A config change waits for the full pass, as every trending term's does.
 
 ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "trending_position_step" numeric NOT NULL DEFAULT 30;
@@ -53,7 +64,7 @@ ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "trending_position_slots" integer NOT NULL DEFAULT 20;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_position_day_factor" numeric NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS "trending_position_day_factor" numeric NOT NULL DEFAULT 0.65;
 --> statement-breakpoint
 DO $$
 BEGIN
@@ -78,31 +89,39 @@ CREATE TABLE IF NOT EXISTS "trending"."agenda_debate_positions" (
 CREATE INDEX IF NOT EXISTS "agenda_debate_positions_entity_idx" ON "trending"."agenda_debate_positions" ("entity_id", "listed_on");
 --> statement-breakpoint
 
--- What the agendas dated since `since` name as debates, with their places. agenda_contents numbers the
--- Debates targets that count, so a target that is not a debate, or written in another space, takes no
--- place.
+-- What the agendas dated since `since` place as debates. agenda_contents gives the Debates targets that
+-- count (typed Debate, written in the agenda's space) in their order, ordered links first; only targets
+-- with a positioned link take a place, renumbered 1..k over those. A target named only by links without
+-- a position takes none.
 CREATE OR REPLACE FUNCTION trending.current_agenda_debate_positions(since date DEFAULT NULL)
 RETURNS TABLE (agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, "position" integer)
 LANGUAGE sql STABLE AS $$
-  SELECT c.agenda_id, c.space_id, c.entity_id, c.listed_on, c.item_position
+  SELECT c.agenda_id, c.space_id, c.entity_id, c.listed_on,
+         row_number() OVER (PARTITION BY c.agenda_id, c.space_id ORDER BY c.item_position)::integer
   FROM trending.agenda_contents(NULL, since) c
   WHERE c.source = 'agenda_debates'
+    AND EXISTS (SELECT 1 FROM public.relations r
+                WHERE r.from_entity_id = c.agenda_id AND r.space_id = c.space_id
+                  AND r.to_entity_id = c.entity_id
+                  AND r.type_id = 'b96bf701-a399-430d-a072-f5e910cdeda9'::uuid           -- Debates
+                  AND NULLIF(r.position, '') IS NOT NULL)
 $$;
 --> statement-breakpoint
 
--- Per debate in `entity_ids`, its best place on the agendas of `listed_on` (its newest listing day).
+-- Per debate in `entity_ids`, its newest ordered day (the latest arrived Date an agenda placed it on)
+-- and its best place that day.
 CREATE OR REPLACE FUNCTION trending.debate_positions(entity_ids uuid[])
 RETURNS TABLE (entity_id uuid, listed_on date, "position" integer)
 LANGUAGE sql STABLE AS $$
-  SELECT p.entity_id, p.listed_on, min(p.position)::integer
+  SELECT DISTINCT ON (p.entity_id) p.entity_id, p.listed_on, p.position
   FROM trending.agenda_debate_positions p
-  WHERE p.entity_id = ANY(entity_ids)
-  GROUP BY p.entity_id, p.listed_on
+  WHERE p.entity_id = ANY(entity_ids) AND p.listed_on <= trending.today()
+  ORDER BY p.entity_id, p.listed_on DESC, p.position
 $$;
 --> statement-breakpoint
 
--- 0118's terms, plus the position term on the listing score of a debate named on its newest listing
--- day. Everything else is unchanged.
+-- 0118's terms, plus the position term on the listing score of a debate an agenda placed, faded from its
+-- newest ordered day. Everything else is unchanged.
 CREATE OR REPLACE FUNCTION trending.entity_trending_terms(entity_ids uuid[])
 RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
                listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
@@ -130,11 +149,10 @@ LANGUAGE sql STABLE AS $$
       AND de.created_at::bigint >= extract(epoch FROM now()) - cfg.trending_debate_window_days * 86400
     GROUP BY d.claim_id
   ),
-  -- A debate's place on the agendas of its newest listing day, if any named it that day.
+  -- A debate's place on its newest ordered day, and how many days ago that was.
   pos AS (
-    SELECT p.entity_id, p.position
+    SELECT p.entity_id, p.position, (SELECT cfg.today FROM cfg) - p.listed_on AS days
     FROM trending.debate_positions(ARRAY(SELECT entity_id FROM li)) p
-    JOIN li ON li.entity_id = p.entity_id AND li.last_listed_on = p.listed_on
   ),
   inputs AS (
     SELECT t.entity_id, li.last_listed_on, li.agenda_id, cfg.today - li.last_listed_on AS days,
@@ -142,7 +160,7 @@ LANGUAGE sql STABLE AS $$
              GREATEST(0, (extract(epoch FROM li.last_listed_on::timestamp AT TIME ZONE trending.time_zone())::numeric
                           - COALESCE(t.created_epoch, 0)) / GREATEST(cfg.tau_seconds, 1)) END AS age_credit,
            CASE WHEN t.is_claim AND li.entity_id IS NOT NULL THEN COALESCE(r.debates, 0) END AS debates,
-           pos.position,
+           pos.position, pos.days AS position_days,
            tp.topic_id, tp.listed_on AS topic_listed_on, cfg.today - tp.listed_on AS topic_days
     FROM target t
     CROSS JOIN cfg
@@ -156,9 +174,10 @@ LANGUAGE sql STABLE AS $$
            CASE WHEN x.last_listed_on IS NULL OR x.days > cfg.trending_horizon_days THEN 0
                 ELSE cfg.trending_boost * power(cfg.trending_day_factor, x.days)
                                         * power(cfg.trending_debate_factor, COALESCE(x.debates, 0))
-                   + CASE WHEN x.position IS NULL OR x.position > cfg.trending_position_slots THEN 0
+                   + CASE WHEN x.position IS NULL OR x.position > cfg.trending_position_slots
+                               OR x.position_days > cfg.trending_horizon_days THEN 0
                           ELSE cfg.trending_position_step * (cfg.trending_position_slots - x.position + 1)
-                                                          * power(cfg.trending_position_day_factor, x.days) END
+                                                          * power(cfg.trending_position_day_factor, x.position_days) END
            END AS listing_score,
            CASE WHEN x.topic_id IS NULL OR x.topic_days > cfg.trending_horizon_days THEN 0
                 ELSE cfg.trending_topic_boost * power(cfg.trending_day_factor, x.topic_days) END AS topic_score

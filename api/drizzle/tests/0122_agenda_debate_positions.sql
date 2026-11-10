@@ -5,13 +5,16 @@
 -- written against entity_ranking_config, so retuning the defaults does not need a new suite.
 --
 --   1. Places: the positions table holds each named debate's place, numbered over the targets that
---      count, the same as currentDebateAgendas' itemPosition.
+--      count and carry a relation position, the same as currentDebateAgendas' itemPosition. Links with
+--      no position take no place.
 --   2. On the agenda's Date, each place adds step × (slots − place + 1) to the listing boost, so the
---      agenda's order beats an organically stronger debate; the term ends after the Date by default.
+--      agenda's order beats an organically stronger debate; the term fades by the day factor after it.
+--      Unordered debates keep the plain boost. Yesterday's place carries through an unordered agenda
+--      today; today's place replaces yesterday's.
 --   3. Only named debates: a debate on a listed claim and the claim itself are unchanged. Named by two
 --      agendas the same day, a debate takes its best place. Past the slots, only the 0118 boost.
 --   4. A vote's re-score keeps the term. Reordering the Debates relation re-scores just the debates
---      whose place moved, and their order follows. A day factor above 0 carries a decayed term.
+--      whose place moved, and their order follows. A day factor of 0 makes it today only.
 --   5. A step of 0 turns it off: no term and no re-scores for moves, while the table stays in step.
 
 \set ON_ERROR_STOP on
@@ -34,7 +37,7 @@ UPDATE entity_ranking_config
    SET participation_weight = 4, participation_cap = 19, comment_weight = 0, comment_cap = 30,
        tau_seconds = 100000, trending_boost = 8, trending_topic_boost = 2.5, trending_day_factor = 0.65,
        trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 16,
-       trending_position_step = 30, trending_position_slots = 20, trending_position_day_factor = 0
+       trending_position_step = 30, trending_position_slots = 20, trending_position_day_factor = 0.65
  WHERE id;
 
 CREATE OR REPLACE FUNCTION pg_temp.b() RETURNS numeric LANGUAGE sql AS $$
@@ -53,15 +56,19 @@ CREATE OR REPLACE FUNCTION pg_temp.p(place integer, days integer DEFAULT 0) RETU
 --   UNL     an unlisted claim. D1 D2 D3 DM, 30 days old, and DSTRONG, created today with 40 votes,
 --           are debates on it. A0 (S1, today) names D1 D2 DSTRONG DM at a0 a1 a2 a3, and NOTD (a
 --           claim, which takes no place) at a05, between D1 and D2.
+--           DNULL is also named by A0, with no position; DDEM is named last (a4).
 --   A0B     an agenda in S2 today naming DM first.
---   AY      yesterday's agenda in S1, naming DY (30 days old) first.
+--   AU      an agenda in S2 today naming DU1, DU2 and DY2 with no positions at all.
+--   AY      yesterday's agenda in S1, placing DY, DY2 and DDEM first, second and third.
+--   All of these debates are 30 days old except DSTRONG.
 --   LC      a claim on A0's block, with debate DLC (10 days old): lifted through its claim only.
 --   ORG     an organic debate on UNL created today, with 40 votes, named by nothing.
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE ids AS
 SELECT k, ('b1220000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['UNL','LC','NOTD','D1','D2','D3','DM','DSTRONG','DY','DLC','ORG',
-                  'A0','A0B','AY','S1','S2']) WITH ORDINALITY AS u(k, n)
+                  'DNULL','DDEM','DU1','DU2','DY2',
+                  'A0','A0B','AU','AY','S1','S2']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -146,16 +153,20 @@ SELECT pg_temp.ent(k, pg_temp.noon(40)), pg_temp.typed(k, 'CLAIM') FROM ids WHER
 
 SELECT pg_temp.agenda('A0', 'S1', 0, ARRAY['LC']);
 SELECT pg_temp.agenda('A0B', 'S2', 0, ARRAY[]::text[]);
+SELECT pg_temp.agenda('AU', 'S2', 0, ARRAY[]::text[]);
 SELECT pg_temp.agenda('AY', 'S1', 1, ARRAY[]::text[]);
 
-SELECT pg_temp.debate(k, 'UNL', 30) FROM ids WHERE k IN ('D1','D2','D3','DM','DY');
+SELECT pg_temp.debate(k, 'UNL', 30) FROM ids WHERE k IN ('D1','D2','D3','DM','DY','DNULL','DDEM','DU1','DU2','DY2');
 SELECT pg_temp.debate('DSTRONG', 'UNL', 0), pg_temp.debate('ORG', 'UNL', 0), pg_temp.debate('DLC', 'LC', 10);
 SELECT pg_temp.votes('DSTRONG', 40), pg_temp.votes('ORG', 40);
 
-SELECT pg_temp.names('A0', k, 'S1') FROM ids WHERE k IN ('D1','NOTD','D2','DSTRONG','DM');
+SELECT pg_temp.names('A0', k, 'S1') FROM ids WHERE k IN ('D1','NOTD','D2','DSTRONG','DM','DNULL','DDEM');
 SELECT pg_temp.place('A0', 'D1', 'a0'), pg_temp.place('A0', 'NOTD', 'a05'), pg_temp.place('A0', 'D2', 'a1'),
-       pg_temp.place('A0', 'DSTRONG', 'a2'), pg_temp.place('A0', 'DM', 'a3');
-SELECT pg_temp.names('A0B', 'DM', 'S2'), pg_temp.names('AY', 'DY', 'S1');
+       pg_temp.place('A0', 'DSTRONG', 'a2'), pg_temp.place('A0', 'DM', 'a3'), pg_temp.place('A0', 'DDEM', 'a4');
+SELECT pg_temp.names('A0B', 'DM', 'S2'), pg_temp.place('A0B', 'DM', 'a0');
+SELECT pg_temp.names('AU', k, 'S2') FROM ids WHERE k IN ('DU1','DU2','DY2');
+SELECT pg_temp.names('AY', k, 'S1') FROM ids WHERE k IN ('DY','DY2','DDEM');
+SELECT pg_temp.place('AY', 'DY', 'a0'), pg_temp.place('AY', 'DY2', 'a1'), pg_temp.place('AY', 'DDEM', 'a2');
 
 SELECT trending.refresh_agenda_listings(false);
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('ORG'), pg_temp.i('D3')]);
@@ -165,17 +176,21 @@ SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('ORG'), pg_temp.i('D
 -- ---------------------------------------------------------------------------
 SELECT assert(pg_temp.stored_place('A0', 'D1') = 1 AND pg_temp.stored_place('A0', 'D2') = 2
               AND pg_temp.stored_place('A0', 'DSTRONG') = 3 AND pg_temp.stored_place('A0', 'DM') = 4
+              AND pg_temp.stored_place('A0', 'DDEM') = 5
               AND pg_temp.stored_place('A0B', 'DM') = 1 AND pg_temp.stored_place('AY', 'DY') = 1,
               '1: each named debate''s place, numbered over the debates only (NOTD takes none)');
+SELECT assert(pg_temp.stored_place('A0', 'DNULL') IS NULL
+              AND NOT EXISTS (SELECT 1 FROM trending.agenda_debate_positions WHERE agenda_id = pg_temp.i('AU')),
+              '1: a link with no position takes no place, in a partly ordered list or an unordered one');
 SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_debate_positions WHERE entity_id = pg_temp.i('NOTD'))
               AND NOT EXISTS (SELECT 1 FROM trending.agenda_debate_positions WHERE entity_id = pg_temp.i('DLC')),
               '1: no place for a non-debate target or a debate lifted through its claim');
 SELECT assert(NOT EXISTS (
-                SELECT c.entity_id, c.item_position FROM public.current_debate_agendas(ARRAY[pg_temp.i('S1')]) c
-                WHERE c.source = 'agenda_debates'
+                SELECT p.entity_id, p.position FROM trending.agenda_debate_positions p WHERE p.agenda_id = pg_temp.i('A0')
                 EXCEPT
-                SELECT p.entity_id, p.position FROM trending.agenda_debate_positions p WHERE p.agenda_id = pg_temp.i('A0')),
-              '1: the places are currentDebateAgendas'' itemPositions');
+                SELECT c.entity_id, c.item_position FROM public.current_debate_agendas(ARRAY[pg_temp.i('S1')]) c
+                WHERE c.source = 'agenda_debates'),
+              '1: the places are currentDebateAgendas'' itemPositions (ordered links come first)');
 
 -- ---------------------------------------------------------------------------
 -- 2. The term.
@@ -188,8 +203,17 @@ SELECT assert(pg_temp.score('ORG') > pg_temp.score('D1') - pg_temp.trend('D1'),
 SELECT assert(pg_temp.score('D1') > pg_temp.score('D2') AND pg_temp.score('D2') > pg_temp.score('DSTRONG')
               AND pg_temp.score('DSTRONG') > pg_temp.score('ORG'),
               '2: so Best follows the agenda''s order, a newer debate with 40 votes included, above the organic one');
-SELECT assert(pg_temp.near(pg_temp.trend('DY'), pg_temp.b() * pg_temp.f(1)),
-              '2: yesterday''s first place keeps only the decaying boost');
+SELECT assert(pg_temp.near(pg_temp.trend('DY'), pg_temp.b() * pg_temp.f(1) + pg_temp.p(1, 1))
+              AND pg_temp.p(1, 1) > 0 AND pg_temp.p(1, 1) < pg_temp.p(1),
+              '2: yesterday''s first place fades by the day factor, it does not lapse');
+SELECT assert(pg_temp.score('DY') > pg_temp.score('D3') + pg_temp.b(),
+              '2: so with no agenda today, yesterday''s order still leads');
+SELECT assert(pg_temp.trend('DNULL') = pg_temp.b() AND pg_temp.trend('DU1') = pg_temp.b() AND pg_temp.trend('DU2') = pg_temp.b(),
+              '2: debates named with no order keep the plain boost, in their organic order');
+SELECT assert(pg_temp.near(pg_temp.trend('DY2'), pg_temp.b() + pg_temp.p(2, 1)),
+              '2: named today with no order, a debate keeps yesterday''s place, faded');
+SELECT assert(pg_temp.trend('DDEM') = pg_temp.b() + pg_temp.p(5),
+              '2: placed today, today''s place replaces yesterday''s');
 SELECT assert(pg_temp.trend('D3') = 0, '2: an unnamed debate gets nothing');
 
 -- ---------------------------------------------------------------------------
@@ -225,11 +249,11 @@ SELECT assert(pg_temp.score('DSTRONG') > pg_temp.score('D1') AND pg_temp.score('
               '4: and so does Best');
 SELECT assert(trending.refresh_agenda_listings(false) = 0, '4: an unchanged hour re-scores nothing');
 
-UPDATE entity_ranking_config SET trending_position_day_factor = 0.5 WHERE id;
-SELECT trending.refresh_agenda_listings(true);
-SELECT assert(pg_temp.near(pg_temp.trend('DY'), pg_temp.b() * pg_temp.f(1) + pg_temp.p(1, 1)),
-              '4: with a day factor, yesterday''s place carries a decayed term');
 UPDATE entity_ranking_config SET trending_position_day_factor = 0 WHERE id;
+SELECT trending.refresh_agenda_listings(true);
+SELECT assert(pg_temp.near(pg_temp.trend('DY'), pg_temp.b() * pg_temp.f(1)) AND pg_temp.trend('D1') = pg_temp.b() + pg_temp.p(2),
+              '4: a day factor of 0 makes the order today only');
+UPDATE entity_ranking_config SET trending_position_day_factor = 0.65 WHERE id;
 
 -- ---------------------------------------------------------------------------
 -- 5. Off.
@@ -240,7 +264,7 @@ SELECT assert(pg_temp.trend('DSTRONG') = pg_temp.b() AND pg_temp.trend('D1') = p
               '5: a step of 0 leaves the plain boost');
 SELECT pg_temp.place('A0', 'DSTRONG', 'z');
 SELECT assert(trending.refresh_agenda_listings(false) = 0, '5: and a move re-scores nothing');
-SELECT assert(pg_temp.stored_place('A0', 'DSTRONG') = 4 AND pg_temp.stored_place('A0', 'D1') = 1,
+SELECT assert(pg_temp.stored_place('A0', 'DSTRONG') = 5 AND pg_temp.stored_place('A0', 'D1') = 1,
               '5: while the table stays in step');
 
 -- Cleanup for running by hand.
