@@ -21,6 +21,7 @@ import {renderPrivateReadersShadowMetrics} from "./geodb/privateReadersShadow"
 import {renderProposalDiffShadowMetrics} from "./geodb/proposalDiffShadow"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
+import {renderRelationLookupShadowMetrics} from "./geodb/relationLookupShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
 import {renderTypeCountsShadowMetrics} from "./geodb/typeCountsShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
@@ -174,6 +175,8 @@ function renderPrometheusMetrics(): string {
 		renderEntityVersionsShadowMetrics(),
 		// Active proposal and proposal-group diff base statements checked against geo-db's cards (GEODB_PROPOSAL_DIFF_SHADOW) — see geodb/proposalDiffShadow.ts.
 		renderProposalDiffShadowMetrics(),
+		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
+		renderRelationLookupShadowMetrics(),
 		renderEntityAtVersionShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
 		renderForYouConfigMetrics(),
