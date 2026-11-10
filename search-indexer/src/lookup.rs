@@ -164,9 +164,8 @@ impl EntitySpaceLookup {
     ///
     /// Batches larger than 1000 are chunked automatically.
     ///
-    /// Postgres only: no geo-db shadow. geo-db has no read for "every entity with a statement in
-    /// this Space"; `entities .args.types` lists a Space's entities only by type, and this lookup
-    /// is untyped. Twinning it waits on an untyped, cursor-paged Space-entities scan.
+    /// With the geo-db shadow on, a sample of the Spaces is also scanned in geo-db
+    /// (`space_entities`, one Space at a time) and compared; Postgres still answers.
     pub async fn entities_for_spaces(
         &self,
         space_ids: &[Uuid],
@@ -210,6 +209,9 @@ impl EntitySpaceLookup {
             }
         }
 
+        if let Some(shadow) = &self.shadow {
+            shadow.observe_entities_for_spaces(space_ids, &all_results);
+        }
         Ok(all_results)
     }
 
