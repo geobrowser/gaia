@@ -2081,6 +2081,40 @@ $K -n gaia rollout restart deploy/notification-indexer
 Rotate: delete Secret `geodb-outbox-key` and Job `geodb-outbox-key`, rerun step 1, then steps 2 and 3.
 Revoke: delete the Secret and restart serve; the principal disappears from the binding.
 
+### Replaying outbox units the mirror missed (`outbox-replay`)
+
+The mirror is fire-and-forget, so a serve outage or roll leaves a gap nothing refills, and the delivery-worker
+shadow counts each gap as a permanent `miss`. `outbox-replay` (a second binary in the notification-indexer image)
+reads the `notification_outbox` rows of a time window from Postgres and enters them into the work class through
+the same `geodb_outbox::enter_line` the mirror uses: same ledger key (the row's `idempotency_key`), same event-type
+byte, same `hex:` payload. An enter is put-if-absent on that key, so a unit geo-db already holds answers
+`duplicate` and is not written again; running a window twice enters nothing the second time. Webhooks come from
+the row's `notification_deliveries` rows, so a webhook that matched at insert but had no delivery row is not
+listed (the live mirror lists it).
+
+It is a dry run unless `--apply` is given. A dry run reads Postgres only (opened read-only) and prints `scanned`,
+`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. It
+cannot print `present`: geo-db has no read-only per-key probe (`claim` leases the unit and would disturb the
+delivery-side shadow), so `present` comes from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
+`--batch` (default 500, max 5000) bounds rows per query, `--rate` (default 50, max 1000) bounds enters a second,
+`--max-units` bounds the scan. A geo-db error stops the run and prints how far it got; rerun the same command.
+
+It runs inside a notification-indexer pod, which already has `DATABASE_URL`, `geodb-client`, the work key and
+`GEODB_OUTBOX_MIRROR=1`. The pod needs an image built from a ref that includes the tool.
+
+```bash
+# the 11-11 rev5 outage (serve down 18:10Z to 21:59Z); dry run first, then --apply
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+$K exec deploy/notification-indexer -- outbox-replay \
+  --from 2026-11-11T18:10:00Z --to 2026-11-11T22:00:00Z
+$K exec deploy/notification-indexer -- outbox-replay \
+  --from 2026-11-11T18:10:00Z --to 2026-11-11T22:00:00Z --apply --rate 50
+```
+
+Expect `entered` close to the `GeoDbOutboxMirrorDropped`/`Errors` count for the window and `present` to be the
+rest. Replayed units land after the delivery's own `miss` grace has passed for rows already delivered, so the
+shadow's earlier `miss` counts stay counted; new rows are unaffected.
+
 ### Delivery-side shadow reader (delivery-worker)
 
 delivery-worker can read the mirrored units back and compare them with what Postgres delivered (plan
