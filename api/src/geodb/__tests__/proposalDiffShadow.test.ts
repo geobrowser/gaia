@@ -58,6 +58,7 @@ const result = (r: string) => count("gaia_api_proposal_diff_shadow_total", "resu
 const statements = (o: string) => count("gaia_api_proposal_diff_shadow_statements_total", "outcome", o)
 const unsupported = (r: string) => count("gaia_api_proposal_diff_shadow_unsupported_total", "reason", r)
 const skipped = (r: string) => count("gaia_api_proposal_diff_shadow_skipped_total", "reason", r)
+const based = (r: string) => count("gaia_api_proposal_diff_shadow_base_total", "resolved", r)
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
 const make = (
@@ -131,13 +132,145 @@ describe("createProposalDiffShadow", () => {
 		})
 	})
 
-	it("does not read an executed or closed base", async () => {
+	it("reads an executed or closed base at the version before its timestamp", async () => {
+		const readVersionAt = vi.fn(async () => ({seq: 7, timestampNs: "1", editId: ENTITY, authors: []}))
+		const readCardsAt = vi.fn(async () => geoRows())
+		const readCards = vi.fn(async () => geoRows())
+		const {shadow} = make({readVersionAt, readCardsAt, readCards})
+		shadow.diff(served({mode: "historical", baseTimestamp: 1_700_000_000n}))
+		await settle()
+		// strictly before the timestamp: the instant one nanosecond earlier
+		expect(readVersionAt).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, instantNs: "1699999999999999999"})
+		expect(readCardsAt).toHaveBeenCalledWith({
+			geoSpaceId: GEO_SPACE,
+			entityIds: [conformingId("entity", ENTITY)],
+			seq: 7,
+		})
+		expect(readCards).not.toHaveBeenCalled()
+		expect(result("match")).toBe(1)
+		expect(statements("found")).toBe(2)
+		expect(unsupported("as_of")).toBe(0)
+	})
+
+	describe("a base whose last edit's id is known", () => {
+		const BASE_EDIT = "00000000000040008000000000000009"
+		const historical = (over: Partial<ServedProposalDiff> = {}) =>
+			served({mode: "historical", baseTimestamp: 1_700_000_000n, baseEditId: BASE_EDIT, ...over})
+		const version = (seq: number) => ({seq, timestampNs: "1", editId: BASE_EDIT, authors: []})
+
+		it("reads the version that edit sealed in place of resolving the timestamp", async () => {
+			const readVersionOfEdit = vi.fn(async () => version(4))
+			const readVersionAt = vi.fn(async () => version(7))
+			const readCardsAt = vi.fn(async () => geoRows())
+			const {shadow} = make({readVersionOfEdit, readVersionAt, readCardsAt})
+			shadow.diff(historical())
+			await settle()
+			expect(readVersionOfEdit).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, editId: BASE_EDIT})
+			expect(readVersionAt).not.toHaveBeenCalled()
+			expect(readCardsAt).toHaveBeenCalledWith({
+				geoSpaceId: GEO_SPACE,
+				entityIds: [conformingId("entity", ENTITY)],
+				seq: 4,
+			})
+			expect(result("match")).toBe(1)
+			expect(based("edit_id")).toBe(1)
+			expect(based("timestamp")).toBe(0)
+		})
+
+		it("falls back to the timestamp where the Space holds no version of that edit", async () => {
+			const readVersionOfEdit = vi.fn(async () => null)
+			const readVersionAt = vi.fn(async () => version(7))
+			const readCardsAt = vi.fn(async () => geoRows())
+			const {shadow} = make({readVersionOfEdit, readVersionAt, readCardsAt})
+			shadow.diff(historical())
+			await settle()
+			expect(readVersionAt).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, instantNs: "1699999999999999999"})
+			expect(readCardsAt).toHaveBeenCalledWith(expect.objectContaining({seq: 7}))
+			expect(result("match")).toBe(1)
+			expect(based("edit_miss")).toBe(1)
+			expect(based("edit_id")).toBe(0)
+		})
+
+		it("falls back where the client or the node cannot answer the read, but not on a timeout", async () => {
+			const readVersionAt = vi.fn(async () => version(7))
+			const readCardsAt = vi.fn(async () => geoRows())
+			const noRead = make({readVersionAt, readCardsAt})
+			noRead.shadow.diff(historical())
+			const refused = make({
+				readVersionOfEdit: async () => {
+					throw new GeoDbError("client_failed", "UnknownOpcode")
+				},
+				readVersionAt,
+				readCardsAt,
+			})
+			refused.shadow.diff(historical())
+			await settle()
+			expect(readVersionAt).toHaveBeenCalledTimes(2)
+			expect(based("edit_unsupported")).toBe(2)
+			expect(result("match")).toBe(2)
+
+			const slow = make({
+				readVersionOfEdit: async () => {
+					throw new GeoDbError("timeout", "slow")
+				},
+				readVersionAt,
+				readCardsAt,
+			})
+			slow.shadow.diff(historical())
+			await settle()
+			expect(readVersionAt).toHaveBeenCalledTimes(2)
+			expect(result("failed")).toBe(1)
+		})
+
+		it("counts a base with no edit id as resolved by the timestamp", async () => {
+			const readVersionOfEdit = vi.fn(async () => version(4))
+			const {shadow} = make({
+				readVersionOfEdit,
+				readVersionAt: async () => version(7),
+				readCardsAt: async () => geoRows(),
+			})
+			shadow.diff(historical({baseEditId: undefined}))
+			await settle()
+			expect(readVersionOfEdit).not.toHaveBeenCalled()
+			expect(based("timestamp")).toBe(1)
+			expect(based("edit_id")).toBe(0)
+		})
+	})
+
+	it("counts a historical base statement the version lacks as a mismatch", async () => {
+		const {shadow} = make({
+			readVersionAt: async () => ({seq: 3, timestampNs: "1", editId: ENTITY, authors: []}),
+			readCardsAt: async () => [],
+		})
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
+		await settle()
+		expect(result("mismatch")).toBe(1)
+		expect(statements("missing")).toBe(2)
+	})
+
+	it("fails, without reading cards, when the version cannot be named", async () => {
+		const readCardsAt = vi.fn(async () => geoRows())
+		const {shadow} = make({
+			readVersionAt: async () => {
+				throw new GeoDbError("client_failed", "refused")
+			},
+			readCardsAt,
+		})
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
+		await settle()
+		expect(readCardsAt).not.toHaveBeenCalled()
+		expect(result("failed")).toBe(1)
+	})
+
+	it("leaves a historical diff with no base timestamp, or a client with no at-version read, unsupported", async () => {
 		const readCards = vi.fn(async () => geoRows())
 		const {shadow} = make({readCards})
 		shadow.diff(served({mode: "historical"}))
+		shadow.diff(served({mode: "historical", baseTimestamp: 5n}))
 		await settle()
 		expect(readCards).not.toHaveBeenCalled()
 		expect(unsupported("as_of")).toBe(1)
+		expect(unsupported("client")).toBe(1)
 	})
 
 	it("reports a page with nothing on the base side, an unmapped Space and an old client", async () => {

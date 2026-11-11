@@ -40,7 +40,14 @@ import type {
 	ProposalNotFoundError,
 	SpaceMismatchError,
 } from "./proposal-diff"
-import {computeGroupedProposalDiff, computeProposalDiff, MAX_GROUP_SIZE} from "./proposal-diff"
+import {
+	baseEditIdOf,
+	baseTimestampOf,
+	computeGroupedProposalDiff,
+	computeProposalDiff,
+	MAX_GROUP_SIZE,
+	withBaseTimestampOf,
+} from "./proposal-diff"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
@@ -1114,7 +1121,7 @@ export function createVersionedRouter(
 				// Enrich with resolved names
 				const enrichedEntities = yield* enrichEntityDiffs(db, diff.entities)
 
-				return {...diff, entities: enrichedEntities}
+				return withBaseTimestampOf({...diff, entities: enrichedEntities}, diff)
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -1225,6 +1232,8 @@ export function createVersionedRouter(
 						spaceId: diff.spaceId,
 						mode: diff.proposalStatus === "active" ? "active" : "historical",
 						entities: diff.entities,
+						baseTimestamp: baseTimestampOf(diff),
+						baseEditId: baseEditIdOf(diff),
 					})
 					return c.json(diff)
 				},
@@ -1272,7 +1281,7 @@ export function createVersionedRouter(
 			const program = Effect.gen(function* () {
 				const diff = yield* computeGroupedProposalDiff(db, proposalIds, spaceId, cursor, limit)
 				const enrichedEntities = yield* enrichEntityDiffs(db, diff.entities)
-				return {...diff, entities: enrichedEntities}
+				return withBaseTimestampOf({...diff, entities: enrichedEntities}, diff)
 			}).pipe(
 				Effect.withSpan("versioned.groupedProposalDiff", {
 					attributes: {spaceId, proposalCount: proposalIds.length, limit},
@@ -1292,6 +1301,8 @@ export function createVersionedRouter(
 						spaceId: diff.spaceId,
 						mode: diff.mode,
 						entities: diff.entities,
+						baseTimestamp: baseTimestampOf(diff),
+						baseEditId: baseEditIdOf(diff),
 					})
 					return c.json(diff)
 				},
