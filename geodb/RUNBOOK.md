@@ -1768,7 +1768,8 @@ doctl registry repository list-tags geodb --registry geo | grep $NEW
 # 1. PR: change the pin to $NEW in geodb/k8s/v2/geodb.yaml (both places: serve and the feeder's geodb-setup init
 #    container) and api/k8s/v2/api.yaml. Merge it; nothing deploys.
 # 2. before-picture: 20 entity reads from live (a throwaway pod, §8c), saved as before.out. Silence GeoDbFeederDown,
-#    GeoDbFeederStalled, GeoDbFeederLagHigh and ApiGeoDbCardShadowFailing for 1 h.
+#    GeoDbFeederStalled, GeoDbFeederLagHigh, ApiGeoDbCardShadowFailing and GeoDbOutbox.* (GeoDbOutboxMirrorErrors,
+#    GeoDbOutboxMirrorDropped: serve is down, so the notification-indexer mirror fails) for 1 h.
 # 3. quiesce: feeder first, then serve (SIGTERM, the supervisor forwards SIGINT, serve writes its final checkpoint).
 $K scale deployment/geodb-feeder --replicas=0 && $K wait --for=delete pod -l app=geodb-feeder --timeout=120s
 $K logs -f geodb-0 > /tmp/geodb-0-shutdown.log 2>&1 &
