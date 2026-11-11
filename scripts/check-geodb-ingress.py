@@ -31,9 +31,13 @@ for rule in rules:
         sys.exit(f"{PATH}: geodb-ingress opens 7447 to every namespace/pod; pin it to the gaia namespace")
     if "kubernetes.io/metadata.name: gaia" not in rule:
         sys.exit(f"{PATH}: geodb-ingress 7447 rule is not pinned to the gaia namespace")
+    if not re.search(r"geodb-client:\s*[\"']true[\"']", rule):
+        sys.exit(f"{PATH}: geodb-ingress 7447 rule must also select pods with geodb-client: \"true\"")
+    if len(re.findall(r"(?m)^\s+- (namespaceSelector|podSelector)\b", rule)) != 1:
+        sys.exit(f"{PATH}: geodb-ingress 7447 rule must be ONE peer with both selectors (two peers are OR-ed)")
 if not seen:
     sys.exit(f"{PATH}: geodb-ingress has no rule for port 7447")
-print("geodb-ingress: 7447 is pinned to the gaia namespace")
+print("geodb-ingress: 7447 is pinned to gaia pods labelled geodb-client")
 
 
 # Every workload that talks to geo-db must carry the pod-template label `geodb-client: "true"` so the
