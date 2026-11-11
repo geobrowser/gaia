@@ -104,7 +104,7 @@ async fn main() -> Result<(), IndexerError> {
     let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
         sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
             .bind(&uris)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
         .into_iter()
@@ -194,7 +194,7 @@ async fn main() -> Result<(), IndexerError> {
         .bind(&e)
         .bind(&p)
         .bind(&s)
-        .fetch_all(&storage.pool)
+        .fetch_all(&mut *storage.begin_operator_tx().await?)
         .await?
     };
     let backed_set: HashSet<(Uuid, Uuid, Uuid)> = backed.into_iter().collect();
@@ -206,7 +206,7 @@ async fn main() -> Result<(), IndexerError> {
     let existing_live: Vec<String> =
         sqlx::query_scalar("SELECT id FROM values WHERE id = ANY($1::text[])")
             .bind(&live_ids)
-            .fetch_all(&storage.pool)
+            .fetch_all(&mut *storage.begin_operator_tx().await?)
             .await?;
     let existing_live_set: HashSet<String> = existing_live.into_iter().collect();
 
@@ -234,7 +234,7 @@ async fn main() -> Result<(), IndexerError> {
     if !delete_live_ids.is_empty() {
         sqlx::query("DELETE FROM values WHERE id = ANY($1::text[])")
             .bind(&delete_live_ids)
-            .execute(&storage.pool)
+            .execute(&mut *storage.begin_operator_tx().await?)
             .await?;
     }
     println!("\nExecuted successfully.");

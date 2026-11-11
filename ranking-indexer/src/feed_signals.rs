@@ -30,8 +30,9 @@ pub const CUTOFF_QUERY: &str =
 /// The item and user views scan a week of Explore events; generous, but bounded.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The app role's statement_timeout is 30s; a first run writes 30 days. `SET LOCAL`, inside the
-/// transaction, in case the connection goes through a pooler.
+/// The app role sets no statement_timeout (`0`), and a session value left on a pooled connection
+/// by another client may or may not be there; a first run writes 30 days. So the run sets its own
+/// limit with `SET LOCAL`, inside the transaction, which a transaction-mode pooler cannot leak.
 const APPLY_TIMEOUT: &str = "SET LOCAL statement_timeout = '5min'";
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

@@ -153,7 +153,7 @@ export const RECORD_COLUMNS = {
 	entityRankingConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
 		id: "8aadf80a0b2546aea407d12a065494d1",
-		/** Mutable, one per column of the same name in snake case; decimals except the five `*_target` / `*_days` integers. */
+		/** Mutable, one per column of the same name in snake case; decimals except the integers (`*_target`, `*_days` and `trending_position_slots`). */
 		tauSeconds: "5c83400bff444efca45f68eb07fa9b09",
 		wilsonZ: "93a7b5019cd24ad99e52775c2241ee30",
 		priorPositive: "76bd3657e4a94ea38786d51b4691ae80",
@@ -185,6 +185,12 @@ export const RECORD_COLUMNS = {
 		trendingDebateFactor: "7c5c04ba24df4ec2893305a3b351653b",
 		trendingDebateWindowDays: "d39be3a05834407b86782dacdc025f79",
 		trendingHorizonDays: "10bc0fc4779c43a9ba4ee03475f8ea26",
+		/** Added with 0122 (GEO-3606), minted 2026-11-10: the position term on a named debate's listing score. */
+		trendingPositionBase: "0a93fb6c7722456c8047672803d845be",
+		trendingPositionStep: "f3a7f5dd554e40319ca94dd77c2c2c91",
+		/** An integer, like the `*_days` columns. */
+		trendingPositionSlots: "8ef101e5e2ff45519677eb8de7208be3",
+		trendingPositionDayFactor: "a68b8359f702468cb0dae2165ce8e417",
 	},
 	forYouConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */

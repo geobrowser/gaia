@@ -68,7 +68,7 @@ async fn created_of(
     sql: &str,
     ids: Option<&[Uuid]>,
 ) -> Result<HashMap<Uuid, Option<i64>>, IndexerError> {
-    let q = sqlx::query_as::<_, (Uuid, Option<String>)>(sql);
+    let q = sqlx::query_as::<_, (Uuid, Option<String>)>(sqlx::AssertSqlSafe(sql.to_owned()));
     let rows = match ids {
         Some(ids) => q.bind(ids).fetch_all(&mut *conn).await?,
         None => q.fetch_all(&mut *conn).await?,
@@ -227,20 +227,20 @@ struct ReconcileBefore {
 }
 
 async fn reconcile_before(conn: &mut PgConnection) -> Result<ReconcileBefore, IndexerError> {
-    let rows: Vec<RelRow> = sqlx::query_as(&format!(
+    let rows: Vec<RelRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT from_entity_id, to_entity_id, type_id FROM public.relations \
          WHERE from_entity_id IN {TAGGED} AND type_id IN ($1::uuid, $2::uuid, $3::uuid, $4::uuid)"
-    ))
+    )))
     .bind(TOPICS)
     .bind(TYPES)
     .bind(SYSTEM_TYPE)
     .bind(TAG_RELATION)
     .fetch_all(&mut *conn)
     .await?;
-    let names: Vec<(Uuid, Uuid, Option<String>)> = sqlx::query_as(&format!(
+    let names: Vec<(Uuid, Uuid, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT entity_id, property_id, text FROM public.values \
          WHERE property_id = $2::uuid AND entity_id IN {TAGGED}"
-    ))
+    )))
     .bind(TOPICS)
     .bind(NAME)
     .fetch_all(&mut *conn)
@@ -249,24 +249,26 @@ async fn reconcile_before(conn: &mut PgConnection) -> Result<ReconcileBefore, In
         sqlx::query_scalar("SELECT type_id FROM public.entity_type_exclusions")
             .fetch_all(&mut *conn)
             .await?;
-    let created: HashMap<Uuid, Option<i64>> = sqlx::query_as::<_, (Uuid, Option<String>)>(
-        &format!("SELECT id, created_at FROM public.entities WHERE id IN {TAGGED}"),
-    )
-    .bind(TOPICS)
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .map(|(id, c)| (id, c.as_deref().and_then(created_epoch)))
-    .collect();
-    let scores: HashMap<Uuid, f64> = sqlx::query_as::<_, (Uuid, f64)>(&format!(
-        "SELECT entity_id, ranking_score::float8 FROM public.entity_ranking_scores \
+    let created: HashMap<Uuid, Option<i64>> =
+        sqlx::query_as::<_, (Uuid, Option<String>)>(sqlx::AssertSqlSafe(format!(
+            "SELECT id, created_at FROM public.entities WHERE id IN {TAGGED}"
+        )))
+        .bind(TOPICS)
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .map(|(id, c)| (id, c.as_deref().and_then(created_epoch)))
+        .collect();
+    let scores: HashMap<Uuid, f64> =
+        sqlx::query_as::<_, (Uuid, f64)>(sqlx::AssertSqlSafe(format!(
+            "SELECT entity_id, ranking_score::float8 FROM public.entity_ranking_scores \
          WHERE entity_id IN {TAGGED}"
-    ))
-    .bind(TOPICS)
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .collect();
+        )))
+        .bind(TOPICS)
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .collect();
     let values: Vec<Value> = names
         .into_iter()
         .map(|(entity, property, text)| Value {
@@ -327,8 +329,8 @@ async fn main() -> Result<(), IndexerError> {
         .await?;
 
     let started = Instant::now();
-    // The app role's statement_timeout is 30s and this pass takes 20-24s, so it gets its own
-    // limit. SET LOCAL inside one transaction rather than a session SET: the connection goes
+    // The app role sets no statement_timeout (0) and this pass takes 20-24s, so it gets its own
+    // explicit limit rather than whatever a pooled connection happens to carry. SET LOCAL inside one transaction rather than a session SET: the connection goes
     // through a transaction-mode pooler, where a session setting may land on another backend.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     // Off: the debate-score refresh and the reconcile are skipped as one write (they share a

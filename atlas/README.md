@@ -68,7 +68,7 @@ Access Kafka UI at http://localhost:8080 to view messages.
 | `ATLAS_CHECKPOINT_POOL_ACQUIRE_TIMEOUT_MS` | No | `5000` | Pool acquire timeout in ms |
 | `ATLAS_CHECKPOINT_POOL_IDLE_TIMEOUT_MS` | No | `60000` | Pool idle timeout in ms |
 | `ATLAS_CHECKPOINT_POOL_MAX_LIFETIME_MS` | No | `1800000` | Pool max connection lifetime in ms |
-| `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS` | No | `3000` | Per-connection PostgreSQL statement timeout in ms |
+| `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS` | No | `3000` | Per-transaction PostgreSQL statement timeout in ms (`SET LOCAL`) |
 
 ### Authentication
 

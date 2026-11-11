@@ -27,8 +27,9 @@ pub const KIND: &str = "not_interested";
 pub const GEO_CHAT_QUERY: &str = "SELECT u.profile_space_id, n.claim_entity_id, n.created_at \
      FROM claim_not_interested n JOIN users u ON u.id = n.user_id";
 
-/// The app role's statement_timeout is 30s; the recompute after a large first snapshot can exceed
-/// it. `SET LOCAL`, inside the transaction, in case the connection goes through a pooler.
+/// The app role sets no statement_timeout (`0`), and a session value left on a pooled connection
+/// by another client may or may not be there; the recompute after a large first snapshot is long.
+/// So it sets its own limit with `SET LOCAL`, inside the transaction, which a pooler cannot leak.
 const APPLY_TIMEOUT: &str = "SET LOCAL statement_timeout = '5min'";
 
 /// One row as geo-chat holds it.

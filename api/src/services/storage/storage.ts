@@ -3,6 +3,7 @@ import {Redacted} from "effect"
 import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
+import {parseStatementBudgetMs, useStatementBudget} from "../statementBudget"
 import {log} from "../telemetry"
 import {
 	editors,
@@ -38,6 +39,20 @@ const pool = new Pool({
 
 pool.on("error", (err) => {
 	log.error("PostgreSQL pool error", {error: String(err)})
+})
+
+// Server-side budget for every REST / background statement on this pool. Without it this pool
+// had no budget of its own: it ran under whatever session-level statement_timeout some other
+// client had left on the PgBouncer server connection it landed on (30s or none — the role
+// default is `0`). Same 30s as the GraphQL pool: the slowest REST request seen end to end is
+// well under that. Work that needs longer opens its own transaction and sets its own
+// `SET LOCAL statement_timeout`, which overrides this. See ../statementBudget.ts.
+const REST_STATEMENT_TIMEOUT_MS = parseStatementBudgetMs(process.env.PG_REST_STATEMENT_TIMEOUT_MS, 30000)
+useStatementBudget(pool, REST_STATEMENT_TIMEOUT_MS, (err) => {
+	log.warn("Statement ran without its statement_timeout budget", {
+		error: String(err),
+		statementTimeoutMs: REST_STATEMENT_TIMEOUT_MS,
+	})
 })
 
 const schemaDefinition = {

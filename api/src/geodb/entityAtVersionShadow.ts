@@ -12,14 +12,16 @@
  * mismatch can be diagnosed, as the versions shadow does.
  *
  * What geo-db can answer today decides the compare:
- * - The pipe reads a Space at its head only; there is no read of an entity at an earlier version. So a `snapshot` is
- *   compared only when the requested edit is the entity's newest version in geo-db's log (`entity-versions`, wire revision
- *   12; newest across the Public Spaces holding it, or newest in the one Space when the request is scoped). Then the state
- *   at that version is the head, and the card is read at the head: values and relations compared as the card shadows do
- *   (`diffCards`, empty text forgiven). Every other version is `unsupported{not_head}`: that count is the measure of how
- *   much at-version reading the pipe still lacks. Block relations are left out of both sides; block children are not
- *   compared. Edit-id equality between `edit_versions.edit_id` and geo-db's sealing EditId is not verified: a store where
- *   they differ shows as `not_head` on every comparison.
+ * - A scoped request names one Space, so an edit other than the newest is one row of that Space's version log and the card
+ *   is read as the Space stood at that version (`readCardAt`, pipe line `<space>@<seq>`, needs a geodb-client from the geo-db
+ *   at-version read onward): values and relations compared as the card shadows do (`diffCards`, empty text forgiven). The
+ *   newest version of any request is the head, read as before (`entity-versions`, wire revision 12; newest across the Public
+ *   Spaces holding the entity, or in the one Space when scoped). Still `unsupported{not_head}`: an unscoped request for an
+ *   older edit (the Spaces each stand at their own version; one pin cannot express it), an edit older than the `LOG_ROWS`
+ *   newest versions asked for, and a client without `readCardAt`. Block relations are left out of both sides; block
+ *   children are not compared. Edit-id equality between `edit_versions.edit_id` and geo-db's sealing EditId is not verified:
+ *   a store where they differ shows as `not_head` on every comparison. A geodb-client older than the syntax refuses the
+ *   `@` line, which counts as `failed`.
  * - `enrich_names` reads names from the live values table (the request Space's name preferred, any Space's as fallback).
  *   geo-db is asked for the request Space's Name rows of the stamped ids; an id with no Name in that Space was served from
  *   another one, counted `unsupported{name_elsewhere}` (nothing compared) unless another id of the response did compare.
@@ -301,8 +303,25 @@ export function createEntityAtVersionShadow(deps: {
 					return recordResult("snapshot", "absent_ok")
 				return recordUnsupported("snapshot", "not_head")
 			}
-			if (compact(rows[0]?.editId ?? "") !== compact(served.editId))
-				return recordUnsupported("snapshot", "not_head")
+			if (compact(rows[0]?.editId ?? "") !== compact(served.editId)) {
+				// Not the newest version: a scoped request names one Space, so the version is one row of its log and the card is
+				// read as the Space stood at that version (`<space>@<seq>`). An unscoped request spans Spaces, each at its own
+				// version, which one pin cannot express: still not_head. A client or store without the syntax, or an edit
+				// beyond the rows asked for, is the same not_head it was before.
+				const at =
+					geoSpace === null ? undefined : rows.find((r) => compact(r.editId) === compact(served.editId))
+				if (geoSpace === null || at === undefined || !geoDb.readCardAt)
+					return recordUnsupported("snapshot", "not_head")
+				const old = await geoDb.readCardAt({geoSpaceId: geoSpace, entityId: entity, seq: at.seq})
+				return finish("snapshot", compareSnapshot(served, old), {
+					entityId: served.entityId,
+					editId: served.editId,
+					spaceId: served.spaceId,
+					values: served.values.length,
+					relations: served.relations.length,
+					seq: at.seq,
+				})
+			}
 			let card: GeoCardRow[]
 			if (geoSpace !== null) {
 				card = await geoDb.readCard({geoSpaceId: geoSpace, entityId: entity})

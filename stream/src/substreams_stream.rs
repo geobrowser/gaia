@@ -69,11 +69,11 @@ fn stream_blocks(
                 .unwrap_or_default();
 
             println!("Blockstreams disconnected, connecting (endpoint {}, start block {}, stop block {}, cursor {}, output: {}, modules: {:?})",
-                &endpoint,
+                endpoint,
                 start_block_num,
                 stop_block_num,
-                &latest_cursor,
-                &output_module_name,
+                latest_cursor,
+                output_module_name,
                 module_names
             );
 
@@ -209,7 +209,7 @@ async fn process_substreams_response(
         Some(Message::Session(session)) => {
             println!(
                 "Received session message (Workers {}, Trace ID {})",
-                session.max_parallel_workers, &session.trace_id
+                session.max_parallel_workers, session.trace_id
             );
             info!(
                 event = "substreams.session_started",

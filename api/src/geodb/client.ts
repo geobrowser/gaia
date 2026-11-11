@@ -58,6 +58,13 @@ export type GeoDbCardClient = {
 	/** `names` also asks for the display names of each row's property and target (rows then carry them). */
 	readCard(args: {geoSpaceId: string; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
 	/**
+	 * One Space's card as the Space stood at its version `seq` (`pipe` line `<space>@<seq>\t<geoql>`, geo-db 'at-version'
+	 * reads): the same rows `readCard` gives, read at that version in place of the head. `seq` is a version_seq from the
+	 * version log (`GeoVersionRow.seq`). A geodb-client built before the syntax refuses the line (`MalformedLine`), which
+	 * rejects like any refusal; a `seq` past the Space's head is refused. Absent on a client that cannot do it.
+	 */
+	readCardAt?(args: {geoSpaceId: string; entityId: string; seq: number; timeoutMs?: number}): Promise<GeoCardRow[]>
+	/**
 	 * The card across several Spaces in one read (`pipe` line `<space>,<space>\t<geoql>`): the rows of every
 	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
@@ -826,6 +833,21 @@ export function createPipeGeoDbClient(
 				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits"))
 			}
 			return submit(`${geoSpaceId}\t${cardDocument(entityId, {names})}\n`, entityId, names, false)
+		},
+		readCardAt({geoSpaceId, entityId, seq, timeoutMs}) {
+			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId) || !Number.isSafeInteger(seq) || seq < 1)
+				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits and seq at least 1"))
+			// One Space with a pin is still the single-Space form: a bare statement id per row.
+			return submit(
+				`${geoSpaceId}@${seq}\t${cardDocument(entityId)}\n`,
+				entityId,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+			)
 		},
 		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
