@@ -496,6 +496,12 @@ spec:
             # relation would fail. Turn on with the image bump that brings it.
             - name: GEODB_RELATION_POSITIONS
               value: "0"
+            # Relation facets: to-space, from-space, the two version pins and verified, written as claims on the
+            # relation's statement in the same Edit (`.statement` subject, geo-db docs/api/10 section 5.5). Off: up to
+            # five more adds per relation, and the api's GEODB_RELATION_FACETS_SHADOW has nothing to compare until a
+            # backfill writes them. The geodb-client the init container copies (2eab4e170c) already accepts the wire.
+            - name: GEODB_RELATION_FACETS
+              value: "0"
             # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES

@@ -66,6 +66,7 @@ async function main(): Promise<void> {
 		pauseMs: intEnv(env, "BACKFILL_PAUSE_MS", 100, 0),
 		exclude: excludeFrom(env.BACKFILL_EXCLUDE_PROPERTIES),
 		positions: config.relationPositions,
+		facets: config.relationFacets,
 		legacyMap: config.legacyIdMap,
 		maxEntities: intEnv(env, "BACKFILL_MAX_ENTITIES", 0, 0),
 	}
@@ -160,6 +161,7 @@ async function main(): Promise<void> {
 					pauseMs: opts.pauseMs,
 					exclude: opts.exclude,
 					positions: opts.positions,
+					facets: opts.facets,
 					maxEntities: opts.maxEntities,
 					dryRun,
 				},
