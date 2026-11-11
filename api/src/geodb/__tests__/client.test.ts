@@ -571,6 +571,39 @@ lines((line) => {
 	})
 })
 
+describe("createPipeGeoDbClient, a card at a version", () => {
+	const SPACE = "22222222222242228222222222222222"
+	const ENTITY = "11111111111141118111111111111111"
+	const PROP = "44444444444444448444444444444444"
+
+	it("sends `<space>@<seq>\\t<doc>` and reads the rows as a single-Space card", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope, doc] = line.split("\\t")
+	const entity = /id = "([0-9a-f]{32})"/.exec(doc)[1]
+	frame("+", ["${PROP}", "at " + scope.split("@")[1], "stmt", entity, "1"].join("\\t") + "\\n")
+})
+`)
+		const rows = await client.readCardAt?.({geoSpaceId: SPACE, entityId: ENTITY, seq: 7})
+		expect(rows).toEqual([{prop: PROP, raw: "at 7"}])
+		client.close()
+	})
+
+	it("refuses a malformed id or a seq below 1 before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceId: "nope", entityId: ENTITY, seq: 1},
+			{geoSpaceId: SPACE, entityId: "nope", seq: 1},
+			{geoSpaceId: SPACE, entityId: ENTITY, seq: 0},
+			{geoSpaceId: SPACE, entityId: ENTITY, seq: 1.5},
+		])
+			await expect(client.readCardAt?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})
+
 describe("createPipeGeoDbClient, several cards a line", () => {
 	const OTHER_ENTITY = "55555555555545558555555555555555"
 

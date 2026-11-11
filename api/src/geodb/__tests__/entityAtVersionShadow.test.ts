@@ -65,6 +65,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0))
 type Reads = {
 	versions?: GeoVersionRow[] | Error
 	card?: GeoCardRow[] | Error
+	cardAt?: GeoCardRow[] | Error
 	cards?: GeoCardRow[] | Error
 }
 const client = (reads: Reads) => {
@@ -73,11 +74,13 @@ const client = (reads: Reads) => {
 	return {
 		readCard: vi.fn(() => pick(reads.card, [])),
 		readCardSpaces: vi.fn(() => pick(reads.card, [])),
+		readCardAt: vi.fn(() => pick(reads.cardAt, [])),
 		readCards: vi.fn(() => pick(reads.cards, [])),
 		readEntityVersions: vi.fn(() => pick(reads.versions, [])),
 	} as unknown as GeoDbCardClient & {
 		readCard: ReturnType<typeof vi.fn>
 		readCardSpaces: ReturnType<typeof vi.fn>
+		readCardAt: ReturnType<typeof vi.fn>
 		readCards: ReturnType<typeof vi.fn>
 		readEntityVersions: ReturnType<typeof vi.fn>
 	}
@@ -204,6 +207,47 @@ describe("snapshot twin", () => {
 		expect(unsupported("snapshot", "not_head")).toBe(1)
 		expect(result("snapshot", "unsupported")).toBe(1)
 		expect(geoDb.readCard).not.toHaveBeenCalled()
+	})
+
+	it("reads an older edit of a scoped request at its version and compares it", async () => {
+		const {shadow, geoDb} = make({
+			versions: [versionRow(EDIT, {seq: 5}), versionRow(OLD_EDIT, {seq: 2})],
+			cardAt: [text("hello"), rel(TARGET)],
+		})
+		shadow.snapshot(snapshot({editId: OLD_EDIT}))
+		await settle()
+		expect(geoDb.readCardAt).toHaveBeenCalledWith({
+			geoSpaceId: GEO_SPACE,
+			entityId: conformingId("entity", ENTITY),
+			seq: 2,
+		})
+		expect(geoDb.readCard).not.toHaveBeenCalled()
+		expect(result("snapshot", "match")).toBe(1)
+	})
+
+	it("counts a mismatch at an older version, with its seq in the log line", async () => {
+		const {shadow, log} = make({
+			versions: [versionRow(EDIT, {seq: 5}), versionRow(OLD_EDIT, {seq: 2})],
+			cardAt: [text("other"), rel(TARGET)],
+		})
+		shadow.snapshot(snapshot({editId: OLD_EDIT}))
+		await settle()
+		expect(result("snapshot", "mismatch")).toBe(1)
+		expect(log.warn).toHaveBeenCalledWith("entity-at-version shadow mismatch", expect.objectContaining({seq: 2}))
+	})
+
+	it("keeps an unscoped older edit, and a client without readCardAt, as not_head", async () => {
+		const versions = [versionRow(EDIT, {seq: 5}), versionRow(OLD_EDIT, {seq: 2})]
+		const a = make({versions})
+		a.shadow.snapshot(snapshot({editId: OLD_EDIT, spaceId: undefined}))
+		await settle()
+		expect(unsupported("snapshot", "not_head")).toBe(1)
+		expect(a.geoDb.readCardAt).not.toHaveBeenCalled()
+		const b = make({versions})
+		delete (b.geoDb as {readCardAt?: unknown}).readCardAt
+		b.shadow.snapshot(snapshot({editId: OLD_EDIT}))
+		await settle()
+		expect(unsupported("snapshot", "not_head")).toBe(2)
 	})
 
 	it("compares dashed edit ids", async () => {
