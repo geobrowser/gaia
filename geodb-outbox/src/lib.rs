@@ -23,11 +23,22 @@
 //!
 //! The mirror is OFF unless `GEODB_OUTBOX_MIRROR` is `1` or `true`.
 //!
+//! Backlog (second flag, off by default): with `GEODB_OUTBOX_MIRROR_BACKLOG` on, a unit whose
+//! enter fails is kept instead of dropped, in a bounded in-memory backlog
+//! (`GEODB_OUTBOX_MIRROR_BACKLOG_MAX`, default [`BACKLOG_MAX_DEFAULT`]). Units are retried oldest
+//! first, in submit order, every [`RETRY_INTERVAL`] and whenever a new unit arrives, so a serve
+//! roll's 20-40 s gap loses nothing. A retry is safe because an enter is put-if-absent on the
+//! ledger key: a unit whose first attempt actually landed (a timed-out answer) is answered
+//! `duplicate`. When the bound is hit the oldest unit is dropped
+//! (`geodb_outbox_mirror_backlog_dropped_total`). A unit that can never be sent (bad key, bad
+//! type, payload too long) is skipped, never kept.
+//!
 //! The delivery side reads the same work class through [`reader::OutboxReader`], over the same
 //! pipe client, behind its own flag `GEODB_OUTBOX_SHADOW_READ` (also off by default).
 
 pub mod reader;
 
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::time::{Duration, Instant};
 
@@ -46,6 +57,14 @@ pub const HOOKS_MAX: usize = 32;
 
 /// Units waiting for the pipe. A burst past this drops units, counted.
 pub const QUEUE_MAX: usize = 4096;
+
+/// Failed units kept when the backlog flag is on: about 70 s at the highest per-minute insert
+/// rate seen across 7 days of production (42 units/s, 2026-11-11), with a unit's usual size a
+/// few hundred bytes (worst case 16 KiB payload, 3000 of them is 48 MiB).
+pub const BACKLOG_MAX_DEFAULT: usize = 3000;
+
+/// How often a non-empty backlog is retried when no new unit arrives.
+pub const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The work class's event-type byte for an outbox `event_type`, stable by this table (geo-db's
 /// `work_expire` keeps by a bitmask over types below 32). `None` for a type the table lacks.
@@ -380,6 +399,43 @@ async fn request(p: &mut Pipe, line: &str, max_body: usize) -> Result<String, Mi
     }
 }
 
+/// The backlog bound from the environment: `None` (off, the default) unless
+/// `GEODB_OUTBOX_MIRROR_BACKLOG` is `1` or `true`; the bound is `GEODB_OUTBOX_MIRROR_BACKLOG_MAX`
+/// (a positive integer, else [`BACKLOG_MAX_DEFAULT`]).
+pub fn backlog_from_vars(get: impl Fn(&str) -> Option<String>) -> Option<usize> {
+    let on = matches!(
+        get("GEODB_OUTBOX_MIRROR_BACKLOG").as_deref().map(str::trim),
+        Some("1") | Some("true")
+    );
+    if !on {
+        return None;
+    }
+    Some(
+        get("GEODB_OUTBOX_MIRROR_BACKLOG_MAX")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(BACKLOG_MAX_DEFAULT),
+    )
+}
+
+/// What the mirror's task enters units through; the pipe [`Worker`] in production, a fake in
+/// tests.
+pub(crate) trait Enter {
+    fn enter(
+        &mut self,
+        unit: &Unit,
+    ) -> impl std::future::Future<Output = Result<Entered, MirrorError>> + Send;
+}
+
+impl Enter for Worker {
+    fn enter(
+        &mut self,
+        unit: &Unit,
+    ) -> impl std::future::Future<Output = Result<Entered, MirrorError>> + Send {
+        Worker::enter(self, unit)
+    }
+}
+
 /// The handle the indexer holds. Cheap to clone; `submit` never blocks.
 #[derive(Clone)]
 pub struct OutboxMirror {
@@ -389,14 +445,27 @@ pub struct OutboxMirror {
 impl OutboxMirror {
     /// Starts the background task on the current tokio runtime. Panics outside one.
     pub fn new(cfg: Config) -> Self {
+        Self::with_backlog(cfg, None)
+    }
+
+    /// As [`OutboxMirror::new`], keeping up to `backlog` failed units for retry (`None` or
+    /// `Some(0)`: a failed unit is dropped, as before).
+    pub fn with_backlog(cfg: Config, backlog: Option<usize>) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE_MAX);
-        tokio::spawn(run(Worker::new(cfg), rx));
+        tokio::spawn(run(
+            Worker::new(cfg),
+            rx,
+            backlog.unwrap_or(0),
+            RETRY_INTERVAL,
+        ));
         Self { tx }
     }
 
-    /// `Some` only when `GEODB_OUTBOX_MIRROR` is on and configured.
+    /// `Some` only when `GEODB_OUTBOX_MIRROR` is on and configured. The backlog follows
+    /// `GEODB_OUTBOX_MIRROR_BACKLOG` (off by default).
     pub fn from_env() -> Option<Self> {
-        Config::from_env().map(Self::new)
+        let backlog = backlog_from_vars(|k| std::env::var(k).ok());
+        Config::from_env().map(|cfg| Self::with_backlog(cfg, backlog))
     }
 
     /// Queues `unit` for the pipe. Never waits and never fails the caller: a full queue drops the
@@ -414,39 +483,145 @@ impl OutboxMirror {
     }
 }
 
-async fn run(mut w: Worker, mut rx: mpsc::Receiver<Unit>) {
-    while let Some(unit) = rx.recv().await {
-        metrics::gauge!("geodb_outbox_mirror_queue").set(rx.len() as f64);
-        match w.enter(&unit).await {
-            Ok(Entered::New) => {
-                metrics::counter!("geodb_outbox_mirror_entered_total").increment(1);
-            }
-            Ok(Entered::Duplicate) => {
-                metrics::counter!("geodb_outbox_mirror_duplicates_total").increment(1);
-            }
-            Err(MirrorError::TooLong(n)) => {
-                metrics::counter!("geodb_outbox_mirror_skipped_total").increment(1);
-                warn!(
-                    event = "geodb_outbox.payload_too_long",
-                    ledger_key = %unit.ledger_key_hex,
-                    payload_bytes = n,
-                    limit = PAYLOAD_MAX,
-                    "payload over the geo-db bound; skipped, not truncated"
-                );
-            }
-            Err(MirrorError::CoolingDown) => {
-                metrics::counter!("geodb_outbox_mirror_errors_total").increment(1);
-            }
-            Err(e) => {
-                metrics::counter!("geodb_outbox_mirror_errors_total").increment(1);
-                warn!(
-                    event = "geodb_outbox.mirror_failed",
-                    ledger_key = %unit.ledger_key_hex,
-                    error = %e,
-                    "geo-db outbox mirror failed; Postgres is unaffected"
-                );
+/// A unit's one enter, with the outcome counted. `Err` is a failure worth keeping the unit for.
+async fn attempt<E: Enter>(w: &mut E, unit: &Unit) -> Result<(), MirrorError> {
+    match w.enter(unit).await {
+        Ok(Entered::New) => {
+            metrics::counter!("geodb_outbox_mirror_entered_total").increment(1);
+            Ok(())
+        }
+        Ok(Entered::Duplicate) => {
+            metrics::counter!("geodb_outbox_mirror_duplicates_total").increment(1);
+            Ok(())
+        }
+        // Never sendable: skip, whatever the backlog says.
+        Err(MirrorError::TooLong(n)) => {
+            metrics::counter!("geodb_outbox_mirror_skipped_total").increment(1);
+            warn!(
+                event = "geodb_outbox.payload_too_long",
+                ledger_key = %unit.ledger_key_hex,
+                payload_bytes = n,
+                limit = PAYLOAD_MAX,
+                "payload over the geo-db bound; skipped, not truncated"
+            );
+            Ok(())
+        }
+        Err(MirrorError::BadUnit(why)) => {
+            metrics::counter!("geodb_outbox_mirror_skipped_total").increment(1);
+            warn!(
+                event = "geodb_outbox.bad_unit",
+                ledger_key = %unit.ledger_key_hex,
+                reason = %why,
+                "unit cannot be represented in geo-db; skipped"
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn count_failure(unit: &Unit, e: &MirrorError) {
+    metrics::counter!("geodb_outbox_mirror_errors_total").increment(1);
+    if !matches!(e, MirrorError::CoolingDown) {
+        warn!(
+            event = "geodb_outbox.mirror_failed",
+            ledger_key = %unit.ledger_key_hex,
+            error = %e,
+            "geo-db outbox mirror failed; Postgres is unaffected"
+        );
+    }
+}
+
+/// Failed units, oldest first. `failed` is true once a unit's first attempt has failed.
+struct Backlog {
+    max: usize,
+    units: VecDeque<(Unit, bool)>,
+}
+
+impl Backlog {
+    fn gauge(&self) {
+        metrics::gauge!("geodb_outbox_mirror_backlog").set(self.units.len() as f64);
+    }
+
+    /// Keeps `unit` behind the older ones; at the bound the oldest is dropped, counted.
+    fn push(&mut self, unit: Unit, failed: bool) {
+        if self.units.len() >= self.max
+            && let Some((old, _)) = self.units.pop_front()
+        {
+            metrics::counter!("geodb_outbox_mirror_backlog_dropped_total").increment(1);
+            warn!(
+                event = "geodb_outbox.backlog_overflow",
+                ledger_key = %old.ledger_key_hex,
+                bound = self.max,
+                "backlog full; oldest unit dropped"
+            );
+        }
+        self.units.push_back((unit, failed));
+    }
+
+    /// Enters from the oldest until one fails. A failure stops the pass (the rest would fail the
+    /// same way and order must hold); the unit stays at the front.
+    async fn drain<E: Enter>(&mut self, w: &mut E) {
+        while let Some((unit, failed)) = self.units.front_mut() {
+            match attempt(w, unit).await {
+                Ok(()) => {
+                    if *failed {
+                        metrics::counter!("geodb_outbox_mirror_retried_total").increment(1);
+                    }
+                    self.units.pop_front();
+                }
+                Err(e) => {
+                    // Counted once a unit, on its first failure, so a long outage is not
+                    // one error a retry tick.
+                    if !*failed {
+                        *failed = true;
+                        count_failure(unit, &e);
+                    }
+                    break;
+                }
             }
         }
+        self.gauge();
+    }
+}
+
+async fn run<E: Enter>(
+    mut w: E,
+    mut rx: mpsc::Receiver<Unit>,
+    backlog_max: usize,
+    retry: Duration,
+) {
+    if backlog_max == 0 {
+        while let Some(unit) = rx.recv().await {
+            metrics::gauge!("geodb_outbox_mirror_queue").set(rx.len() as f64);
+            if let Err(e) = attempt(&mut w, &unit).await {
+                count_failure(&unit, &e);
+            }
+        }
+        return;
+    }
+    let mut backlog = Backlog {
+        max: backlog_max,
+        units: VecDeque::new(),
+    };
+    loop {
+        let next = if backlog.units.is_empty() {
+            match rx.recv().await {
+                Some(u) => Some(u),
+                None => return,
+            }
+        } else {
+            match tokio::time::timeout(retry, rx.recv()).await {
+                Ok(Some(u)) => Some(u),
+                Ok(None) => return,
+                Err(_) => None,
+            }
+        };
+        metrics::gauge!("geodb_outbox_mirror_queue").set(rx.len() as f64);
+        if let Some(unit) = next {
+            backlog.push(unit, false);
+        }
+        backlog.drain(&mut w).await;
     }
 }
 
@@ -641,7 +816,7 @@ mod tests {
         let mut w = worker("sleep 30", Duration::from_secs(60));
         w.cfg.timeout = Duration::from_millis(50);
         let (tx, rx) = mpsc::channel(QUEUE_MAX);
-        let task = tokio::spawn(run(w, rx));
+        let task = tokio::spawn(run(w, rx, 0, RETRY_INTERVAL));
         let m = OutboxMirror { tx };
         let started = Instant::now();
         for _ in 0..QUEUE_MAX * 2 + 10 {
@@ -649,5 +824,189 @@ mod tests {
         }
         assert!(started.elapsed() < Duration::from_secs(1));
         task.abort();
+    }
+
+    // A client that fails its first `fail` calls, then answers; records the keys it entered.
+    struct Fake {
+        fail: usize,
+        calls: usize,
+        held: std::collections::HashSet<String>,
+        entered: Vec<String>,
+    }
+
+    impl Fake {
+        fn new(fail: usize) -> Self {
+            Fake {
+                fail,
+                calls: 0,
+                held: Default::default(),
+                entered: vec![],
+            }
+        }
+    }
+
+    impl Enter for Fake {
+        async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
+            self.calls += 1;
+            if self.calls <= self.fail {
+                return Err(MirrorError::Closed);
+            }
+            if self.held.insert(unit.ledger_key_hex.clone()) {
+                self.entered.push(unit.ledger_key_hex.clone());
+                Ok(Entered::New)
+            } else {
+                Ok(Entered::Duplicate)
+            }
+        }
+    }
+
+    fn unit_n(n: usize) -> Unit {
+        let mut u = unit();
+        u.ledger_key_hex = format!("{n:064x}");
+        u
+    }
+
+    fn backlog(max: usize) -> Backlog {
+        Backlog {
+            max,
+            units: VecDeque::new(),
+        }
+    }
+
+    #[test]
+    fn backlog_flag_is_off_by_default_and_bound_is_configurable() {
+        assert_eq!(backlog_from_vars(|_| None), None);
+        let on = |k: &str| (k == "GEODB_OUTBOX_MIRROR_BACKLOG").then(|| "1".to_string());
+        assert_eq!(backlog_from_vars(on), Some(BACKLOG_MAX_DEFAULT));
+        let sized = |k: &str| match k {
+            "GEODB_OUTBOX_MIRROR_BACKLOG" => Some("true".to_string()),
+            "GEODB_OUTBOX_MIRROR_BACKLOG_MAX" => Some("50".to_string()),
+            _ => None,
+        };
+        assert_eq!(backlog_from_vars(sized), Some(50));
+        let bad = |k: &str| match k {
+            "GEODB_OUTBOX_MIRROR_BACKLOG" => Some("1".to_string()),
+            "GEODB_OUTBOX_MIRROR_BACKLOG_MAX" => Some("0".to_string()),
+            _ => None,
+        };
+        assert_eq!(backlog_from_vars(bad), Some(BACKLOG_MAX_DEFAULT));
+        // The bound alone does not turn it on.
+        let only_bound = |k: &str| (k == "GEODB_OUTBOX_MIRROR_BACKLOG_MAX").then(|| "5".into());
+        assert_eq!(backlog_from_vars(only_bound), None);
+    }
+
+    #[tokio::test]
+    async fn failed_units_are_kept_and_retried_in_order_without_duplicates() {
+        let mut w = Fake::new(3);
+        let mut b = backlog(100);
+        for n in 0..5 {
+            b.push(unit_n(n), false);
+            b.drain(&mut w).await;
+        }
+        // The first three calls failed: unit 0 failed once, unit 1 and 2 waited behind it.
+        // Everything then landed, oldest first, each key once.
+        assert!(b.units.is_empty());
+        let want: Vec<String> = (0..5).map(|n| unit_n(n).ledger_key_hex).collect();
+        assert_eq!(w.entered, want);
+    }
+
+    #[tokio::test]
+    async fn a_failure_keeps_the_head_and_blocks_the_rest() {
+        let mut w = Fake::new(usize::MAX);
+        let mut b = backlog(100);
+        for n in 0..3 {
+            b.push(unit_n(n), false);
+            b.drain(&mut w).await;
+        }
+        assert_eq!(b.units.len(), 3);
+        assert_eq!(b.units[0].0, unit_n(0));
+        // One attempt a pass, on the head only.
+        assert_eq!(w.calls, 3);
+        w.fail = 0;
+        b.drain(&mut w).await;
+        assert!(b.units.is_empty());
+        assert_eq!(w.entered.len(), 3);
+        assert_eq!(w.entered[0], unit_n(0).ledger_key_hex);
+    }
+
+    #[tokio::test]
+    async fn a_unit_that_landed_but_was_retried_is_a_duplicate_not_a_second_write() {
+        let mut w = Fake::new(0);
+        w.held.insert(unit_n(1).ledger_key_hex);
+        let mut b = backlog(10);
+        b.push(unit_n(1), true);
+        b.drain(&mut w).await;
+        assert!(b.units.is_empty());
+        assert!(w.entered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn overflow_drops_the_oldest_and_keeps_the_newest() {
+        let mut w = Fake::new(usize::MAX);
+        let mut b = backlog(3);
+        for n in 0..5 {
+            b.push(unit_n(n), false);
+            b.drain(&mut w).await;
+        }
+        let kept: Vec<Unit> = b.units.iter().map(|(u, _)| u.clone()).collect();
+        assert_eq!(kept, vec![unit_n(2), unit_n(3), unit_n(4)]);
+        w.fail = 0;
+        b.drain(&mut w).await;
+        let want: Vec<String> = (2..5).map(|n| unit_n(n).ledger_key_hex).collect();
+        assert_eq!(w.entered, want);
+    }
+
+    #[tokio::test]
+    async fn an_unsendable_unit_is_skipped_not_kept() {
+        let mut b = backlog(10);
+        let mut bad = unit_n(1);
+        bad.ledger_key_hex = "zz".into();
+        // The real line check, through `attempt`.
+        struct Real;
+        impl Enter for Real {
+            async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
+                enter_line(unit).map(|_| Entered::New)
+            }
+        }
+        b.push(bad, false);
+        b.push(unit_n(2), false);
+        b.drain(&mut Real).await;
+        assert!(b.units.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_retries_on_the_tick_after_the_session_recovers() {
+        let (tx, rx) = mpsc::channel(16);
+        let w = Fake::new(2);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        struct Shared(Fake, std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl Enter for Shared {
+            async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
+                let r = self.0.enter(unit).await;
+                if r.is_ok() {
+                    self.1.lock().unwrap().push(unit.ledger_key_hex.clone());
+                }
+                r
+            }
+        }
+        let task = tokio::spawn(run(
+            Shared(w, seen.clone()),
+            rx,
+            10,
+            Duration::from_millis(10),
+        ));
+        tx.send(unit_n(1)).await.unwrap();
+        tx.send(unit_n(2)).await.unwrap();
+        // No further traffic: the retry tick alone must drain the backlog, in order.
+        for _ in 0..200 {
+            if seen.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(tx);
+        task.await.unwrap();
+        let want: Vec<String> = (1..3).map(|n| unit_n(n).ledger_key_hex).collect();
+        assert_eq!(*seen.lock().unwrap(), want);
     }
 }
