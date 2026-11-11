@@ -49,6 +49,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: api
     spec:
       # Spread replicas across nodes instead of leaving placement to the scheduler.
@@ -140,7 +141,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to the api tag.
-          image: registry.digitalocean.com/geo/geodb:95244b7fc4
+          image: registry.digitalocean.com/geo/geodb:17dffa2d40
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the api reads the flag as unusable and answers from Postgres.
@@ -314,6 +315,11 @@ spec:
             # under the every-Space budget. Shadow only; never changes a response.
             - name: GEODB_RELATIONS_MEMBERSHIP_SHADOW
               value: "on"
+            # Judge an `entity` comparison that came out `cross_space` again against the card read across every Space the
+            # entity lives in, so its name, description, Types and lists are compared instead of skipped. One more read per
+            # such comparison. Shadow only; never changes a response.
+            - name: GEODB_CROSS_SPACE_HOLDERS_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
@@ -369,6 +375,11 @@ spec:
             # Twins the proposal list, detail (actions, votes) and active-check reads from the same records
             # (gaia_api_governance_queries_shadow_total). ON; never changes a response; counts only.
             - name: GEODB_GOVERNANCE_QUERIES_SHADOW
+              value: "1"
+            # Applies the feeder's settings-escalation records (PROPOSAL_SETTINGS_UPDATED) to the proposal version before the
+            # governance shadow compares it; without it a Slow proposal whose settings changed after creation counts as a
+            # mismatch and a Fast one as unsupported{escalation_pending}. Shadow only; never changes a response. "0" turns it off.
+            - name: GEODB_GOVERNANCE_SHADOW_ESCALATIONS
               value: "1"
             # Background sampler for user_votes, ranks.rankings and ranks.ranking_blocks against the feeder's keyed
             # records (gaia_api_keyed_records_shadow_total). ON; 20 rows per table every 60 s; never touches a request.
@@ -509,6 +520,8 @@ spec:
             - name: PG_CONNECTION_TIMEOUT_MS
               value: "3000"
             - name: PG_STATEMENT_TIMEOUT_MS
+              value: "30000"
+            - name: PG_REST_STATEMENT_TIMEOUT_MS
               value: "30000"
             - name: PG_QUERY_TIMEOUT_MS
               value: "35000"

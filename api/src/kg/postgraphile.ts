@@ -18,6 +18,7 @@ import {
 	shouldShedPoolTraffic,
 } from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
+import {parseStatementBudgetMs, useStatementBudget} from "../services/statementBudget"
 import {log} from "../services/telemetry"
 import {useAdmissionControl} from "./admissionControl"
 import AggregatesScopePlugin from "./aggregatesScopePlugin"
@@ -72,8 +73,8 @@ const pgPool = new Pool({
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
 	// Close idle connections after 30 seconds to free up PgBouncer slots
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
-	// Client-side fuse, deliberately ABOVE the statement_timeout applied on connect
-	// below. Postgres must cancel the query first so the server-side backend is
+	// Client-side fuse, deliberately ABOVE the per-statement statement_timeout
+	// applied below. Postgres must cancel the query first so the server-side backend is
 	// freed; this only reclaims the Node side if that fails. If this is ever the
 	// tighter of the two it destroys connections for queries the server is still
 	// running, and the failure surfaces as an opaque INTERNAL_SERVER_ERROR with no
@@ -208,35 +209,35 @@ function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}
 }
 
 // Apply the server-side query budget ourselves rather than trusting the database's
-// configured statement_timeout. api/docs/database-configuration.md documented 10s,
-// but the managed instances actually ship `0` (unlimited) on the v2 cluster and
-// `1min` on production — so a client-side fuse tuned "just above 10s" was in fact
-// the only, and tighter, limit. Setting it here makes the layering true everywhere.
+// configured statement_timeout: the role and database default is `0` (no limit).
 //
-// Fires once per new physical connection, not per request. This must be a plain
-// SET rather than a startup `options` parameter: DigitalOcean's PgBouncer rejects
-// `options: -c statement_timeout=...` at connect time with
-// `FATAL: unsupported startup parameter in options`.
-const PG_STATEMENT_TIMEOUT_MS = parseInt(process.env.PG_STATEMENT_TIMEOUT_MS || "30000", 10)
-pgPool.on("connect", (client) => {
-	client.query(`SET statement_timeout = ${PG_STATEMENT_TIMEOUT_MS}`).catch((err) => {
-		// Keyed on the failure class, not the message: a message carrying a host, port or
-		// connection id would make every occurrence its own "episode" and defeat the point.
-		const failureClass = classifyDbFailure(err)
-		// Counted on EVERY occurrence, before the suppression check. Losing the true rate
-		// would trade a quota problem for a blindness problem — the same mistake in a new
-		// place. `emitShedSignal` splits metric-from-log the same way.
-		Sentry.metrics.count("graphql.pool.statement_timeout_failed", 1, {
-			attributes: {failureClass},
-		})
-		const episode = poolEpisodes.record(`statement_timeout:${failureClass}`)
-		if (!episode.shouldLog) return
-		log.error("Failed to apply statement_timeout to new pool connection", {
-			error: String(err),
-			failureClass,
-			statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
-			...episodeFields(episode),
-		})
+// Applied per statement as `SET LOCAL` inside a short transaction (see
+// services/statementBudget.ts), NOT as a session `SET` on connect. Behind PgBouncer in
+// transaction mode a session SET stays on whichever server connection ran it and leaks
+// to every other client that later lands there, while this pool's own statements only
+// got the budget when they happened to land on a connection that already carried it.
+// A startup `options: -c statement_timeout=...` is not an option either: DigitalOcean's
+// PgBouncer rejects it with `FATAL: unsupported startup parameter in options`.
+const PG_STATEMENT_TIMEOUT_MS = parseStatementBudgetMs(process.env.PG_STATEMENT_TIMEOUT_MS, 30000)
+useStatementBudget(pgPool, PG_STATEMENT_TIMEOUT_MS, (err) => {
+	// Fires only when the budget's BEGIN / SET LOCAL failed but the statement itself then
+	// succeeded, i.e. it ran without a budget. Keyed on the failure class, not the message: a
+	// message carrying a host, port or connection id would make every occurrence its own
+	// "episode" and defeat the point.
+	const failureClass = classifyDbFailure(err)
+	// Counted on EVERY occurrence, before the suppression check. Losing the true rate
+	// would trade a quota problem for a blindness problem — the same mistake in a new
+	// place. `emitShedSignal` splits metric-from-log the same way.
+	Sentry.metrics.count("graphql.pool.statement_timeout_failed", 1, {
+		attributes: {failureClass},
+	})
+	const episode = poolEpisodes.record(`statement_timeout:${failureClass}`)
+	if (!episode.shouldLog) return
+	log.error("Statement ran without its statement_timeout budget", {
+		error: String(err),
+		failureClass,
+		statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
+		...episodeFields(episode),
 	})
 })
 

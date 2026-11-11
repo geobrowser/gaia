@@ -195,7 +195,10 @@ pub async fn mirror(
     pool: &PgPool,
     before: &HashSet<Uuid>,
 ) -> (usize, usize) {
-    let now_rows: Vec<ScoreRow> = match sqlx::query_as(&trending_rows_sql()).fetch_all(pool).await {
+    let now_rows: Vec<ScoreRow> = match sqlx::query_as(sqlx::AssertSqlSafe(trending_rows_sql()))
+        .fetch_all(pool)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "entity scores mirror skipped: read failed");
@@ -206,7 +209,7 @@ pub async fn mirror(
     let left: Vec<Uuid> = before.difference(&touched).copied().collect();
     let mut rows = now_rows;
     if !left.is_empty() {
-        match sqlx::query_as::<_, ScoreRow>(&rows_by_id_sql())
+        match sqlx::query_as::<_, ScoreRow>(sqlx::AssertSqlSafe(rows_by_id_sql()))
             .bind(&left)
             .fetch_all(pool)
             .await
@@ -268,7 +271,7 @@ pub async fn mirror_debate_watch(
     };
     let mut total = (0, 0);
     for ids in id_chunks(before, &now, ID_CHUNK) {
-        let rows: Vec<ScoreRow> = match sqlx::query_as(&rows_by_id_sql())
+        let rows: Vec<ScoreRow> = match sqlx::query_as(sqlx::AssertSqlSafe(rows_by_id_sql()))
             .bind(&ids)
             .fetch_all(pool)
             .await

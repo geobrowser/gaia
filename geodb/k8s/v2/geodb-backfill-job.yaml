@@ -23,6 +23,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-backfill
     spec:
       serviceAccountName: geodb

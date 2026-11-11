@@ -8,7 +8,7 @@ kind: Pod
 metadata:
   name: geodb-cap-raise
   namespace: gaia
-  labels: {app: geodb-cap-raise}
+  labels: {app: geodb-cap-raise, geodb-client: "true"}
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false

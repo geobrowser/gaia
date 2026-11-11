@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm as builder
+FROM rust:1.94-bookworm as builder
 
 # Build argument to enable auto_index_creation feature for local development
 # Default is empty (feature disabled) for production safety
@@ -22,6 +22,7 @@ COPY search-indexer-repository ./search-indexer-repository
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
+COPY geodb-cursor ./geodb-cursor
 COPY indexer_utils ./indexer_utils
 COPY sdk ./sdk
 

@@ -60,6 +60,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-scores-key
     spec:
       serviceAccountName: geodb-scores-keygen

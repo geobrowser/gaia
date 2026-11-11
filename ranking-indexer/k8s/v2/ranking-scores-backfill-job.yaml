@@ -31,6 +31,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: ranking-indexer-ranking-scores-backfill
         environment: testnet
     spec:

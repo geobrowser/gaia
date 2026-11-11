@@ -22,6 +22,14 @@ use uuid::Uuid;
 /// relation id -> entity id || space id (16 + 16 bytes).
 const TABLE: TableDefinition<[u8; 16], [u8; 32]> = TableDefinition::new("relation_map");
 
+/// Store bookkeeping. Holds `REBUILT_KEY` once a full rebuild from Postgres has finished.
+const META: TableDefinition<&str, u64> = TableDefinition::new("relation_map_meta");
+
+/// Present (value: rows written) only after `rebuild_from_postgres` ran to the end. A store
+/// without it was never seeded, or its seeding was cut short (pod killed mid-rebuild), so it
+/// holds only part of the relations and is rebuilt on the next open.
+const REBUILT_KEY: &str = "rebuilt_from_postgres";
+
 /// Errors from the relation map module.
 #[derive(Debug, Error)]
 pub enum RelationMapError {
@@ -128,15 +136,27 @@ impl RelationMap {
     /// Open or create the store and warm the LRU cache. A missing, unreadable or
     /// foreign file (including the old SQLite file at the same path) is replaced by a
     /// fresh store and `needs_rebuild()` is true, so the caller repopulates it from
-    /// Postgres. Returns error only if the store is completely unusable.
+    /// Postgres. So is a readable store whose last rebuild never finished: each rebuild
+    /// batch is committed on its own, so a pod killed mid-rebuild leaves a valid store
+    /// holding only the relations up to that batch. Returns error only if the store is
+    /// completely unusable.
     pub fn open(config: RelationMapConfig) -> Result<Self, RelationMapError> {
         if let Some(parent) = config.db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let existed = config.db_path.exists();
         let (db, needs_rebuild) = match Self::open_store(&config) {
-            Ok(db) => (db, !existed),
+            Ok(db) => {
+                // An unreadable marker counts as no completed rebuild.
+                let rebuilt = Self::rebuilt_rows(&db).unwrap_or(None);
+                if rebuilt.is_none() {
+                    info!(
+                        path = %config.db_path.display(),
+                        "Relation map store has no completed rebuild; it will be rebuilt"
+                    );
+                }
+                (db, rebuilt.is_none())
+            }
             Err(e) => {
                 warn!(
                     error = %e,
@@ -171,13 +191,46 @@ impl RelationMap {
         Ok(map)
     }
 
-    /// Open the database file and make sure the table exists.
+    /// Open the database file and make sure the tables exist.
     fn open_store(config: &RelationMapConfig) -> Result<Database, RelationMapError> {
         let db = Database::create(&config.db_path).map_err(store_err)?;
         let txn = db.begin_write().map_err(store_err)?;
         txn.open_table(TABLE).map_err(store_err)?;
+        txn.open_table(META).map_err(store_err)?;
         txn.commit().map_err(store_err)?;
         Ok(db)
+    }
+
+    /// Rows written by the last completed rebuild, or None if none completed.
+    fn rebuilt_rows(db: &Database) -> Result<Option<u64>, RelationMapError> {
+        let txn = db.begin_read().map_err(store_err)?;
+        let meta = txn.open_table(META).map_err(store_err)?;
+        let v = meta.get(REBUILT_KEY).map_err(store_err)?;
+        Ok(v.map(|g| g.value()))
+    }
+
+    /// Empty the map and clear the completion marker, in one immediate commit, so a rebuild
+    /// starts from nothing and an interrupted one is detected on the next open.
+    fn begin_rebuild(&self) -> Result<(), RelationMapError> {
+        let txn = self.db.begin_write().map_err(store_err)?;
+        {
+            let mut meta = txn.open_table(META).map_err(store_err)?;
+            meta.remove(REBUILT_KEY).map_err(store_err)?;
+        }
+        txn.delete_table(TABLE).map_err(store_err)?;
+        txn.open_table(TABLE).map_err(store_err)?;
+        txn.commit().map_err(store_err)
+    }
+
+    /// Record that a rebuild finished, with an immediate (fsynced) commit that also makes
+    /// every earlier batch durable. Only after this does a reopen skip the rebuild.
+    fn mark_rebuilt(&self, rows: u64) -> Result<(), RelationMapError> {
+        let txn = self.db.begin_write().map_err(store_err)?;
+        {
+            let mut meta = txn.open_table(META).map_err(store_err)?;
+            meta.insert(REBUILT_KEY, rows).map_err(store_err)?;
+        }
+        txn.commit().map_err(store_err)
     }
 
     /// Load up to `cache_size` entries from the store into the LRU cache.
@@ -214,8 +267,9 @@ impl RelationMap {
         &self.config
     }
 
-    /// Write one batch in a single transaction. `Eventual` durability: the commit is not
-    /// fsynced, a later `checkpoint` (or any immediate commit) makes it durable.
+    /// Write one batch in a single transaction with `Eventual` durability. On Linux redb
+    /// still fdatasyncs an eventual commit (it differs from immediate only on macOS), so each
+    /// committed batch survives a kill.
     fn write_batch(
         &self,
         puts: &[(Uuid, Uuid, Uuid)],
@@ -247,6 +301,36 @@ impl RelationMap {
             return;
         }
         self.metrics.inserts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Put mappings in the LRU cache only, so a lookup later in the same batch finds them
+    /// before `insert_many` writes them to the store.
+    pub fn remember(&self, relation_id: Uuid, entity_id: Uuid, space_id: Uuid) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.put(relation_id, (entity_id, space_id));
+        }
+    }
+
+    /// Insert many relation mappings: all into the LRU cache, and all into the store in
+    /// one transaction, so a batch costs one commit rather than one per relation.
+    /// Never fails: logs errors and continues.
+    pub fn insert_many(&self, rows: &[(Uuid, Uuid, Uuid)]) {
+        if rows.is_empty() {
+            return;
+        }
+        if let Ok(mut cache) = self.cache.lock() {
+            for (r, e, s) in rows {
+                cache.put(*r, (*e, *s));
+            }
+        }
+        if let Err(e) = self.write_batch(rows, &[]) {
+            error!(error = %e, rows = rows.len(), "Failed to insert batch into relation map store");
+            self.metrics.store_errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        self.metrics
+            .inserts
+            .fetch_add(rows.len() as u64, Ordering::Relaxed);
     }
 
     /// Look up a relation mapping. Checks LRU cache first, then the store.
@@ -365,6 +449,8 @@ impl RelationMap {
         const BATCH_SIZE: i64 = 10_000;
 
         info!("Rebuilding relation map from Postgres (batch_size={BATCH_SIZE})...");
+        let started = std::time::Instant::now();
+        self.begin_rebuild()?;
 
         let mut total: u64 = 0;
         let mut last_id: Option<Uuid> = None;
@@ -406,6 +492,7 @@ impl RelationMap {
                 info!(
                     progress = total,
                     batch = batch_len,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
                     "Relation map rebuild progress"
                 );
             }
@@ -416,7 +503,14 @@ impl RelationMap {
             }
         }
 
-        info!(total = total, "Relation map rebuilt from Postgres");
+        self.mark_rebuilt(total)?;
+
+        info!(
+            total = total,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            db_size_mb = self.db_size_bytes() as f64 / 1_048_576.0,
+            "Relation map rebuilt from Postgres"
+        );
 
         Ok(total)
     }
@@ -468,9 +562,40 @@ mod tests {
             "a brand new store has nothing in it yet"
         );
         assert_eq!(map.store_count(), 0);
+        map.mark_rebuilt(0).expect("mark");
         drop(map);
         let again = RelationMap::open(test_config(&dir)).expect("reopen");
         assert!(!again.needs_rebuild());
+    }
+
+    #[test]
+    fn test_interrupted_rebuild_is_redone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rid = Uuid::new_v4();
+        {
+            let map = RelationMap::open(test_config(&dir)).expect("open");
+            assert!(map.needs_rebuild());
+            // A rebuild that wrote one batch and was killed before it finished.
+            map.begin_rebuild().expect("begin");
+            map.write_batch(&[(rid, Uuid::new_v4(), Uuid::new_v4())], &[])
+                .expect("batch");
+        }
+        let map = RelationMap::open(test_config(&dir)).expect("reopen");
+        assert!(
+            map.needs_rebuild(),
+            "a store whose rebuild never finished must be rebuilt, not trusted"
+        );
+
+        // The retry starts from an empty map and, once marked, is trusted on reopen.
+        map.begin_rebuild().expect("begin again");
+        assert_eq!(map.store_count(), 0);
+        map.write_batch(&[(rid, Uuid::new_v4(), Uuid::new_v4())], &[])
+            .expect("batch");
+        map.mark_rebuilt(1).expect("mark");
+        drop(map);
+        let map = RelationMap::open(test_config(&dir)).expect("reopen after rebuild");
+        assert!(!map.needs_rebuild());
+        assert_eq!(map.store_count(), 1);
     }
 
     #[test]
@@ -539,6 +664,41 @@ mod tests {
 
         let m = map.metrics_snapshot();
         assert!(m.store_hits > 0, "Should have hit the store");
+    }
+
+    #[test]
+    fn test_insert_many_writes_one_batch_that_survives_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = test_config(&dir);
+        let sid = Uuid::new_v4();
+        let rows: Vec<(Uuid, Uuid, Uuid)> = (0..50)
+            .map(|_| (Uuid::new_v4(), Uuid::new_v4(), sid))
+            .collect();
+
+        {
+            let map = RelationMap::open(config.clone()).expect("open");
+            map.insert_many(&[]);
+            map.insert_many(&rows);
+            assert_eq!(map.store_count(), 50);
+            assert_eq!(map.metrics_snapshot().inserts, 50);
+            map.checkpoint();
+        }
+
+        let map = RelationMap::open(config).expect("reopen");
+        for (r, e, s) in &rows {
+            assert_eq!(map.lookup(r), Some((*e, *s)));
+        }
+    }
+
+    #[test]
+    fn test_remember_is_cache_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let map = RelationMap::open(test_config(&dir)).expect("open");
+        let (rid, eid, sid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+
+        map.remember(rid, eid, sid);
+        assert_eq!(map.lookup(&rid), Some((eid, sid)));
+        assert_eq!(map.store_count(), 0, "remember must not write the store");
     }
 
     #[test]

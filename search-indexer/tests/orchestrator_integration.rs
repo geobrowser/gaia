@@ -2260,3 +2260,87 @@ async fn test_relation_map_entry_in_sqlite_after_successful_delete() {
         "SQLite should be empty after successful delete"
     );
 }
+
+#[tokio::test]
+async fn test_create_relation_of_unindexed_type_populates_relation_map() {
+    // A relation of a type the index does not store still owns its source entity's
+    // document for the retire sweep, so its removal must resolve without a later read.
+    let entity_id = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let relation_id = Uuid::new_v4();
+    let unindexed_type = Uuid::new_v4();
+
+    let events = vec![EntityEvent::create_relation(
+        relation_id,
+        unindexed_type,
+        entity_id,
+        Uuid::new_v4(),
+        space_id,
+    )];
+
+    let (rm, _dir) = temp_relation_map();
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_relation_map(events, rm.clone());
+
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+    assert_eq!(mock_consumer.get_last_acknowledgment(), Some(true));
+
+    assert_eq!(rm.lookup(&relation_id), Some((entity_id, space_id)));
+    assert_eq!(rm.store_count(), 1, "the mapping must be in the store");
+    assert!(
+        mock_provider.get_all_operations_in_order().is_empty(),
+        "an unindexed relation writes nothing to the index"
+    );
+}
+
+#[tokio::test]
+async fn test_delete_of_unindexed_relation_resolves_from_relation_map() {
+    // Created and removed in one batch: the removal resolves through the map to the
+    // owning document instead of falling back to a by-id lookup.
+    let entity_id = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let relation_id = Uuid::new_v4();
+    let unindexed_type = Uuid::new_v4();
+
+    let events = vec![
+        EntityEvent::create_relation(
+            relation_id,
+            unindexed_type,
+            entity_id,
+            Uuid::new_v4(),
+            space_id,
+        ),
+        EntityEvent::delete_relation(relation_id),
+    ];
+
+    let (rm, _dir) = temp_relation_map();
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_relation_map(events, rm.clone());
+
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+    assert_eq!(mock_consumer.get_last_acknowledgment(), Some(true));
+
+    let all_ops = mock_provider.get_all_operations_in_order();
+    assert!(
+        all_ops
+            .iter()
+            .any(|op| matches!(op, EntityOperation::RemoveRelationByDoc(req)
+            if req.relation_id == relation_id.to_string()
+               && req.doc_id == format!("{}_{}", entity_id, space_id))),
+        "expected RemoveRelationByDoc, got {:?}",
+        all_ops
+    );
+    assert!(
+        mock_provider.get_removed_relation_ids().is_empty(),
+        "no by-id fallback"
+    );
+    assert_eq!(
+        rm.store_count(),
+        0,
+        "entry removed after the write succeeded"
+    );
+}

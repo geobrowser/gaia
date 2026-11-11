@@ -682,3 +682,79 @@ async fn test_proposal_action_types() {
         }
     }
 }
+
+/// The indexer pool's statement budget is applied per transaction with `SET LOCAL` and leaves
+/// nothing on the connection. A session-level `SET` would stay on the PgBouncer server
+/// connection and leak to whichever client (any gaia service) is handed it next.
+mod statement_budget {
+    use super::*;
+    use kg_indexer::storage::Storage;
+
+    async fn storage() -> Storage {
+        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        Storage::new(&database_url)
+            .await
+            .expect("Failed to create storage")
+    }
+
+    async fn session_timeout(conn: &mut sqlx::PgConnection) -> String {
+        sqlx::query_scalar("SELECT current_setting('statement_timeout')")
+            .fetch_one(conn)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn budget_is_in_force_inside_a_transaction() {
+        let storage = storage().await;
+        let mut tx = storage.begin_with_timeout().await.unwrap();
+        // PG_STATEMENT_TIMEOUT_MS is unset here, so the 300000ms default; Postgres prints 5min.
+        assert_eq!(session_timeout(&mut tx).await, "5min");
+        tx.commit().await.unwrap();
+    }
+
+    /// Where the connection's current value came from: `session` means a session-level `SET`.
+    async fn timeout_source(conn: &mut sqlx::PgConnection) -> String {
+        sqlx::query_scalar("SELECT source FROM pg_settings WHERE name = 'statement_timeout'")
+            .fetch_one(conn)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn nothing_is_left_on_the_connection() {
+        let storage = storage().await;
+
+        // Hold several connections at once so the check is not just one lucky connection.
+        let mut conns = Vec::new();
+        for _ in 0..4 {
+            conns.push(storage.pool.acquire().await.unwrap());
+        }
+        for conn in conns.iter_mut() {
+            assert_ne!(
+                timeout_source(conn).await,
+                "session",
+                "connect applied a session-level statement_timeout"
+            );
+        }
+        drop(conns);
+
+        // A budgeted transaction does not leave its SET LOCAL behind on the connection.
+        let mut tx = storage.begin_with_timeout().await.unwrap();
+        sqlx::query("SELECT 1").execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        let mut conn = storage.pool.acquire().await.unwrap();
+        assert_ne!(timeout_source(&mut conn).await, "session");
+        assert_ne!(session_timeout(&mut conn).await, "5min");
+    }
+
+    #[tokio::test]
+    async fn tally_queue_depth_reads_through_a_budgeted_transaction() {
+        let storage = storage().await;
+        let depth = storage.get_tally_queue_depth().await.unwrap();
+        assert!(depth >= 0);
+        // The transaction it ran in is closed and left nothing on the connection.
+        let mut conn = storage.pool.acquire().await.unwrap();
+        assert_ne!(timeout_source(&mut conn).await, "session");
+    }
+}

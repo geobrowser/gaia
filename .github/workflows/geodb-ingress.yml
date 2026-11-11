@@ -1,0 +1,29 @@
+name: geodb-ingress stays narrow
+
+# 7447 on geo-db serve was once open to every namespace. All clients live in gaia. The script also fails
+# when a manifest that uses geo-db lacks the pod label geodb-client, so any manifest change can trip it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'geodb/k8s/v2/geodb.yaml'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - 'scripts/check-geodb-ingress.py'
+      - '.github/workflows/geodb-ingress.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'geodb/k8s/v2/geodb.yaml'
+      - '**/*.yaml'
+      - '**/*.yml'
+      - 'scripts/check-geodb-ingress.py'
+      - '.github/workflows/geodb-ingress.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 scripts/check-geodb-ingress.py

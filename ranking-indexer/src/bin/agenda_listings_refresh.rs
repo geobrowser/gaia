@@ -149,9 +149,37 @@ fn rescore_compute_enabled() -> bool {
 /// What `trending.refresh_agenda_listings` reads that it then changes.
 struct RescoreBefore {
     stored: std::collections::BTreeSet<compute::Listing>,
+    positions: std::collections::BTreeSet<rescore::Position>,
     terms: Vec<rescore::StoredTerm>,
     last_full_pass_on: Option<chrono::NaiveDate>,
-    cfg: (f64, f64, f64, f64, i32, i32, f64),
+    cfg: RescoreConfig,
+}
+
+/// The `entity_ranking_config` columns the re-scoring reads: boost, topic boost, day factor, debate factor,
+/// debate window, horizon, tau, then the position term's base, step, slots and day factor (migration 0122).
+type RescoreConfig = (f64, f64, f64, f64, i32, i32, f64, f64, f64, i32, f64);
+
+async fn read_positions(
+    pool: &sqlx::PgPool,
+) -> Result<std::collections::BTreeSet<rescore::Position>, IndexerError> {
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, uuid::Uuid, chrono::NaiveDate, i32)> = sqlx::query_as(
+        "SELECT agenda_id, space_id, entity_id, listed_on, position \
+         FROM trending.agenda_debate_positions",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(agenda_id, space_id, entity_id, listed_on, position)| rescore::Position {
+                agenda_id,
+                space_id,
+                entity_id,
+                listed_on,
+                position,
+            },
+        )
+        .collect())
 }
 
 fn listing_source(s: &str) -> Option<&'static str> {
@@ -209,12 +237,15 @@ async fn rescore_before(pool: &sqlx::PgPool) -> Result<RescoreBefore, IndexerErr
     let cfg = sqlx::query_as(
         "SELECT trending_boost::float8, trending_topic_boost::float8, trending_day_factor::float8, \
                 trending_debate_factor::float8, trending_debate_window_days, trending_horizon_days, \
-                tau_seconds::float8 FROM public.entity_ranking_config WHERE id",
+                tau_seconds::float8, trending_position_base::float8, trending_position_step::float8, \
+                trending_position_slots, trending_position_day_factor::float8 \
+         FROM public.entity_ranking_config WHERE id",
     )
     .fetch_one(pool)
     .await?;
     Ok(RescoreBefore {
         stored: read_listings(pool).await?,
+        positions: read_positions(pool).await?,
         terms: terms
             .into_iter()
             .map(|(entity, trending_score, age_credit)| rescore::StoredTerm {
@@ -236,6 +267,7 @@ async fn rescore_shadow(
 ) -> Result<(usize, i32, usize), IndexerError> {
     use std::collections::{HashMap, HashSet};
     let incoming = read_listings(pool).await?;
+    let incoming_positions = read_positions(pool).await?;
     let rels: Vec<compute::Relation> = read_rels(pool)
         .await?
         .into_iter()
@@ -267,16 +299,39 @@ async fn rescore_shadow(
     .map(|(id, c)| (id, rescore::created_epoch(&c)))
     .collect();
     let graph = rescore::Graph::new(&rels, &spaces, created);
-    let (boost, topic_boost, day_factor, debate_factor, window, horizon, tau) = before.cfg;
+    let (
+        boost,
+        topic_boost,
+        day_factor,
+        debate_factor,
+        window,
+        horizon,
+        tau,
+        position_base,
+        position_step,
+        position_slots,
+        position_day_factor,
+    ) = before.cfg;
     let now = chrono::Utc::now();
     let today = ranking_indexer::sql_helpers::today(now);
     let sweep = rescore::Sweep {
         today,
         horizon_days: horizon,
         boost,
+        position_base,
+        position_step,
+        position_slots,
         full_pass: rescore::is_full_pass(before.last_full_pass_on, today),
     };
-    let ids = rescore::rescore_ids(&graph, &before.stored, &incoming, &before.terms, &sweep);
+    let ids = rescore::rescore_ids(
+        &graph,
+        &before.stored,
+        &incoming,
+        &before.positions,
+        &incoming_positions,
+        &before.terms,
+        &sweep,
+    );
     let want_ids: HashSet<uuid::Uuid> = ids.iter().copied().collect();
     let cfg = scores::TrendConfig {
         boost,
@@ -285,9 +340,14 @@ async fn rescore_shadow(
         debate_factor,
         horizon_days: horizon,
         tau_seconds: tau,
+        position_base,
+        position_step,
+        position_slots,
+        position_day_factor,
     };
     let terms = graph.trending_terms(
         &incoming,
+        &incoming_positions,
         &want_ids,
         &cfg,
         window,
@@ -375,8 +435,8 @@ async fn run() -> Result<(), IndexerError> {
     };
 
     let started = Instant::now();
-    // The app role's statement_timeout is 30s and a sweep over busy topics can pass it, so it gets
-    // its own limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
+    // The app role sets no statement_timeout (0) and a sweep over busy topics is long, so it gets
+    // its own explicit limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
     // session SET: the connection goes through a transaction-mode pooler.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     // Off: the refresh and its counts are skipped as one write (they share a transaction), so the

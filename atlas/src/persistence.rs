@@ -5,7 +5,7 @@ use crate::events::{SpaceId, TopicId};
 use crate::graph::{EdgeType, GraphState};
 use hermes_instrumentation::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 
 /// Persisted shape of atlas's emission contract: every (non-root) canonical
 /// node we last told consumers about, as a `(space_id, distance, parent)`
@@ -236,6 +236,12 @@ const PG_POOL_MAX_LIFETIME_MS_MAX: u64 = 7_200_000;
 const PG_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 3_000;
 const PG_STATEMENT_TIMEOUT_MS_MIN: u64 = 100;
 const PG_STATEMENT_TIMEOUT_MS_MAX: u64 = 60_000;
+
+/// The per-transaction budget statement. Always `SET LOCAL`: a session-level SET would
+/// outlive the transaction on a shared transaction-mode PgBouncer connection.
+pub fn set_local_statement_timeout_sql(timeout_ms: i32) -> String {
+    format!("SET LOCAL statement_timeout = {timeout_ms}")
+}
 
 #[derive(Debug, Clone)]
 pub struct PostgresPoolConfig {
@@ -934,6 +940,9 @@ pub fn register_metrics() {
 pub struct PostgresCheckpointStore {
     /// `None` when atlas runs with no Postgres at all (object store only).
     pool: Option<PgPool>,
+    /// `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS`, applied with `SET LOCAL` inside each
+    /// transaction (see `begin_with_timeout`), never as a session setting.
+    statement_timeout_ms: i32,
     /// Flag-off object-store copy (`ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH`,
     /// `ATLAS_CHECKPOINT_BLOB_SHADOW_READ`); Postgres stays the source.
     blob: Option<std::sync::Arc<blob_store::Mirror>>,
@@ -1118,24 +1127,22 @@ impl PostgresCheckpointStore {
                     pool_config.statement_timeout_ms
                 ))
             })?;
-        let statement_timeout_query = format!("SET statement_timeout = {}", statement_timeout_ms);
+        // No session-level `SET statement_timeout` on connect: the database is reached
+        // through a PgBouncer pool in transaction mode shared by other services, so a
+        // session SET stays on whichever server connection ran it and applies to the next
+        // client handed that connection. Every statement here runs in a transaction that
+        // sets the budget with `SET LOCAL` instead (`begin_with_timeout`).
         let pool = PgPoolOptions::new()
             .max_connections(pool_config.max_connections)
             .min_connections(pool_config.min_connections)
             .acquire_timeout(Duration::from_millis(pool_config.acquire_timeout_ms))
             .idle_timeout(Duration::from_millis(pool_config.idle_timeout_ms))
             .max_lifetime(Duration::from_millis(pool_config.max_lifetime_ms))
-            .after_connect(move |conn, _meta| {
-                let statement_timeout_query = statement_timeout_query.clone();
-                Box::pin(async move {
-                    sqlx::query(&statement_timeout_query).execute(conn).await?;
-                    Ok(())
-                })
-            })
             .connect_lazy(database_url)
             .map_err(|err| CheckpointError::Io(format!("create postgres pool: {err}")))?;
         Ok(Self {
             pool: Some(pool),
+            statement_timeout_ms,
             blob: blob_store::Mirror::from_env("atlas_checkpoints", "ATLAS_CHECKPOINT")
                 .map(std::sync::Arc::new),
             pg_writes: true,
@@ -1150,12 +1157,35 @@ impl PostgresCheckpointStore {
     pub fn without_postgres() -> Self {
         Self {
             pool: None,
+            statement_timeout_ms: i32::try_from(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+                .expect("default statement timeout fits i32"),
             blob: None,
             pg_writes: true,
             objects: None,
             objects_write: false,
             objects_read: false,
         }
+    }
+
+    /// Open a transaction whose statements run under `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS`.
+    /// `SET LOCAL` ends with the transaction, so nothing is left on the pooled connection.
+    async fn begin_with_timeout<'a>(
+        &self,
+        pool: &'a PgPool,
+    ) -> Result<Transaction<'a, Postgres>, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        sqlx::query(sqlx::AssertSqlSafe(set_local_statement_timeout_sql(
+            self.statement_timeout_ms,
+        )))
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
+    }
+
+    /// The Postgres pool, if any. For tests that inspect connection state.
+    #[doc(hidden)]
+    pub fn pg_pool(&self) -> Option<&PgPool> {
+        self.pool.as_ref()
     }
 
     /// Set `ATLAS_PG_WRITES`.
@@ -1201,10 +1231,15 @@ impl PostgresCheckpointStore {
         let Some(pool) = &self.pool else {
             return Ok(Vec::new());
         };
-        sqlx::query_scalar("SELECT indexer_id FROM atlas_checkpoints ORDER BY indexer_id")
-            .fetch_all(pool)
-            .await
-            .map_err(|err| CheckpointError::Io(format!("list checkpoints: {err}")))
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("list checkpoints: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
+        let ids =
+            sqlx::query_scalar("SELECT indexer_id FROM atlas_checkpoints ORDER BY indexer_id")
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(io)?;
+        tx.commit().await.map_err(io)?;
+        Ok(ids)
     }
 
     pub async fn load(&self, indexer_id: &str) -> Result<Option<Checkpoint>, CheckpointError> {
@@ -1216,6 +1251,8 @@ impl PostgresCheckpointStore {
         let Some(pool) = &self.pool else {
             return Ok(None);
         };
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("load checkpoint: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
         let row = sqlx::query(
             "SELECT
                 schema_version,
@@ -1231,9 +1268,10 @@ impl PostgresCheckpointStore {
              WHERE indexer_id = $1",
         )
         .bind(indexer_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|err| CheckpointError::Io(format!("load checkpoint: {err}")))?;
+        .map_err(io)?;
+        tx.commit().await.map_err(io)?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -1376,6 +1414,8 @@ impl PostgresCheckpointStore {
         // state, so they cannot diverge — they share the row's transaction.
         // Passing `None` (when the caller has no baseline yet) preserves any
         // existing value, since COALESCE keeps the prior row's bytes.
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("save checkpoint: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
         let row = sqlx::query(
             "INSERT INTO atlas_checkpoints (
                 indexer_id,
@@ -1411,9 +1451,10 @@ impl PostgresCheckpointStore {
         .bind(&checkpoint.root_space_id)
         .bind(db_schema_version)
         .bind(checkpoint.emission_baseline_blob.as_deref())
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|err| CheckpointError::Io(format!("save checkpoint: {err}")))?;
+        .map_err(io)?;
+        tx.commit().await.map_err(io)?;
 
         let snapshot_size_bytes_i32 =
             row.try_get::<i32, _>("snapshot_size_bytes")
@@ -1938,6 +1979,14 @@ mod tests {
         write_through: true,
         shadow_read: true,
     };
+
+    #[test]
+    fn statement_budget_is_set_local_not_session() {
+        assert_eq!(
+            set_local_statement_timeout_sql(3_000),
+            "SET LOCAL statement_timeout = 3000"
+        );
+    }
 
     #[tokio::test]
     async fn blob_mirror_is_off_without_flags() {

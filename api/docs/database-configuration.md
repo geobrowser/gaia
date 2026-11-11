@@ -20,7 +20,7 @@ API Replicas (3x)              PgBouncer                 PostgreSQL
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | `max_connections` | 100 | Maximum concurrent connections |
-| `statement_timeout` | 30s | Kill queries running longer than 30s. Set per connection by the API (`PG_STATEMENT_TIMEOUT_MS`), not from the server config — the managed databases ship `0` (v2) and `1min` (production). |
+| `statement_timeout` | 30s | Kill queries running longer than 30s. Set per statement by the API as `SET LOCAL` (`PG_STATEMENT_TIMEOUT_MS` for GraphQL, `PG_REST_STATEMENT_TIMEOUT_MS` for REST and background work), not from the server config — the managed databases ship `0` (v2) and `1min` (production). |
 | `idle_in_transaction_session_timeout` | 30s | Kill connections stuck in a transaction without committing |
 
 ### Applying PostgreSQL Settings
@@ -130,7 +130,8 @@ Keep timeout budgets ordered so overload fails predictably:
 
 1. Pool acquire/connect timeout (shortest) — `PG_CONNECTION_TIMEOUT_MS`
 2. Request/application deadline
-3. `statement_timeout` — `PG_STATEMENT_TIMEOUT_MS`, applied per connection by the API
+3. `statement_timeout` — `PG_STATEMENT_TIMEOUT_MS` (GraphQL pool) and
+   `PG_REST_STATEMENT_TIMEOUT_MS` (REST / background pool), applied per statement by the API
 4. node-postgres `query_timeout` (longest) — `PG_QUERY_TIMEOUT_MS`
 
 Avoid setting all layers to the same value (for example all 10s), which makes root cause ambiguous.
@@ -144,7 +145,27 @@ failure surfaces as an opaque `INTERNAL_SERVER_ERROR` with no server-side trace.
 Do not infer `statement_timeout` from the database's own configuration. The
 managed instances do not match this table on their own — v2 ships `0`
 (unlimited) and production ships `1min` — which is why the API sets it
-explicitly per connection.
+explicitly.
+
+#### Why per statement, not per connection
+
+The API reaches Postgres through PgBouncer in **transaction mode**, shared by every
+gaia service. A session-level `SET statement_timeout` on connect does not stay with
+the client that ran it: it stays on the PgBouncer *server* connection, which the next
+transaction from any client — another pool, another service — may get. The pool that
+set it only gets its budget when it happens to land on a connection that already
+carries it, so the effective timeout is a mix of 30s and none that drifts with traffic.
+
+So both API pools wrap every top-level statement as
+`BEGIN; SET LOCAL statement_timeout = N` → statement → `COMMIT`
+(`src/services/statementBudget.ts`). `SET LOCAL` ends with the transaction, so nothing
+leaks. A caller's own transaction (`db.transaction`) gets the pool budget right after
+its `BEGIN` and can override it with its own `SET LOCAL` for longer work.
+
+Startup `options=-c statement_timeout=...` would be the cheaper route, but
+DigitalOcean's PgBouncer rejects it (`unsupported startup parameter in options`). A
+role-level default cannot give two pools two budgets, since every service connects as
+the same role.
 
 ### Readiness and Saturation Routing
 

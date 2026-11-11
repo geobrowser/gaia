@@ -17,7 +17,7 @@ search-indexer-shared = { path = "../search-indexer-shared" }
 opensearch = { version = "2.3.0", features = ["experimental-apis"] }
 
 # Postgres (read only), for reconcile-orphans (GEO-2548)
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "uuid", "tls-rustls"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "tls-rustls"] }
 
 # Kubernetes client
 kube = "4.2"

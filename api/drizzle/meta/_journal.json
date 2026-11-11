@@ -855,6 +855,13 @@
       "when": 1792693600000,
       "tag": "0121_score_mirror_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1792780000000,
+      "tag": "0122_agenda_debate_positions",
+      "breakpoints": true
     }
   ]
 }
