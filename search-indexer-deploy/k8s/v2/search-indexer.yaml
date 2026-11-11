@@ -47,6 +47,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: search-indexer
     spec:
       imagePullSecrets:
@@ -158,9 +159,9 @@ spec:
                   key: DATABASE_URL
             - name: DATABASE_MAX_CONNECTIONS
               value: "5"
-            # Relation map (SQLite-backed, for fast DeleteRelation lookups)
+            # Relation map (redb-backed, for fast DeleteRelation lookups)
             - name: RELATION_MAP_DB_PATH
-              value: "/data/relation_map.sqlite"
+              value: "/data/relation_map.redb"
             - name: RELATION_MAP_CACHE_SIZE
               value: "500000"
             # Kafka consumer configuration
@@ -239,6 +240,18 @@ spec:
             - name: geodb-key
               mountPath: /etc/geodb/key
               readOnly: true
+          # Startup probe - the health server starts only after dependencies are up, and that
+          # includes rebuilding the relation map from Postgres when the store is new or its last
+          # rebuild never finished. Without this, the liveness probe kills the pod ~90s in, mid-
+          # rebuild, and the rebuild starts over on every restart. Allows up to 15 minutes; the
+          # liveness probe takes over once this succeeds.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
           # Liveness probe - checks if the process is alive and can respond to HTTP requests
           # Used by Kubernetes to restart the container if it becomes unresponsive
           livenessProbe:

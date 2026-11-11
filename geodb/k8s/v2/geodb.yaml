@@ -314,6 +314,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-feeder
     spec:
       serviceAccountName: geodb
@@ -559,11 +560,16 @@ spec:
               drop:
                 - ALL
 ---
-# Who may reach serve. 7447 (the wire) stays open to every pod in every namespace, as it was before any
-# policy existed (api, the feeder, notification-indexer, delivery-worker, the setup and backfill Jobs, the
-# scoring CronJob all dial it by pod IP). 9091 is serve's HTTP listener, which serves GET /metrics but is NOT
-# metrics-only: an anonymous session reads the root Public Spaces, so only the monitoring namespace
-# (Prometheus) may reach it. Same shape as api-cache-ingress. Rollback:
+# Who may reach serve. 7447 (the wire) is open to the gaia namespace only: every client of svc/geodb:7447
+# (api, the feeder and its backfill Jobs, search-indexer, ranking-indexer and its CronJobs, notification-indexer,
+# delivery-worker, hermes-pipeline, hermes-ipfs-cache, vote/topology indexers and sweeps, scoring-service,
+# proposal-executor, the setup Jobs) runs in gaia; nothing in any other namespace dials it. It is a namespace
+# rule, not a pod rule, on purpose: many CronJob and Job pods carry no app label, and a pod selector would
+# silently cut off any workload added or re-labelled later. 9091 is serve's HTTP listener, which serves GET
+# /metrics but is NOT metrics-only: an anonymous session reads the root Public Spaces, so only the monitoring
+# namespace (Prometheus) may reach it. Same shape as api-cache-ingress. scripts/check-geodb-ingress.py (CI)
+# fails if 7447 is ever opened to every namespace again. Rollback: re-apply the previous revision of this
+# policy (git revert), or, to drop the policy entirely:
 #   kubectl -n gaia delete networkpolicy geodb-ingress
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -578,7 +584,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gaia
       ports:
         - port: 7447
           protocol: TCP

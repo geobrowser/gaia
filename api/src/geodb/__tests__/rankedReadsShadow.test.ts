@@ -1,5 +1,7 @@
 import {readFileSync} from "node:fs"
 import {join} from "node:path"
+import type {SQL} from "drizzle-orm"
+import {PgDialect} from "drizzle-orm/pg-core"
 import {beforeEach, describe, expect, it} from "vitest"
 import type {FeedsSample, FeedsShadowSource} from "../rankedFeedsShadow"
 import {type FeedData, Feeds} from "../rankedReads/feeds"
@@ -7,12 +9,15 @@ import {nextPrimerClaim, type PrimerData, primerCandidates} from "../rankedReads
 import {type Graph, Trending} from "../rankedReads/trending"
 import {
 	__resetRankedReadsShadowMetricsForTests,
+	createBudgetedPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	type PgDebateRow,
 	type RankedReadsSource,
 	readRankedReadsShadowConfig,
 	renderRankedReadsShadowMetrics,
 	sameRows,
+	type TransactionalDatabase,
+	timedSource,
 } from "../rankedReadsShadow"
 
 const golden = JSON.parse(readFileSync(join(__dirname, "../rankedReads/__tests__/fixtures/golden.json"), "utf8")) as {
@@ -20,7 +25,7 @@ const golden = JSON.parse(readFileSync(join(__dirname, "../rankedReads/__tests__
 	seeds: {tables: Record<string, unknown[]>}[]
 }
 const graph = golden.seeds[0]!.tables as unknown as Graph
-const config = {enabled: true, intervalMs: 1000, spaces: 3}
+const config = {enabled: true, intervalMs: 1000, spaces: 3, statementTimeoutMs: 1000}
 const warnings: string[] = []
 const log = {warn: (m: string) => void warnings.push(m)}
 
@@ -53,6 +58,82 @@ describe("ranked reads shadow", () => {
 		expect(readRankedReadsShadowConfig({}).enabled).toBe(false)
 		expect(readRankedReadsShadowConfig({GEODB_RANKED_READS_SHADOW: "on"}).enabled).toBe(true)
 		expect(renderRankedReadsShadowMetrics()).toBe("")
+	})
+
+	it("reads the statement budget, defaulting to 5 minutes and capped at 10", () => {
+		expect(readRankedReadsShadowConfig({}).statementTimeoutMs).toBe(300_000)
+		expect(
+			readRankedReadsShadowConfig({GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS: "45000"}).statementTimeoutMs,
+		).toBe(45_000)
+		expect(
+			readRankedReadsShadowConfig({GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS: "9999999"}).statementTimeoutMs,
+		).toBe(600_000)
+		expect(
+			readRankedReadsShadowConfig({GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS: "0"}).statementTimeoutMs,
+		).toBe(300_000)
+	})
+
+	it("times each source call into the stage metric", async () => {
+		await createRankedReadsShadow({config, source: source(), log}).runOnce()
+		const text = renderRankedReadsShadowMetrics()
+		for (const stage of ["today", "sampleSpaces", "graph", "pgCurrentDebateAgendas", "pgTopicSuggestions"])
+			expect(text, stage).toMatch(
+				new RegExp(`gaia_api_ranked_read_shadow_stage_seconds_count\\{stage="${stage}"\\} \\d+`),
+			)
+		expect(text).toMatch(/gaia_api_ranked_read_shadow_stage_seconds_count\{stage="pgCurrentDebateAgendas"\} 2/)
+	})
+
+	it("timedSource records elapsed seconds and tags a thrown error with its stage, once", async () => {
+		createRankedReadsShadow({config, source: source(), log}) // mounts the metrics
+		let clock = 0
+		const now = () => clock
+		const inner = timedSource(
+			{
+				slow: async () => {
+					clock += 2500
+					return 1
+				},
+				broken: async () => Promise.reject(new Error("canceling statement due to statement timeout")),
+			},
+			"feeds.",
+			now,
+		)
+		const outer = timedSource({run: () => inner.broken()}, "", now)
+		expect(await inner.slow()).toBe(1)
+		await expect(outer.run()).rejects.toThrow("statement timeout")
+		const text = renderRankedReadsShadowMetrics()
+		expect(text).toContain('gaia_api_ranked_read_shadow_stage_seconds_sum{stage="feeds.slow"} 2.5')
+		expect(text).toContain('gaia_api_ranked_read_shadow_stage_seconds_count{stage="feeds.broken"} 1')
+	})
+
+	it("runs each Postgres call in its own read-only transaction that sets the budget first", async () => {
+		const dialect = new PgDialect()
+		const transactions: {config: unknown; statements: string[]}[] = []
+		const db = {
+			execute: async () => {
+				throw new Error("statement outside a transaction")
+			},
+			transaction: async (fn: (tx: unknown) => Promise<unknown>, config?: unknown) => {
+				const statements: string[] = []
+				transactions.push({config, statements})
+				return fn({
+					execute: async (q: SQL) => {
+						statements.push(dialect.sqlToQuery(q).sql)
+						return {rows: []}
+					},
+				})
+			},
+		} as unknown as TransactionalDatabase
+		const pg = createBudgetedPostgresRankedReadsSource(db, 45_000)
+		await pg.today()
+		await pg.feeds!.sample([])
+		expect(transactions).toHaveLength(2)
+		for (const t of transactions) {
+			expect(t.config).toEqual({accessMode: "read only"})
+			expect(t.statements[0]).toBe("SET LOCAL statement_timeout = 45000")
+			expect(t.statements.length).toBeGreaterThan(1)
+		}
+		expect(() => createBudgetedPostgresRankedReadsSource(db, 0)).toThrow()
 	})
 
 	it("counts a match for each read when twin and Postgres agree", async () => {
@@ -190,6 +271,45 @@ describe("ranked reads shadow", () => {
 				log,
 			}).runOnce()
 			for (const read of FEED_READS) expect(series(read, "failed"), read).toBe(1)
+		})
+
+		it("names the stage that failed in the failure log", async () => {
+			const fields: Record<string, unknown>[] = []
+			await createRankedReadsShadow({
+				config,
+				source: {
+					...source(),
+					feeds: {...feedsSource(), feedData: async () => Promise.reject(new Error("statement timeout"))},
+				},
+				log: {warn: (_m: string, f?: Record<string, unknown>) => void fields.push(f ?? {})},
+			}).runOnce()
+			expect(fields.filter((f) => f.read === "entities_ranked_for_feed")).toEqual([
+				{read: "entities_ranked_for_feed", stage: "feeds.feedData", error: "Error: statement timeout"},
+			])
+		})
+
+		it("draws the random voter point in the process, not per row in Postgres", async () => {
+			const dialect = new PgDialect()
+			const statements: {sql: string; params: unknown[]}[] = []
+			const tx = {
+				execute: async (q: SQL) => {
+					const {sql, params} = dialect.sqlToQuery(q)
+					statements.push({sql, params})
+					return {rows: sql.includes("OFFSET 199") ? [{threshold: "5"}] : []}
+				},
+			}
+			const db = {
+				execute: tx.execute,
+				transaction: async (fn: (t: unknown) => Promise<unknown>) => fn(tx),
+			} as unknown as TransactionalDatabase
+			await createBudgetedPostgresRankedReadsSource(db, 1000).feeds!.sample([])
+			const pick = statements.find((s) => s.sql.includes("user_votes") && s.sql.includes(">="))
+			expect(pick, "user pick statement").toBeDefined()
+			expect(pick!.sql).not.toContain("gen_random_uuid")
+			expect(pick!.params).toHaveLength(1)
+			expect(String(pick!.params[0])).toMatch(
+				/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			)
 		})
 
 		it("exports zero series for the feed reads when no feeds source is configured", async () => {

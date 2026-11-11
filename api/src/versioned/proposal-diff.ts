@@ -618,6 +618,16 @@ function extractAffectedEntitiesAndRelations(ops: Op[]): {
 }
 
 /**
+ * Watches each relation-id lookup `extractAffectedEntities` serves from Postgres (GEODB_RELATION_LOOKUP_SHADOW). Called
+ * after the map is built, never awaited, and its errors are swallowed: it cannot change the diff. Set once at startup.
+ */
+export type RelationLookupObserver = (relationIds: readonly string[], served: ReadonlyMap<string, string>) => void
+let relationLookupObserver: RelationLookupObserver | null = null
+export function setRelationLookupObserver(observer: RelationLookupObserver | null): void {
+	relationLookupObserver = observer
+}
+
+/**
  * Extract all affected entity IDs from ops, including those requiring relation lookups.
  */
 export function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<NormalizedUuid[], QueryError> {
@@ -627,6 +637,11 @@ export function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<
 		// If we have relation ops that need lookup, fetch the from_entity_id for each
 		if (relationIdsNeedingLookup.length > 0) {
 			const relationEntityMap = yield* batchLookupRelationEntities(db, relationIdsNeedingLookup)
+			try {
+				relationLookupObserver?.(relationIdsNeedingLookup, relationEntityMap)
+			} catch {
+				// A shadow never reaches the diff.
+			}
 			for (const [_relationId, fromEntityId] of relationEntityMap) {
 				entityIds.add(fromEntityId)
 			}

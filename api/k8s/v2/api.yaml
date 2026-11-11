@@ -49,6 +49,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: api
     spec:
       # Spread replicas across nodes instead of leaving placement to the scheduler.
@@ -309,6 +310,16 @@ spec:
             # counts unsupported_selection, never a failed request.
             - name: GEODB_PROPERTY_INFO_SHADOW
               value: "on"
+            # Compare an unfiltered `allRelationsList { spaceId }` against geo-db's reference statements of the entity in the
+            # Spaces that hold it: no Space may hold more than PostgreSQL lists. One more read an entity (`.args.relations`),
+            # under the every-Space budget. Shadow only; never changes a response.
+            - name: GEODB_RELATIONS_MEMBERSHIP_SHADOW
+              value: "on"
+            # Judge an `entity` comparison that came out `cross_space` again against the card read across every Space the
+            # entity lives in, so its name, description, Types and lists are compared instead of skipped. One more read per
+            # such comparison. Shadow only; never changes a response.
+            - name: GEODB_CROSS_SPACE_HOLDERS_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
@@ -365,6 +376,11 @@ spec:
             # (gaia_api_governance_queries_shadow_total). ON; never changes a response; counts only.
             - name: GEODB_GOVERNANCE_QUERIES_SHADOW
               value: "1"
+            # Applies the feeder's settings-escalation records (PROPOSAL_SETTINGS_UPDATED) to the proposal version before the
+            # governance shadow compares it; without it a Slow proposal whose settings changed after creation counts as a
+            # mismatch and a Fast one as unsupported{escalation_pending}. Shadow only; never changes a response. "0" turns it off.
+            - name: GEODB_GOVERNANCE_SHADOW_ESCALATIONS
+              value: "1"
             # Background sampler for user_votes, ranks.rankings and ranks.ranking_blocks against the feeder's keyed
             # records (gaia_api_keyed_records_shadow_total). ON; 20 rows per table every 60 s; never touches a request.
             - name: GEODB_KEYED_RECORDS_SHADOW
@@ -381,6 +397,12 @@ spec:
             # 1 in 10 requests, at most 30 a minute, 2 at once. "0" turns it off.
             - name: GEODB_VERSIONS_SHADOW
               value: "on"
+            # Checks the base-side statements of a sampled ACTIVE /versioned/proposals/:id/diff or
+            # /versioned/proposal-groups/diff response against geo-db's entity cards in the background, counts only (never
+            # changes the response). Executed and closed bases are unsupported{as_of}. OFF until turned on: "on" enables it;
+            # 1 in 10 requests, at most 30 a minute, 2 at once.
+            - name: GEODB_PROPOSAL_DIFF_SHADOW
+              value: "0"
             # A nested property, Type or relation-target name that geo-db prints as none because it is named in a Space
             # outside the read is settled from its Name in every Space (one batch read of at most 64 ids, under the
             # every-Space budget). A name no Space holds stays uncompared, never a mismatch. Shadow only (gaia#1257).
@@ -498,6 +520,8 @@ spec:
             - name: PG_CONNECTION_TIMEOUT_MS
               value: "3000"
             - name: PG_STATEMENT_TIMEOUT_MS
+              value: "30000"
+            - name: PG_REST_STATEMENT_TIMEOUT_MS
               value: "30000"
             - name: PG_QUERY_TIMEOUT_MS
               value: "35000"

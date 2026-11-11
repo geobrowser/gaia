@@ -1486,6 +1486,14 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	trendingDebateWindowDays: integer("trending_debate_window_days").notNull(),
 	/** The boost is 0 once this many days have passed since the newest listing (0113). */
 	trendingHorizonDays: integer("trending_horizon_days").notNull(),
+	/** A debate an agenda's Debates relation places gets (base + step × (slots − place + 1)) on its listing score, for place ≤ slots (0122). */
+	trendingPositionBase: decimal("trending_position_base").notNull(),
+	/** The per-place step of the position term (0122). 0 with a base of 0 turns the term off. */
+	trendingPositionStep: decimal("trending_position_step").notNull(),
+	/** Places that carry a position term (0122). */
+	trendingPositionSlots: integer("trending_position_slots").notNull(),
+	/** The position term is multiplied by this for each day since the placing agenda's Date (0122). */
+	trendingPositionDayFactor: decimal("trending_position_day_factor").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 

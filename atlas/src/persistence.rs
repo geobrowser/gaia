@@ -5,7 +5,7 @@ use crate::events::{SpaceId, TopicId};
 use crate::graph::{EdgeType, GraphState};
 use hermes_instrumentation::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 
 /// Persisted shape of atlas's emission contract: every (non-root) canonical
 /// node we last told consumers about, as a `(space_id, distance, parent)`
@@ -237,6 +237,12 @@ const PG_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 3_000;
 const PG_STATEMENT_TIMEOUT_MS_MIN: u64 = 100;
 const PG_STATEMENT_TIMEOUT_MS_MAX: u64 = 60_000;
 
+/// The per-transaction budget statement. Always `SET LOCAL`: a session-level SET would
+/// outlive the transaction on a shared transaction-mode PgBouncer connection.
+pub fn set_local_statement_timeout_sql(timeout_ms: i32) -> String {
+    format!("SET LOCAL statement_timeout = {timeout_ms}")
+}
+
 #[derive(Debug, Clone)]
 pub struct PostgresPoolConfig {
     pub max_connections: u32,
@@ -317,10 +323,58 @@ impl CheckpointConfig {
             ),
         };
 
-        let store = match database_url {
-            Some(url) => Some(PostgresCheckpointStore::new(&url, &pool_config)?),
-            None => None,
+        let pg_writes = pg_writes_enabled_from(std::env::var("ATLAS_PG_WRITES").ok().as_deref());
+        let objects_write = checkpoint_store_objectstore_from(
+            std::env::var("ATLAS_CHECKPOINT_STORE").ok().as_deref(),
+        );
+        let mut objects_read = checkpoint_source_objectstore_from(
+            std::env::var("ATLAS_CHECKPOINT_SOURCE").ok().as_deref(),
+        );
+        let objects = if objects_write || objects_read {
+            match blob_store::store_from_env() {
+                Ok(Some(store)) => Some(store),
+                Ok(None) if objects_write => {
+                    return Err(CheckpointError::Incompatible(
+                        "ATLAS_CHECKPOINT_STORE=objectstore needs BLOB_BACKEND (and its BLOB_S3_* or BLOB_FS_ROOT settings)"
+                            .to_string(),
+                    ));
+                }
+                Ok(None) => {
+                    error!(
+                        "ATLAS_CHECKPOINT_SOURCE=objectstore but BLOB_BACKEND is unset; reading checkpoints from Postgres"
+                    );
+                    objects_read = false;
+                    None
+                }
+                Err(err) => {
+                    return Err(CheckpointError::Incompatible(format!(
+                        "checkpoint object store: {err}"
+                    )));
+                }
+            }
+        } else {
+            None
         };
+
+        let store = match (database_url, objects) {
+            (None, None) => None,
+            (url, objects) => {
+                let base = match url {
+                    Some(url) => PostgresCheckpointStore::new(&url, &pool_config)?,
+                    None => PostgresCheckpointStore::without_postgres(),
+                }
+                .with_pg_writes(pg_writes);
+                Some(match objects {
+                    Some(objects) => base.with_objects(objects, objects_write, objects_read),
+                    None => base,
+                })
+            }
+        };
+        if store.is_some() && !pg_writes && !objects_write {
+            warn!(
+                "ATLAS_PG_WRITES is off and ATLAS_CHECKPOINT_STORE is not objectstore: checkpoints are not persisted anywhere, and a restart re-derives fresh with a force-written baseline"
+            );
+        }
 
         let indexer_id = match (store.is_some(), indexer_id_env) {
             (true, Some(value)) => value,
@@ -846,12 +900,100 @@ impl CheckpointManager {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Counter of Postgres checkpoint writes skipped because `ATLAS_PG_WRITES` is off.
+pub const PG_WRITES_SKIPPED: &str = "atlas_pg_writes_skipped_total";
+
+/// Parse `ATLAS_PG_WRITES`. Unset, empty or anything but an explicit off value means on, so a
+/// typo never silently stops checkpoints from persisting.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
+/// Parse `ATLAS_CHECKPOINT_STORE`: only an explicit `objectstore` turns the object-store
+/// checkpoint write on.
+pub fn checkpoint_store_objectstore_from(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("objectstore")
+    )
+}
+
+/// Parse `ATLAS_CHECKPOINT_SOURCE`: only an explicit `objectstore` switches the resume read
+/// away from Postgres.
+pub fn checkpoint_source_objectstore_from(value: Option<&str>) -> bool {
+    checkpoint_store_objectstore_from(value)
+}
+
+/// Register the skipped-writes counter at zero so it is scrapeable before the first skip.
+pub fn register_metrics() {
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres checkpoint writes skipped because ATLAS_PG_WRITES is off"
+    );
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => "checkpoint_save").absolute(0);
+}
+
+#[derive(Clone)]
 pub struct PostgresCheckpointStore {
-    pool: PgPool,
+    /// `None` when atlas runs with no Postgres at all (object store only).
+    pool: Option<PgPool>,
+    /// `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS`, applied with `SET LOCAL` inside each
+    /// transaction (see `begin_with_timeout`), never as a session setting.
+    statement_timeout_ms: i32,
     /// Flag-off object-store copy (`ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH`,
     /// `ATLAS_CHECKPOINT_BLOB_SHADOW_READ`); Postgres stays the source.
     blob: Option<std::sync::Arc<blob_store::Mirror>>,
+    /// `ATLAS_PG_WRITES`: when false `save` sends no SQL and counts the skip.
+    pg_writes: bool,
+    /// Object store for the full checkpoint (`ATLAS_CHECKPOINT_STORE` / `_SOURCE`).
+    objects: Option<std::sync::Arc<dyn blob_store::BlobStore>>,
+    /// `ATLAS_CHECKPOINT_STORE=objectstore`: `save` writes the checkpoint object, and a
+    /// failure fails the save.
+    objects_write: bool,
+    /// `ATLAS_CHECKPOINT_SOURCE=objectstore`: `load` reads the object and sends no SQL.
+    objects_read: bool,
+}
+
+impl std::fmt::Debug for PostgresCheckpointStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresCheckpointStore")
+            .field("postgres", &self.pool.is_some())
+            .field("pg_writes", &self.pg_writes)
+            .field("objects_write", &self.objects_write)
+            .field("objects_read", &self.objects_read)
+            .finish()
+    }
+}
+
+/// Write the whole checkpoint as one object, replacing the previous one atomically. A `None`
+/// baseline keeps the stored one (the object-store twin of the SQL `COALESCE`), so a
+/// graph-only save never drops the GEO-645 emission baseline. Errors propagate: when the
+/// object is the only home, a failed write is a failed checkpoint.
+async fn object_save(
+    store: &dyn blob_store::BlobStore,
+    checkpoint: &Checkpoint,
+) -> Result<(), CheckpointError> {
+    let key = checkpoint_key(&checkpoint.indexer_id);
+    let mut to_write = checkpoint.clone();
+    if to_write.emission_baseline_blob.is_none() {
+        if let Some(prev) = store
+            .get(&key)
+            .await
+            .map_err(|err| CheckpointError::Io(format!("read previous checkpoint object: {err}")))?
+        {
+            if let Ok(prev) = serde_json::from_slice::<Checkpoint>(&prev) {
+                to_write.emission_baseline_blob = prev.emission_baseline_blob;
+            }
+        }
+    }
+    let bytes = checkpoint_bytes(&to_write)?;
+    store
+        .put(&key, &bytes)
+        .await
+        .map_err(|err| CheckpointError::Io(format!("write checkpoint object: {err}")))
 }
 
 /// Object key for one indexer's checkpoint: one object per indexer id.
@@ -985,40 +1127,132 @@ impl PostgresCheckpointStore {
                     pool_config.statement_timeout_ms
                 ))
             })?;
-        let statement_timeout_query = format!("SET statement_timeout = {}", statement_timeout_ms);
+        // No session-level `SET statement_timeout` on connect: the database is reached
+        // through a PgBouncer pool in transaction mode shared by other services, so a
+        // session SET stays on whichever server connection ran it and applies to the next
+        // client handed that connection. Every statement here runs in a transaction that
+        // sets the budget with `SET LOCAL` instead (`begin_with_timeout`).
         let pool = PgPoolOptions::new()
             .max_connections(pool_config.max_connections)
             .min_connections(pool_config.min_connections)
             .acquire_timeout(Duration::from_millis(pool_config.acquire_timeout_ms))
             .idle_timeout(Duration::from_millis(pool_config.idle_timeout_ms))
             .max_lifetime(Duration::from_millis(pool_config.max_lifetime_ms))
-            .after_connect(move |conn, _meta| {
-                let statement_timeout_query = statement_timeout_query.clone();
-                Box::pin(async move {
-                    sqlx::query(sqlx::AssertSqlSafe(statement_timeout_query))
-                        .execute(conn)
-                        .await?;
-                    Ok(())
-                })
-            })
             .connect_lazy(database_url)
             .map_err(|err| CheckpointError::Io(format!("create postgres pool: {err}")))?;
         Ok(Self {
-            pool,
+            pool: Some(pool),
+            statement_timeout_ms,
             blob: blob_store::Mirror::from_env("atlas_checkpoints", "ATLAS_CHECKPOINT")
                 .map(std::sync::Arc::new),
+            pg_writes: true,
+            objects: None,
+            objects_write: false,
+            objects_read: false,
         })
+    }
+
+    /// A store with no Postgres pool: the object store is the only home. `load` from Postgres
+    /// finds nothing and `save` skips Postgres.
+    pub fn without_postgres() -> Self {
+        Self {
+            pool: None,
+            statement_timeout_ms: i32::try_from(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+                .expect("default statement timeout fits i32"),
+            blob: None,
+            pg_writes: true,
+            objects: None,
+            objects_write: false,
+            objects_read: false,
+        }
+    }
+
+    /// Open a transaction whose statements run under `ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS`.
+    /// `SET LOCAL` ends with the transaction, so nothing is left on the pooled connection.
+    async fn begin_with_timeout<'a>(
+        &self,
+        pool: &'a PgPool,
+    ) -> Result<Transaction<'a, Postgres>, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+        sqlx::query(sqlx::AssertSqlSafe(set_local_statement_timeout_sql(
+            self.statement_timeout_ms,
+        )))
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
+    }
+
+    /// The Postgres pool, if any. For tests that inspect connection state.
+    #[doc(hidden)]
+    pub fn pg_pool(&self) -> Option<&PgPool> {
+        self.pool.as_ref()
+    }
+
+    /// Set `ATLAS_PG_WRITES`.
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+
+    /// Attach the checkpoint object store. `write` is `ATLAS_CHECKPOINT_STORE=objectstore`,
+    /// `read` is `ATLAS_CHECKPOINT_SOURCE=objectstore`.
+    pub fn with_objects(
+        mut self,
+        store: std::sync::Arc<dyn blob_store::BlobStore>,
+        write: bool,
+        read: bool,
+    ) -> Self {
+        self.objects = Some(store);
+        self.objects_write = write;
+        self.objects_read = read;
+        self
+    }
+
+    async fn load_object(&self, indexer_id: &str) -> Result<Option<Checkpoint>, CheckpointError> {
+        let Some(objects) = &self.objects else {
+            return Ok(None);
+        };
+        let Some(bytes) = objects
+            .get(&checkpoint_key(indexer_id))
+            .await
+            .map_err(|err| CheckpointError::Io(format!("load checkpoint object: {err}")))?
+        else {
+            return Ok(None);
+        };
+        serde_json::from_slice::<Checkpoint>(&bytes)
+            .map(Some)
+            .map_err(|err| {
+                CheckpointError::Serialization(format!("decode checkpoint object: {err}"))
+            })
     }
 
     /// Every indexer id with a checkpoint row, for the backfill tool.
     pub async fn indexer_ids(&self) -> Result<Vec<String>, CheckpointError> {
-        sqlx::query_scalar("SELECT indexer_id FROM atlas_checkpoints ORDER BY indexer_id")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|err| CheckpointError::Io(format!("list checkpoints: {err}")))
+        let Some(pool) = &self.pool else {
+            return Ok(Vec::new());
+        };
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("list checkpoints: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
+        let ids =
+            sqlx::query_scalar("SELECT indexer_id FROM atlas_checkpoints ORDER BY indexer_id")
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(io)?;
+        tx.commit().await.map_err(io)?;
+        Ok(ids)
     }
 
     pub async fn load(&self, indexer_id: &str) -> Result<Option<Checkpoint>, CheckpointError> {
+        // `ATLAS_CHECKPOINT_SOURCE=objectstore`: no SQL. A failure or a missing object answers
+        // an error or None, never a stale Postgres row.
+        if self.objects_read {
+            return self.load_object(indexer_id).await;
+        }
+        let Some(pool) = &self.pool else {
+            return Ok(None);
+        };
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("load checkpoint: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
         let row = sqlx::query(
             "SELECT
                 schema_version,
@@ -1034,9 +1268,10 @@ impl PostgresCheckpointStore {
              WHERE indexer_id = $1",
         )
         .bind(indexer_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|err| CheckpointError::Io(format!("load checkpoint: {err}")))?;
+        .map_err(io)?;
+        tx.commit().await.map_err(io)?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -1124,6 +1359,33 @@ impl PostgresCheckpointStore {
     }
 
     pub async fn save(&self, checkpoint: &Checkpoint) -> Result<usize, CheckpointError> {
+        let snapshot_size_bytes = match &self.pool {
+            Some(pool) if self.pg_writes => self.save_postgres(pool, checkpoint).await?,
+            _ => {
+                if !self.pg_writes {
+                    metrics::counter!(PG_WRITES_SKIPPED, "site" => "checkpoint_save").increment(1);
+                }
+                checkpoint.graph_state_blob.to_string().len()
+            }
+        };
+
+        match (&self.objects, self.objects_write) {
+            (Some(objects), true) => object_save(objects.as_ref(), checkpoint).await?,
+            _ => {
+                if let Some(mirror) = &self.blob {
+                    mirror_save(mirror, checkpoint).await;
+                }
+            }
+        }
+
+        Ok(snapshot_size_bytes)
+    }
+
+    async fn save_postgres(
+        &self,
+        pool: &PgPool,
+        checkpoint: &Checkpoint,
+    ) -> Result<usize, CheckpointError> {
         let graph_blob_json = sqlx::types::Json(checkpoint.graph_state_blob.clone());
 
         let db_block_number = i64::try_from(checkpoint.block_number).map_err(|_| {
@@ -1152,6 +1414,8 @@ impl PostgresCheckpointStore {
         // state, so they cannot diverge — they share the row's transaction.
         // Passing `None` (when the caller has no baseline yet) preserves any
         // existing value, since COALESCE keeps the prior row's bytes.
+        let io = |err: sqlx::Error| CheckpointError::Io(format!("save checkpoint: {err}"));
+        let mut tx = self.begin_with_timeout(pool).await.map_err(io)?;
         let row = sqlx::query(
             "INSERT INTO atlas_checkpoints (
                 indexer_id,
@@ -1187,9 +1451,10 @@ impl PostgresCheckpointStore {
         .bind(&checkpoint.root_space_id)
         .bind(db_schema_version)
         .bind(checkpoint.emission_baseline_blob.as_deref())
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|err| CheckpointError::Io(format!("save checkpoint: {err}")))?;
+        .map_err(io)?;
+        tx.commit().await.map_err(io)?;
 
         let snapshot_size_bytes_i32 =
             row.try_get::<i32, _>("snapshot_size_bytes")
@@ -1202,10 +1467,6 @@ impl PostgresCheckpointStore {
                 "invalid snapshot_size_bytes value: {snapshot_size_bytes_i32}"
             ))
         })?;
-
-        if let Some(mirror) = &self.blob {
-            mirror_save(mirror, checkpoint).await;
-        }
 
         Ok(snapshot_size_bytes)
     }
@@ -1718,6 +1979,14 @@ mod tests {
         write_through: true,
         shadow_read: true,
     };
+
+    #[test]
+    fn statement_budget_is_set_local_not_session() {
+        assert_eq!(
+            set_local_statement_timeout_sql(3_000),
+            "SET LOCAL statement_timeout = 3000"
+        );
+    }
 
     #[tokio::test]
     async fn blob_mirror_is_off_without_flags() {
@@ -2259,5 +2528,209 @@ mod backfill_tests {
             backfill_checkpoint(&m, &cp(6), false, false).await,
             CheckpointBackfill::Unchanged
         );
+    }
+}
+
+#[cfg(test)]
+mod pg_off_switch_tests {
+    use super::*;
+    use blob_store::{BlobStore, FsBlobStore};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const ROOT: SpaceId = [0u8; 16];
+    fn sid(n: u8) -> SpaceId {
+        let mut id = [0u8; 16];
+        id[15] = n;
+        id
+    }
+
+    fn checkpoint(n: u64, baseline: Option<Vec<u8>>) -> Checkpoint {
+        let mut graph = GraphState::new();
+        graph.spaces.insert(sid(1));
+        let mut cp = Checkpoint::from_graph_state(
+            "idx-test".to_string(),
+            format!("cursor-{n}"),
+            n,
+            &graph,
+            None,
+            1,
+            "atlas-v2".to_string(),
+            ROOT,
+        );
+        cp.emission_baseline_blob = baseline;
+        cp
+    }
+
+    #[test]
+    fn flag_parsing() {
+        assert!(pg_writes_enabled_from(None));
+        assert!(pg_writes_enabled_from(Some("")));
+        assert!(pg_writes_enabled_from(Some("garbage")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!pg_writes_enabled_from(Some(off)), "{off}");
+        }
+        assert!(!checkpoint_store_objectstore_from(None));
+        assert!(!checkpoint_store_objectstore_from(Some("off")));
+        assert!(!checkpoint_store_objectstore_from(Some("s3")));
+        assert!(checkpoint_store_objectstore_from(Some(" ObjectStore ")));
+        assert!(!checkpoint_source_objectstore_from(Some("postgres")));
+        assert!(checkpoint_source_objectstore_from(Some("objectstore")));
+    }
+
+    #[tokio::test]
+    async fn object_store_round_trip_keeps_baseline_on_graph_only_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs: Arc<dyn BlobStore> = Arc::new(FsBlobStore::new(dir.path()));
+        let store = PostgresCheckpointStore::without_postgres()
+            .with_pg_writes(false)
+            .with_objects(fs.clone(), true, true);
+
+        assert!(store.load("idx-test").await.unwrap().is_none());
+
+        let first = checkpoint(1, Some(vec![9, 8, 7]));
+        store.save(&first).await.unwrap();
+        let got = store.load("idx-test").await.unwrap().unwrap();
+        assert_eq!(got.block_number, 1);
+        assert_eq!(got.cursor, "cursor-1");
+        assert_eq!(got.graph_state_blob, first.graph_state_blob);
+        assert_eq!(got.emission_baseline_blob, Some(vec![9, 8, 7]));
+        assert_eq!(got.runtime_compatibility_marker, "atlas-v2");
+        assert_eq!(got.graph_state_version, 1);
+        assert_eq!(got.root_space_id, first.root_space_id);
+
+        // A later save with no baseline overwrites the object but keeps the baseline.
+        store.save(&checkpoint(2, None)).await.unwrap();
+        let got = store.load("idx-test").await.unwrap().unwrap();
+        assert_eq!(got.block_number, 2);
+        assert_eq!(got.emission_baseline_blob, Some(vec![9, 8, 7]));
+
+        // Exactly one object per indexer id.
+        assert!(fs.exists(&checkpoint_key("idx-test")).await.unwrap());
+    }
+
+    /// Resume equivalence: the checkpoint read back from the object store decodes to the same
+    /// graph and the same baseline as the one Postgres would return. Postgres returns the row
+    /// fields verbatim (`jsonb` and `bytea`), so the saved `Checkpoint` is the PG-side value.
+    #[tokio::test]
+    async fn resume_from_object_store_matches_postgres_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs: Arc<dyn BlobStore> = Arc::new(FsBlobStore::new(dir.path()));
+        let store = PostgresCheckpointStore::without_postgres().with_objects(fs, true, true);
+
+        let mut graph = GraphState::new();
+        let a = sid(1);
+        let b = sid(2);
+        graph.spaces.insert(a);
+        graph.spaces.insert(b);
+        let baseline = PersistedEmissionBaseline::default();
+        let pg_side = Checkpoint::from_graph_state(
+            "idx-test".to_string(),
+            "cursor-5".to_string(),
+            5,
+            &graph,
+            Some(&baseline),
+            1,
+            "atlas-v2".to_string(),
+            ROOT,
+        );
+        store.save(&pg_side).await.unwrap();
+        let from_objects = store.load("idx-test").await.unwrap().unwrap();
+
+        pg_side
+            .validate_compatibility("idx-test", "atlas-v2", ROOT, 1)
+            .unwrap();
+        from_objects
+            .validate_compatibility("idx-test", "atlas-v2", ROOT, 1)
+            .unwrap();
+        let g_pg = pg_side.graph_state().unwrap();
+        let g_obj = from_objects.graph_state().unwrap();
+        assert_eq!(g_obj.space_count(), g_pg.space_count());
+        assert!(g_obj.contains_space(&a) && g_obj.contains_space(&b));
+        assert_eq!(g_obj.explicit_edge_count(), g_pg.explicit_edge_count());
+        assert_eq!(from_objects.cursor, pg_side.cursor);
+        assert_eq!(from_objects.block_number, pg_side.block_number);
+        assert_eq!(
+            from_objects.emission_baseline().unwrap(),
+            pg_side.emission_baseline().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn source_postgres_ignores_the_object_and_no_store_resumes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fs: Arc<dyn BlobStore> = Arc::new(FsBlobStore::new(dir.path()));
+        // Write on, read off: the object exists but load does not use it.
+        let store = PostgresCheckpointStore::without_postgres().with_objects(fs, true, false);
+        store.save(&checkpoint(3, None)).await.unwrap();
+        assert!(store.load("idx-test").await.unwrap().is_none());
+
+        // PG writes off and no object store: nothing is persisted, resume finds nothing.
+        let bare = PostgresCheckpointStore::without_postgres().with_pg_writes(false);
+        bare.save(&checkpoint(4, None)).await.unwrap();
+        assert!(bare.load("idx-test").await.unwrap().is_none());
+    }
+
+    /// No database: a lazy pool points at a local listener that counts TCP accepts. A
+    /// statement needs a connection, so zero accepts means zero statements.
+    #[test]
+    fn pg_writes_off_issues_no_statements_counts_skips_and_still_writes_object() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let dir = tempfile::tempdir().unwrap();
+        let fs: Arc<dyn BlobStore> = Arc::new(FsBlobStore::new(dir.path()));
+        metrics::with_local_recorder(&recorder, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let port = listener.local_addr().unwrap().port();
+                    let accepted = Arc::new(AtomicUsize::new(0));
+                    let seen = accepted.clone();
+                    tokio::spawn(async move {
+                        while let Ok((sock, _)) = listener.accept().await {
+                            seen.fetch_add(1, Ordering::SeqCst);
+                            drop(sock);
+                        }
+                    });
+                    let url = format!("postgres://u:p@127.0.0.1:{port}/db");
+                    let cfg = PostgresPoolConfig {
+                        max_connections: 1,
+                        min_connections: 0,
+                        acquire_timeout_ms: 2_000,
+                        idle_timeout_ms: 30_000,
+                        max_lifetime_ms: 300_000,
+                        statement_timeout_ms: 120_000,
+                    };
+                    let off = PostgresCheckpointStore::new(&url, &cfg)
+                        .unwrap()
+                        .with_pg_writes(false)
+                        .with_objects(fs.clone(), true, true);
+
+                    off.save(&checkpoint(7, Some(vec![1, 2, 3]))).await.unwrap();
+                    // Source=objectstore: the read sends no SQL either.
+                    let got = off.load("idx-test").await.unwrap().unwrap();
+                    assert_eq!(got.block_number, 7);
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    assert_eq!(
+                        accepted.load(Ordering::SeqCst),
+                        0,
+                        "a statement reached Postgres"
+                    );
+
+                    // Control: with the flag on the same save does try to connect, and fails.
+                    let on = PostgresCheckpointStore::new(&url, &cfg).unwrap();
+                    assert!(on.save(&checkpoint(8, None)).await.is_err());
+                    assert!(
+                        accepted.load(Ordering::SeqCst) > 0,
+                        "control saw no connection"
+                    );
+                });
+        });
+        let rendered = handle.render();
+        let line = "atlas_pg_writes_skipped_total{site=\"checkpoint_save\"} 1";
+        assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
     }
 }

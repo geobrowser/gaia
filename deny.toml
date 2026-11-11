@@ -10,9 +10,7 @@ all-features = false
 [advisories]
 version = 2
 # Baseline of advisories accepted as of this PR. Only pre-existing
-# unmaintained/unsound advisories on transitive deps are ignored, plus ONE
-# vulnerability with a written exposure argument and a removal condition
-# (RUSTSEC-2026-0459 below), so a newly-introduced vulnerable crate still
+# unmaintained/unsound advisories on transitive deps are ignored,, so a newly-introduced vulnerable crate still
 # fails CI. Revisit as the parents upgrade.
 #
 # RUSTSEC-2023-0071 (rsa — Marvin timing side-channel) is deliberately NOT

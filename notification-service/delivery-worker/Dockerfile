@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.94-bookworm AS builder
 
 # Install build dependencies for protobuf (needed by hermes-instrumentation)
 RUN apt-get update && \

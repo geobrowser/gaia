@@ -129,6 +129,13 @@ export type GeoDbCardClient = {
 	 * Absent on a client that cannot do it.
 	 */
 	readLegacyIds?(args: {originalIds: string[]; timeoutMs?: number}): Promise<GeoCardRow[]>
+	/**
+	 * The from-entity of one relation (geo-db RELATION-BY-ID-READ: `entity` root, `.args.statement = "<relation id>"`), read
+	 * across every Space (`*` line; relation ids are globally unique). One row, its entity cell the from-entity; an empty page
+	 * when the relation is closed or unknown. One id a request, so a caller with many ids sends many. Absent on a client that
+	 * cannot do it.
+	 */
+	readRelationEntity?(args: {relationId: string; timeoutMs?: number}): Promise<GeoCardRow[]>
 }
 
 export type TypeScanRequest = {
@@ -251,6 +258,11 @@ export function cardsDocument(entityIds: string[], options: {names?: boolean} = 
 export function legacyDocument(originalIds: string[]): string {
 	const ids = originalIds.map((id) => `"${id}"`).join(", ")
 	return `.{ .version = 1, .select = .{ .l = .{ .field = "entity", .args = .{ .by_legacy = .{ ${ids} } } } } }`
+}
+
+/** The geoql document for one relation by its id (`.args.statement`): its from-entity, or an empty page when closed. */
+export function relationDocument(relationId: string): string {
+	return `.{ .version = 1, .select = .{ .r = .{ .field = "entity", .args = .{ .statement = "${relationId}" } } } }`
 }
 
 /**
@@ -1008,6 +1020,23 @@ export function createPipeGeoDbClient(
 			// Sorted, as the engine takes the list; `*` reads every Space, so each row's statement cell carries its Space.
 			const line = `*\t${legacyDocument([...originalIds].sort())}\n`
 			return submit(line, NO_ENTITY, false, true, false, false, true, timeoutMs, false, true)
+		},
+		readRelationEntity({relationId, timeoutMs}) {
+			if (!HEX32.test(relationId))
+				return Promise.reject(new GeoDbError("bad_request", "a relation id of 32 hex digits"))
+			// `*` reads every Space; the rows have the legacy shape (an entity cell, a statement cell that may be none).
+			return submit(
+				`*\t${relationDocument(relationId)}\n`,
+				NO_ENTITY,
+				false,
+				true,
+				false,
+				false,
+				true,
+				timeoutMs,
+				false,
+				true,
+			)
 		},
 		close() {
 			clearInterval(warmTimer)

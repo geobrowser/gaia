@@ -12,6 +12,7 @@ hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
 indexer_utils = { path = "../indexer_utils" }
+geodb-cursor = { path = "../geodb-cursor" }
 sdk = { path = "../sdk" }
 
 # GRC-20 decoding
@@ -51,7 +52,7 @@ dotenv = "0.15.0"
 tracing = "0.1.41"
 
 # Relation map (SQLite persistence + LRU cache for fast DeleteRelation lookups)
-rusqlite = { version = "0.32", features = ["bundled"] }
+redb = "2"
 lru = "0.18"
 
 # Metrics (recorder and /metrics listener installed via hermes-instrumentation)

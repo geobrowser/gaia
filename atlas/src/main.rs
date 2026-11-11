@@ -731,6 +731,7 @@ async fn async_main() -> anyhow::Result<()> {
     // no alert could have fired, because nothing published its block height.
     let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
     hermes_instrumentation::metrics::install("atlas", metrics_port)?;
+    atlas::persistence::register_metrics();
 
     info!("Atlas Topology Processor starting");
     info!(

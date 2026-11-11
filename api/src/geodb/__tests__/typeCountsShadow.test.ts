@@ -190,7 +190,7 @@ describe("createTypeCountsShadow", () => {
 		expect(seen[1]?.walked).not.toContain(hex(CLAIM_TYPE))
 	})
 
-	it("counts a mismatch and logs no ids", async () => {
+	it("counts a mismatch and logs the topic, never a type id", async () => {
 		const shadow = createTypeCountsShadow({
 			config: {enabled: true, intervalMs: 1, topics: 1},
 			source: source(),
@@ -199,7 +199,7 @@ describe("createTypeCountsShadow", () => {
 		})
 		await shadow.runOnce()
 		expect(count("mismatch")).toBe(2)
-		expect(JSON.stringify(log.warn.mock.calls)).not.toContain(TOPIC)
+		expect(JSON.stringify(log.warn.mock.calls)).toContain(TOPIC)
 	})
 
 	it("counts a refusal as failed and a long blocklist as not served", async () => {
@@ -344,6 +344,8 @@ describe("createTypeCountsShadow", () => {
 		expect(calls[0]?.[1]).toMatchObject({
 			matchAll: true,
 			debate: false,
+			topicIds: expect.any(Array),
+			spaceIds: expect.any(Array),
 			diffs: [{type: "other", postgres: 2, geodb: 3}],
 		})
 		expect(calls[1]?.[1]).toMatchObject({
@@ -355,7 +357,7 @@ describe("createTypeCountsShadow", () => {
 			],
 		})
 		const text = JSON.stringify(log.warn.mock.calls)
-		for (const id of [TOPIC, NEWS, CLAIM_TYPE, DEBATE_WALK_TYPE, ABSENT]) expect(text).not.toContain(id)
+		for (const id of [NEWS, CLAIM_TYPE, DEBATE_WALK_TYPE, ABSENT]) expect(text).not.toContain(id)
 	})
 	describe("Space filter, several topics and fallbacks", () => {
 		const SPACE = "11111111-1111-4111-8111-111111111111"
@@ -458,6 +460,24 @@ describe("createTypeCountsShadow", () => {
 				{others: [hex(OTHER)], matchAll: false, graph: null},
 			])
 			expect(count("match")).toBe(6)
+		})
+
+		it("logs a disagreement with the Space ids it asked, capped so the line stays bounded", async () => {
+			const spaces = Array.from(
+				{length: 64},
+				(_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`,
+			)
+			const shadow = createTypeCountsShadow({
+				...base,
+				source: withSpace({sampleSpaces: async () => spaces}),
+				geoSpaceOf: async (id) => id,
+				reader: reader(async (_c, _g, walked) => ({walked: 1, counts: walked.map(() => 99)})),
+				log,
+			})
+			await shadow.runOnce()
+			const line = log.warn.mock.calls.find((c) => c[0] === "type counts shadow disagreement" && c[1].spaces)?.[1]
+			expect(line).toMatchObject({spaces: 64, topicIds: [TOPIC]})
+			expect(line?.spaceIds).toEqual(spaces.slice(0, 8))
 		})
 
 		it("falls back, never mismatches, past 64 Spaces", async () => {

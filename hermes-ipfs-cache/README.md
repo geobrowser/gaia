@@ -43,6 +43,7 @@ Environment variables:
 | `SUBSTREAMS_API_TOKEN` | Live mode | API token for substreams authentication |
 | `SUBSTREAMS_START_BLOCK` | No | Block to start from (default: `82655`; set to `0` for a fresh/local chain) |
 | `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: `0` = stream forever) |
+| `IPFS_CACHE_PG_WRITES` | No | Default on. `0`/`false`/`off`/`no` stops every Postgres write (`ipfs_cache` insert and `meta` cursor); each skip is counted in `hermes_ipfs_cache_pg_writes_skipped_total{site}`. The object-store write-through (`IPFS_CACHE_BLOB_WRITE_THROUGH`) and the geo-db cursor mirror are unaffected, and reads still use Postgres. Without a blob mirror, off means fetched edits are stored nowhere. |
 
 ## Database Schema
 
@@ -51,10 +52,11 @@ Requires the following tables:
 ```sql
 CREATE TABLE ipfs_cache (
     uri TEXT PRIMARY KEY,
-    json JSONB,
+    data BYTEA,
     block TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    is_errored BOOLEAN NOT NULL DEFAULT FALSE
+    space UUID NOT NULL,
+    is_errored BOOLEAN NOT NULL DEFAULT FALSE,
+    name TEXT
 );
 
 CREATE TABLE meta (

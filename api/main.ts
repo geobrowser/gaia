@@ -41,6 +41,7 @@ import {
 	readEntityAtVersionShadowConfig,
 } from "./src/geodb/entityAtVersionShadow"
 import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
+import {createEntityDiffShadow, type EntityDiffShadow, readEntityDiffShadowConfig} from "./src/geodb/entityDiffShadow"
 import {
 	createEntityFeedConfigReaders,
 	createEntityFeedConfigShadow,
@@ -57,11 +58,17 @@ import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
 import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
-	createPostgresRankedReadsSource,
+	createProposalDiffShadow,
+	type ProposalDiffShadow,
+	readProposalDiffShadowConfig,
+} from "./src/geodb/proposalDiffShadow"
+import {
+	createBudgetedPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
+import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -98,6 +105,7 @@ import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
+import {setRelationLookupObserver} from "./src/versioned/proposal-diff"
 import {entityHasLiveStatements} from "./src/versioned/queries"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
@@ -213,14 +221,22 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+// GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
+// statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
+const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
 // GEODB_ENTITY_AT_VERSION_SHADOW (off by default) likewise compares a sampled `/versioned/entities/:id` snapshot and the v2 diff's
 // name enrichment with geo-db (gaia_api_entity_at_version_shadow_total).
 const entityAtVersionShadowRef: {current: EntityAtVersionShadow | null} = {current: null}
+// GEODB_ENTITY_DIFF_SHADOW (off by default) checks a sampled `/entities/:id/diff` after side and a v2 `POST /review` base side
+// against geo-db, counts only (gaia_api_entity_diff_shadow_total). Never changes a response.
+const entityDiffShadowRef: {current: EntityDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
 		versions: (served) => entityVersionsShadowRef.current?.versions(served),
+		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
+		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
 	}),
 )
 log.info("Versioned entity routes enabled")
@@ -228,7 +244,11 @@ log.info("Versioned entity routes enabled")
 // Mount v2 versioned entities router (additive enrichments over v1)
 app.route(
 	"/v2/versioned",
-	createVersionedV2Router(db, runtime, {names: (served) => entityAtVersionShadowRef.current?.names(served)}),
+	createVersionedV2Router(db, runtime, {
+		names: (served) => entityAtVersionShadowRef.current?.names(served),
+		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
+		review: (served) => entityDiffShadowRef.current?.review(served),
+	}),
 )
 log.info("Versioned v2 entity routes enabled")
 
@@ -275,10 +295,40 @@ if (entityVersionsShadowConfig.enabled) {
 	})
 }
 
+const proposalDiffShadowConfig = readProposalDiffShadowConfig(process.env)
+if (proposalDiffShadowConfig.enabled) {
+	proposalDiffShadowRef.current = createProposalDiffShadow({
+		config: proposalDiffShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
+	})
+}
+
+const relationLookupShadowConfig = readRelationLookupShadowConfig(process.env)
+if (relationLookupShadowConfig.enabled) {
+	const relationLookupShadow = createRelationLookupShadow({
+		config: relationLookupShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		log,
+	})
+	setRelationLookupObserver((relationIds, served) => relationLookupShadow.lookup(relationIds, served))
+}
+
 const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
 if (entityAtVersionShadowConfig.enabled) {
 	entityAtVersionShadowRef.current = createEntityAtVersionShadow({
 		config: entityAtVersionShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+		log,
+	})
+}
+
+const entityDiffShadowConfig = readEntityDiffShadowConfig(process.env)
+if (entityDiffShadowConfig.enabled) {
+	entityDiffShadowRef.current = createEntityDiffShadow({
+		config: entityDiffShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
 		log,
@@ -448,7 +498,11 @@ if (entityColumnsShadowConfig.enabled) {
 // them to the SQL functions (gaia_api_ranked_read_shadow_total). Background only; reads stay on Postgres.
 const rankedReadsShadowConfig = readRankedReadsShadowConfig(process.env)
 if (rankedReadsShadowConfig.enabled) {
-	createRankedReadsShadow({config: rankedReadsShadowConfig, source: createPostgresRankedReadsSource(db), log}).start()
+	createRankedReadsShadow({
+		config: rankedReadsShadowConfig,
+		source: createBudgetedPostgresRankedReadsSource(db, rankedReadsShadowConfig.statementTimeoutMs),
+		log,
+	}).start()
 }
 // GEODB_ENTITIES_BEST_ORDER_SHADOW (off by default) builds pages of entities_in_best_order / entities_ordered_by_score from geo-db's
 // derived collections 2, 3 and 21 and compares the id ORDER with Postgres (gaia_api_entities_best_order_shadow_total). Background only.

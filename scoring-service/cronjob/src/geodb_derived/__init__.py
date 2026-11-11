@@ -31,7 +31,8 @@ Session lifetime. Each child holds one geo-db session whose capability grant the
 ``CapabilityTokenExpired``. A full ``local_scores`` rewrite takes longer than that, so the mirror
 (1) restarts the child, a fresh handshake and grant, once its session is older than
 ``GEODB_DERIVED_SESSION_REFRESH_S`` (default 240) and (2) on a lost pipe or an expired token
-re-handshakes and resends the same chunk, up to ``GEODB_DERIVED_RETRIES`` times (default 3) a chunk
+re-handshakes and resends the same chunk, up to ``GEODB_DERIVED_RETRIES`` times (default 6, backing off 1, 2, 4, 8, 16, 32 s: a serve that
+refuses handshakes for a minute is ridden out) a chunk
 and ``MAX_RECONNECTS`` a call. Puts are last-write-wins, so a resend is safe. Any other refusal still
 ends the table.
 
@@ -84,7 +85,9 @@ DEFAULT_BUDGET_MS = 5000
 # The serve's grant lives 300 s (GEODB_GRANT_TTL_S); a session is replaced well before that.
 DEFAULT_SESSION_REFRESH_S = 240.0
 # Re-handshakes a chunk may take before its table is given up, and the most one call may make.
-DEFAULT_RETRIES = 3
+# Six with a 1 s doubling delay waits 63 s in all; three (7 s) gave up on a table, with 1.4M rows
+# still to send, when the serve was only briefly unable to open a session.
+DEFAULT_RETRIES = 6
 MAX_RECONNECTS = 20
 DEFAULT_RETRY_DELAY = 1.0
 

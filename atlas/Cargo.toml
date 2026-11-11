@@ -31,19 +31,21 @@ rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
 # chain-tip-exporter's feature set so both hit the same RPC the same way.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
-tokio = { version = "1.41", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "net"] }
 blob-store = { path = "../blob-store" }
 anyhow = "1"
 dotenvy = "0.15"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+metrics = "0.24"
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "json"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 tempfile = "3"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 
 [[bench]]
 name = "graph_diff"

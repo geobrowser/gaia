@@ -329,7 +329,11 @@ export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerat
 		        trending_day_factor::text AS trending_day_factor,
 		        trending_debate_factor::text AS trending_debate_factor,
 		        trending_debate_window_days::text AS trending_debate_window_days,
-		        trending_horizon_days::text AS trending_horizon_days
+		        trending_horizon_days::text AS trending_horizon_days,
+		        trending_position_base::text AS trending_position_base,
+		        trending_position_step::text AS trending_position_step,
+		        trending_position_slots::text AS trending_position_slots,
+		        trending_position_day_factor::text AS trending_position_day_factor
 		 FROM public.entity_ranking_config WHERE id`,
 		[],
 		60_000,

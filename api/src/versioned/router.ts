@@ -20,7 +20,9 @@ type AppEnv = {
 }
 
 import type {ServedSnapshot} from "../geodb/entityAtVersionShadow"
+import type {ServedEntityDiff} from "../geodb/entityDiffShadow"
 import type {ServedVersions} from "../geodb/entityVersionsShadow"
+import type {ServedProposalDiff} from "../geodb/proposalDiffShadow"
 import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
@@ -314,7 +316,13 @@ export function createVersionedRouter(
 	db: Database,
 	runtime: AppRuntime,
 	/** GEODB_VERSIONS_SHADOW: compares a served `/entities/:id/versions` page with geo-db's log; never changes a response. */
-	shadow?: {versions(served: ServedVersions): void; entityAt?(served: ServedSnapshot): void},
+	shadow?: {
+		versions(served: ServedVersions): void
+		proposalDiff?(served: ServedProposalDiff): void
+		entityAt?(served: ServedSnapshot): void
+		/** GEODB_ENTITY_DIFF_SHADOW: checks a served `/entities/:id/diff` after side against geo-db. */
+		entityDiff?(served: ServedEntityDiff): void
+	},
 ) {
 	const router = new Hono<AppEnv>()
 
@@ -938,6 +946,16 @@ export function createVersionedRouter(
 				onRight: (diff) => {
 					// Spread dynamic groups at root level per spec
 					const {groups, ...rest} = diff
+					// Fire and forget (GEODB_ENTITY_DIFF_SHADOW): after the response is built, swallows its own errors.
+					if (rawSpaceId && rawToEditId)
+						shadow?.entityDiff?.({
+							route: "entity_diff",
+							spaceId: rawSpaceId,
+							entityId: rawEntityId,
+							toEditId: rawToEditId,
+							values: diff.values,
+							relations: diff.relations,
+						})
 					return c.json({...rest, ...groups} as DiffResponse)
 				},
 			})
@@ -1200,7 +1218,16 @@ export function createVersionedRouter(
 						}
 					}
 				},
-				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
+				onRight: (diff: PaginatedProposalDiff) => {
+					// Fire and forget: the shadow runs after this, in the background, and swallows its own errors.
+					shadow?.proposalDiff?.({
+						route: "proposal",
+						spaceId: diff.spaceId,
+						mode: diff.proposalStatus === "active" ? "active" : "historical",
+						entities: diff.entities,
+					})
+					return c.json(diff)
+				},
 			})
 		},
 	)
@@ -1259,7 +1286,15 @@ export function createVersionedRouter(
 					const mapped = mapGroupedProposalError(error)
 					return c.json(mapped.body, mapped.status)
 				},
-				onRight: (diff: PaginatedGroupedProposalDiff) => c.json(diff),
+				onRight: (diff: PaginatedGroupedProposalDiff) => {
+					shadow?.proposalDiff?.({
+						route: "group",
+						spaceId: diff.spaceId,
+						mode: diff.mode,
+						entities: diff.entities,
+					})
+					return c.json(diff)
+				},
 			})
 		},
 	)

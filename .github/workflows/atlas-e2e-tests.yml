@@ -28,6 +28,19 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       kafka:
         image: apache/kafka:4.1.1
         env:
@@ -77,6 +90,13 @@ jobs:
       working-directory: ./atlas
       env:
         RUST_BACKTRACE: 1
+
+    - name: Run checkpoint Postgres statement-budget tests
+      run: cargo test --test pg_statement_budget -- --test-threads=1
+      working-directory: ./atlas
+      env:
+        RUST_BACKTRACE: 1
+        ATLAS_PG_TEST_DATABASE_URL: postgres://atlas:atlas@localhost:5432/atlas
 
     - name: Wait for Kafka
       run: |

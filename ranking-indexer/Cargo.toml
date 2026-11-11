@@ -112,5 +112,9 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 # Metrics (recorder and /metrics listener installed via hermes-instrumentation)
 metrics = "0.24"
 
+# Kubernetes Lease for the job exclusion lock (job_lease.rs, GEODB_JOB_LEASE). Same versions as search-admin.
+kube = "4.2"
+k8s-openapi = { version = "0.28", features = ["v1_36"] }
+
 [dev-dependencies]
 metrics-exporter-prometheus = { version = "0.17", default-features = false }

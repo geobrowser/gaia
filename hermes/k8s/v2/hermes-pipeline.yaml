@@ -13,6 +13,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: hermes-pipeline
     spec:
       restartPolicy: Always
@@ -176,6 +177,11 @@ spec:
             # may read it. "0" = off; flipping it to "1" is a separate decision.
             - name: GEODB_META_BLOCK_SHADOW
               value: "0"
+            # Where the warmer's block is read from: "postgres" (default) or "geodb" (geo-db's cursor copy; no
+            # Postgres read; needs GEODB_META_BLOCK_SHADOW "1" and the key paths above). Compare first with the
+            # shadow on; flip to "geodb" before IPFS_CACHE_PG_WRITES goes to 0.
+            - name: WARMER_BLOCK_SOURCE
+              value: postgres
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL

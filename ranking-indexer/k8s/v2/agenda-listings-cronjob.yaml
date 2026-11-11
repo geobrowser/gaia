@@ -29,6 +29,7 @@ spec:
       template:
         metadata:
           labels:
+            geodb-client: "true"
             environment: testnet
         spec:
           restartPolicy: OnFailure
@@ -163,6 +164,9 @@ spec:
                     secretKeyRef:
                       name: api-secrets
                       key: DATABASE_URL
+                # Kubernetes Lease exclusion (plan 10.21 section 10.4). Off: needs the job-lease Role applied first.
+                - name: GEODB_JOB_LEASE
+                  value: "0"
                 - name: RUST_LOG
                   value: "agenda_listings_refresh=info,ranking_indexer=info,geodb_cursor=info"
               resources:

@@ -43,6 +43,7 @@ sqlx = { version = "0.9", features = [
     "uuid",
     "tls-rustls",
 ] }
+metrics = "0.24"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = "1"
@@ -51,3 +52,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+tokio = { version = "1", features = ["net"] }
