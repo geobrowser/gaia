@@ -23,7 +23,35 @@ pub const EVENTS_PROCESSED: &str = "kg_indexer_events_processed_total";
 pub const BATCH_RETRIES: &str = "kg_indexer_batch_retries_total";
 pub const BLOCKS_DROPPED: &str = "kg_indexer_blocks_dropped_total";
 pub const MESSAGES_UNPARSEABLE: &str = "kg_indexer_messages_unparseable_total";
+pub const PG_WRITES_SKIPPED: &str = "kg_indexer_pg_writes_skipped_total";
 pub const HALTED: &str = "kg_indexer_halted";
+
+/// A unit of work skipped because `KG_INDEXER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    /// A block's events, one transaction in Postgres. Counted per block.
+    Block,
+    /// A single message handled outside a block.
+    Message,
+    /// A proposal-tally worker tick.
+    TallyTick,
+}
+
+impl PgWriteSite {
+    const ALL: [PgWriteSite; 3] = [
+        PgWriteSite::Block,
+        PgWriteSite::Message,
+        PgWriteSite::TallyTick,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::Block => "block",
+            PgWriteSite::Message => "message",
+            PgWriteSite::TallyTick => "tally_tick",
+        }
+    }
+}
 
 /// Describe every counter and register it at zero.
 pub fn register() {
@@ -56,6 +84,14 @@ pub fn register() {
         "Kafka messages that failed to decode and were committed past"
     );
 
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Blocks, messages and tally ticks skipped (offsets still committed) because \
+         KG_INDEXER_PG_WRITES is off, by site. blocks_processed still counts skipped blocks"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
     metrics::counter!(BLOCKS_PROCESSED).absolute(0);
     metrics::counter!(EVENTS_PROCESSED).absolute(0);
     metrics::counter!(BATCH_RETRIES).absolute(0);
@@ -68,6 +104,10 @@ pub fn register() {
 pub fn block_processed(event_count: u64) {
     metrics::counter!(BLOCKS_PROCESSED).increment(1);
     metrics::counter!(EVENTS_PROCESSED).increment(event_count);
+}
+
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
 }
 
 pub fn batch_retried() {
@@ -113,6 +153,9 @@ mod tests {
             "kg_indexer_blocks_dropped_total{transient=\"false\"} 0",
             "kg_indexer_messages_unparseable_total 0",
             "kg_indexer_halted 0",
+            "kg_indexer_pg_writes_skipped_total{site=\"block\"} 0",
+            "kg_indexer_pg_writes_skipped_total{site=\"message\"} 0",
+            "kg_indexer_pg_writes_skipped_total{site=\"tally_tick\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

@@ -8,7 +8,9 @@ import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
+import {renderEntityAtVersionShadowMetrics} from "./geodb/entityAtVersionShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
+import {renderEntityDiffShadowMetrics} from "./geodb/entityDiffShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
 import {renderEntityVersionsShadowMetrics} from "./geodb/entityVersionsShadow"
 import {renderFeedRunsShadowMetrics} from "./geodb/feedRunsShadow"
@@ -17,8 +19,10 @@ import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderPrivateReadersShadowMetrics} from "./geodb/privateReadersShadow"
+import {renderProposalDiffShadowMetrics} from "./geodb/proposalDiffShadow"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
+import {renderRelationLookupShadowMetrics} from "./geodb/relationLookupShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
 import {renderTypeCountsShadowMetrics} from "./geodb/typeCountsShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
@@ -170,6 +174,13 @@ function renderPrometheusMetrics(): string {
 		renderProfileShadowMetrics(),
 		// Entity version count, order and author from geo-db against the served /versioned/entities/:id/versions (GEODB_VERSIONS_SHADOW) — see geodb/entityVersionsShadow.ts.
 		renderEntityVersionsShadowMetrics(),
+		// Active proposal and proposal-group diff base statements checked against geo-db's cards (GEODB_PROPOSAL_DIFF_SHADOW) — see geodb/proposalDiffShadow.ts.
+		renderProposalDiffShadowMetrics(),
+		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
+		renderRelationLookupShadowMetrics(),
+		renderEntityAtVersionShadowMetrics(),
+		// Entity diff after side and review base side checked against geo-db (GEODB_ENTITY_DIFF_SHADOW) — see geodb/entityDiffShadow.ts.
+		renderEntityDiffShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
 		renderForYouConfigMetrics(),
 		// entity_ranking_config tau_seconds from geo-db against the served one (GEODB_ENTITY_RANKING_CONFIG_SHADOW) — see forYou/entityRankingConfigShadow.ts.

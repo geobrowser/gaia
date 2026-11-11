@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import type {Database} from "../../forYou/queries"
 import {GeoDbError} from "../client"
 import type {DerivedCountsReader} from "../derived"
 import {countsLine, countsRefusal, FormGatedError, refusalNeedsBackoff} from "../derived"
@@ -13,8 +14,11 @@ import {
 } from "../rankedReads/typeCounts"
 import {
 	__resetTypeCountsShadowMetricsForTests,
+	createPostgresTypeCountsSource,
 	createTypeCountsShadow,
 	FORM_BACKOFF_MS,
+	formOf,
+	nextUuid,
 	readTypeCountsShadowConfig,
 	renderTypeCountsShadowMetrics,
 	type TypeCountsSource,
@@ -186,7 +190,7 @@ describe("createTypeCountsShadow", () => {
 		expect(seen[1]?.walked).not.toContain(hex(CLAIM_TYPE))
 	})
 
-	it("counts a mismatch and logs no ids", async () => {
+	it("counts a mismatch and logs the topic, never a type id", async () => {
 		const shadow = createTypeCountsShadow({
 			config: {enabled: true, intervalMs: 1, topics: 1},
 			source: source(),
@@ -195,7 +199,7 @@ describe("createTypeCountsShadow", () => {
 		})
 		await shadow.runOnce()
 		expect(count("mismatch")).toBe(2)
-		expect(JSON.stringify(log.warn.mock.calls)).not.toContain(TOPIC)
+		expect(JSON.stringify(log.warn.mock.calls)).toContain(TOPIC)
 	})
 
 	it("counts a refusal as failed and a long blocklist as not served", async () => {
@@ -340,6 +344,8 @@ describe("createTypeCountsShadow", () => {
 		expect(calls[0]?.[1]).toMatchObject({
 			matchAll: true,
 			debate: false,
+			topicIds: expect.any(Array),
+			spaceIds: expect.any(Array),
 			diffs: [{type: "other", postgres: 2, geodb: 3}],
 		})
 		expect(calls[1]?.[1]).toMatchObject({
@@ -351,7 +357,7 @@ describe("createTypeCountsShadow", () => {
 			],
 		})
 		const text = JSON.stringify(log.warn.mock.calls)
-		for (const id of [TOPIC, NEWS, CLAIM_TYPE, DEBATE_WALK_TYPE, ABSENT]) expect(text).not.toContain(id)
+		for (const id of [NEWS, CLAIM_TYPE, DEBATE_WALK_TYPE, ABSENT]) expect(text).not.toContain(id)
 	})
 	describe("Space filter, several topics and fallbacks", () => {
 		const SPACE = "11111111-1111-4111-8111-111111111111"
@@ -454,6 +460,24 @@ describe("createTypeCountsShadow", () => {
 				{others: [hex(OTHER)], matchAll: false, graph: null},
 			])
 			expect(count("match")).toBe(6)
+		})
+
+		it("logs a disagreement with the Space ids it asked, capped so the line stays bounded", async () => {
+			const spaces = Array.from(
+				{length: 64},
+				(_, i) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`,
+			)
+			const shadow = createTypeCountsShadow({
+				...base,
+				source: withSpace({sampleSpaces: async () => spaces}),
+				geoSpaceOf: async (id) => id,
+				reader: reader(async (_c, _g, walked) => ({walked: 1, counts: walked.map(() => 99)})),
+				log,
+			})
+			await shadow.runOnce()
+			const line = log.warn.mock.calls.find((c) => c[0] === "type counts shadow disagreement" && c[1].spaces)?.[1]
+			expect(line).toMatchObject({spaces: 64, topicIds: [TOPIC]})
+			expect(line?.spaceIds).toEqual(spaces.slice(0, 8))
 		})
 
 		it("falls back, never mismatches, past 64 Spaces", async () => {
@@ -797,5 +821,74 @@ describe("countsRefusal", () => {
 		expect(refusalNeedsBackoff(refused("InvalidWirePayload"))).toBe(true)
 		expect(refusalNeedsBackoff(refused("code=InvalidWirePayload refused: x"))).toBe(false)
 		expect(refusalNeedsBackoff(new FormGatedError(14, 15))).toBe(false)
+	})
+})
+
+describe("form labels and the topic sampler", () => {
+	const log = {warn: vi.fn()}
+	const form = (f: string, r: string) =>
+		Number(
+			new RegExp(`form_total\\{form="${f}",result="${r}"\\} (\\d+)`).exec(renderTypeCountsShadowMetrics())?.[1],
+		)
+	beforeEach(() => {
+		__resetTypeCountsShadowMetricsForTests()
+		log.warn.mockClear()
+	})
+
+	it("names each call shape", () => {
+		expect(formOf(call())).toBe("plain")
+		expect(formOf(call({debateTaggedClaims: true}))).toBe("debate")
+		expect(formOf(call({spaces: [OTHER]}))).toBe("spaces")
+		expect(formOf(call({spaces: [OTHER], debateTaggedClaims: true}))).toBe("spaces_debate")
+		expect(formOf(call({topics: [TOPIC, OTHER]}))).toBe("topics")
+	})
+
+	it("counts each result under its form", async () => {
+		const src: TypeCountsSource = {
+			sampleTopics: async () => [TOPIC, OTHER],
+			typesOf: async () => [NEWS],
+			blocklist: async () => [],
+			sampleSpaces: async () => [],
+			pgCounts: async () => new Map([[NEWS, 2]]),
+		}
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 2},
+			source: src,
+			reader: {
+				typeCounts: async (_c: unknown, _g: unknown, walked: string[]) => ({
+					walked: 1,
+					counts: walked.map((w) => (w === hex(NEWS) ? 2 : 0)),
+				}),
+			} as unknown as DerivedCountsReader,
+			log,
+		})
+		await shadow.runOnce()
+		expect(form("plain", "match") + form("plain", "mismatch")).toBe(2)
+		expect(form("debate", "match") + form("debate", "mismatch")).toBe(2)
+		expect(form("spaces", "match") + form("spaces", "mismatch")).toBe(0)
+		expect(form("topics", "match") + form("topics", "mismatch")).toBeGreaterThan(0)
+	})
+
+	it("steps a uuid up by one, carrying and wrapping", () => {
+		expect(nextUuid("00000000-0000-4000-8000-00000000000f")).toBe("00000000-0000-4000-8000-000000000010")
+		expect(nextUuid("ffffffff-ffff-ffff-ffff-ffffffffffff")).toBe("00000000-0000-0000-0000-000000000000")
+	})
+
+	it("samples distinct topics by index step from a random start, wrapping once", async () => {
+		const topics = [OTHER, TOPIC, NEWS].sort()
+		const db = {
+			execute: vi.fn(async (q: {queryChunks?: unknown[]}) => {
+				const chunks = q.queryChunks ?? []
+				const from = chunks.find((c) => typeof c === "string" && /^[0-9a-f]{8}-[0-9a-f-]{27}$/.test(c)) as
+					| string
+					| undefined
+				const hit = from === undefined ? topics[0] : topics.find((t) => t >= from)
+				return {rows: hit ? [{id: hit}] : []}
+			}),
+		} as unknown as Database
+		const got = await createPostgresTypeCountsSource(db).sampleTopics(5)
+		expect(new Set(got).size).toBe(got.length)
+		expect([...got].sort()).toEqual(topics)
+		expect((await createPostgresTypeCountsSource(db).sampleTopics(2)).length).toBe(2)
 	})
 })

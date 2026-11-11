@@ -107,8 +107,23 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 /// `CURSOR_PG_POOL_MAX`.
 const DEFAULT_CURSOR_PG_POOL_MAX: u32 = 2;
 
+/// Counter of Postgres cursor writes skipped because `HERMES_PIPELINE_PG_WRITES` is off.
+pub const PG_WRITES_SKIPPED: &str = "hermes_pipeline_pg_writes_skipped_total";
+
+/// Parse `HERMES_PIPELINE_PG_WRITES`. Unset, empty or anything but an explicit off value means
+/// on, so a typo never silently stops the cursor from persisting.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
 pub struct PostgresCursorStore {
     pool: sqlx::Pool<Postgres>,
+    /// `HERMES_PIPELINE_PG_WRITES`, default on. Off: `persist` issues no statement and counts
+    /// the skip (cutover switch, plan 10.22). Cursor reads are unaffected.
+    pg_writes: bool,
 }
 
 impl PostgresCursorStore {
@@ -121,8 +136,33 @@ impl PostgresCursorStore {
             .acquire_timeout(Duration::from_secs(env_or("PG_ACQUIRE_TIMEOUT_SECS", 3)))
             .connect(database_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self::from_pool(pool))
     }
+
+    /// Wrap an existing pool; the switch comes from `HERMES_PIPELINE_PG_WRITES`.
+    pub fn from_pool(pool: sqlx::Pool<Postgres>) -> Self {
+        Self {
+            pool,
+            pg_writes: pg_writes_enabled_from(
+                env::var("HERMES_PIPELINE_PG_WRITES").ok().as_deref(),
+            ),
+        }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+}
+
+/// Register the skipped-writes counter at zero so it is scrapeable before the first skip.
+pub fn register_metrics() {
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres cursor writes skipped because HERMES_PIPELINE_PG_WRITES is off"
+    );
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => "cursor_persist").absolute(0);
 }
 
 #[async_trait]
@@ -136,6 +176,10 @@ impl CursorStore for PostgresCursorStore {
     }
 
     async fn persist(&self, cursor: &str, block: u64) -> Result<(), CursorStoreError> {
+        if !self.pg_writes {
+            metrics::counter!(PG_WRITES_SKIPPED, "site" => "cursor_persist").increment(1);
+            return Ok(());
+        }
         // block_number is TEXT in the meta table — match hermes-ipfs-cache's
         // binding convention rather than introducing a column-type mismatch.
         sqlx::query(
@@ -154,6 +198,68 @@ impl CursorStore for PostgresCursorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pg_writes_flag_defaults_on() {
+        assert!(pg_writes_enabled_from(None));
+        assert!(pg_writes_enabled_from(Some("")));
+        assert!(pg_writes_enabled_from(Some("garbage")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!pg_writes_enabled_from(Some(off)), "{off}");
+        }
+    }
+
+    /// No database: a lazy pool points at a local listener that counts TCP accepts. A
+    /// statement needs a connection, so zero accepts means zero statements.
+    #[test]
+    fn pg_writes_off_persist_issues_no_statements_and_counts_skips() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let port = listener.local_addr().unwrap().port();
+                    let accepted = Arc::new(AtomicUsize::new(0));
+                    let seen = accepted.clone();
+                    tokio::spawn(async move {
+                        while let Ok((sock, _)) = listener.accept().await {
+                            seen.fetch_add(1, Ordering::SeqCst);
+                            drop(sock);
+                        }
+                    });
+                    let mk = |on: bool| {
+                        let pool = PgPoolOptions::new()
+                            .acquire_timeout(Duration::from_secs(2))
+                            .connect_lazy(&format!("postgres://u:p@127.0.0.1:{port}/db"))
+                            .unwrap();
+                        PostgresCursorStore::from_pool(pool).with_pg_writes(on)
+                    };
+                    mk(false).persist("c", 1).await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    assert_eq!(
+                        accepted.load(Ordering::SeqCst),
+                        0,
+                        "a statement reached Postgres"
+                    );
+
+                    // Control: with the flag on the same call does try to connect.
+                    assert!(mk(true).persist("c", 1).await.is_err());
+                    assert!(
+                        accepted.load(Ordering::SeqCst) > 0,
+                        "control saw no connection"
+                    );
+                });
+        });
+        let rendered = handle.render();
+        let line = "hermes_pipeline_pg_writes_skipped_total{site=\"cursor_persist\"} 1";
+        assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
+    }
 
     #[tokio::test]
     async fn mock_cold_start_returns_none() {

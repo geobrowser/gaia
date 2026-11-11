@@ -10,6 +10,10 @@
  * - DATABASE_URL, DATABASE_SSL_CA: gaia Postgres, read only (every query runs in a READ ONLY transaction).
  * - BACKFILL_KEYED_RESET_CONSUMER=1 lets the backfill run after the family's consumer has: it deletes that consumer's
  *   offsets so it replays the retained topic from earliest when it next starts.
+ * - BACKFILL_MAX_ROWS_PER_S caps the write rate in rows a second (unset or 0: unpaced). The tables behind these Jobs are small;
+ *   the cap keeps a rerun from adding to geodb-0's load while serve is under read pressure.
+ * - DRY_RUN=1 only counts: it needs DATABASE_URL (and DATABASE_SSL_CA) and nothing else, touches neither Kafka nor geo-db
+ *   nor the state volume, prints one line of row counts per table and exits 0. A Job that gives no `count` refuses it.
  * - BACKFILL_SKIP_GROUP_CHECK=1 skips the check that the feeder's groups are empty. Only for a store no feeder will resume.
  */
 import kafkajs from "kafkajs"
@@ -36,6 +40,8 @@ export type KeyedBackfillJob = {
 	/** Why the Job refuses to run, or null when its flags are set. */
 	refuse: (config: Config) => string | null
 	offsetsDir: (dataDir: string) => string
+	/** Row counts per table, read only; what DRY_RUN=1 prints. Absent: the Job has no dry run and DRY_RUN=1 refuses. */
+	count?: (pg: ReadOnlyPg) => Promise<Record<string, number>>
 	run: (
 		deps: KeyedRecordDeps,
 		pg: ReadOnlyPg,
@@ -43,8 +49,36 @@ export type KeyedBackfillJob = {
 	) => Promise<KeyedBackfillResult>
 }
 
+/** A pacer that holds a write rate of `rate` rows a second: it sleeps to the next slot, never ahead of it. Rate <= 0: none. */
+export function makePacer(rate: number, now: () => number = Date.now, wait: (ms: number) => Promise<void> = sleep): (() => Promise<void>) | undefined {
+	if (!Number.isFinite(rate) || rate <= 0) return undefined
+	const gap = 1000 / rate
+	let next = now()
+	return async () => {
+		next += gap
+		const d = next - now()
+		if (d > 0) await wait(d)
+		else next = now()
+	}
+}
+
+/** DRY_RUN=1: count the source rows and stop. Postgres only, in READ ONLY transactions. */
+async function dryRun(job: KeyedBackfillJob, env: NodeJS.ProcessEnv): Promise<void> {
+	const databaseUrl = env.DATABASE_URL
+	if (!databaseUrl) throw new Error("DATABASE_URL is required")
+	if (!job.count) throw new Error(`${job.name} has no dry run`)
+	const pg = new ReadOnlyPg(pgConfig(databaseUrl, env.DATABASE_SSL_CA))
+	try {
+		const counts = await job.count(pg)
+		log("info", `${job.name} backfill dry run: nothing written`, {...counts, total: Object.values(counts).reduce((a, b) => a + b, 0)})
+	} finally {
+		await pg.close()
+	}
+}
+
 async function runJob(job: KeyedBackfillJob): Promise<void> {
 	const env = process.env
+	if (env.DRY_RUN === "1") return dryRun(job, env)
 	const config = loadConfig(env)
 	const refused = job.refuse(config)
 	if (refused) throw new Error(refused)
@@ -109,6 +143,7 @@ async function runJob(job: KeyedBackfillJob): Promise<void> {
 				signal: abort.signal,
 				sealer: () => readSealer(config.sealerFile),
 				allowPut: true,
+				pace: makePacer(Number(env.BACKFILL_MAX_ROWS_PER_S ?? 0)),
 				systemSpaces,
 				publishSystem: (t) => systemPublisher.publish(t),
 				// The live consumer's offsets; the backfill never moves them (only the gate may delete them).

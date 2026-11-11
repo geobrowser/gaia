@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::errors::IngestError;
 use crate::geodb_shadow::GeoDbShadow;
+use geodb_cursor::meta_read::MetaBlockShadow;
 
 /// Maximum number of IDs per Postgres lookup batch.
 const MAX_BATCH_SIZE: usize = 1000;
@@ -38,12 +39,24 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 5;
 pub struct EntitySpaceLookup {
     pool: PgPool,
     shadow: Option<Arc<GeoDbShadow>>,
+    /// Compares the block `kg_applied_block` answers with the one geo-db's feeder records.
+    applied_block_shadow: Option<Arc<MetaBlockShadow>>,
 }
+
+/// The `cursors` row (collection 10) the geodb-feeder writes the chain block it has applied to.
+/// See plan 10.22 section 19.
+pub const FEEDER_APPLIED_ID: &str = "geodb-feeder-applied";
+/// Names this reader in `geodb_meta_block_shadow_total{reader}`.
+pub const APPLIED_BLOCK_READER: &str = "search_indexer_retire";
 
 impl EntitySpaceLookup {
     /// Create a new lookup from an existing pool, with no geo-db shadow.
     pub fn new(pool: PgPool) -> Self {
-        Self { pool, shadow: None }
+        Self {
+            pool,
+            shadow: None,
+            applied_block_shadow: None,
+        }
     }
 
     /// Create a new lookup whose answers are also compared with geo-db.
@@ -51,6 +64,23 @@ impl EntitySpaceLookup {
         Self {
             pool,
             shadow: Some(shadow),
+            applied_block_shadow: None,
+        }
+    }
+
+    /// Also compares `kg_applied_block` with geo-db's record of the feeder's applied block.
+    pub fn with_applied_block_shadow(mut self, shadow: Arc<MetaBlockShadow>) -> Self {
+        self.applied_block_shadow = Some(shadow);
+        self
+    }
+
+    /// Counts the geo-db row against the block Postgres answered. A no-op with the shadow off.
+    /// Never fails the caller.
+    async fn observe_applied_block(&self, pg: Option<u64>) {
+        if let Some(shadow) = &self.applied_block_shadow {
+            shadow
+                .observe(APPLIED_BLOCK_READER, FEEDER_APPLIED_ID, pg)
+                .await;
         }
     }
 
@@ -95,6 +125,7 @@ impl EntitySpaceLookup {
                 Some(Self {
                     pool,
                     shadow: GeoDbShadow::from_env(),
+                    applied_block_shadow: MetaBlockShadow::from_env().map(Arc::new),
                 })
             }
             Err(e) => {
@@ -164,9 +195,8 @@ impl EntitySpaceLookup {
     ///
     /// Batches larger than 1000 are chunked automatically.
     ///
-    /// Postgres only: no geo-db shadow. geo-db has no read for "every entity with a statement in
-    /// this Space"; `entities .args.types` lists a Space's entities only by type, and this lookup
-    /// is untyped. Twinning it waits on an untyped, cursor-paged Space-entities scan.
+    /// With the geo-db shadow on, a sample of the Spaces is also scanned in geo-db
+    /// (`space_entities`, one Space at a time) and compared; Postgres still answers.
     pub async fn entities_for_spaces(
         &self,
         space_ids: &[Uuid],
@@ -210,6 +240,9 @@ impl EntitySpaceLookup {
             }
         }
 
+        if let Some(shadow) = &self.shadow {
+            shadow.observe_entities_for_spaces(space_ids, &all_results);
+        }
         Ok(all_results)
     }
 
@@ -294,9 +327,11 @@ impl EntitySpaceLookup {
     /// reflected in `values` and `relations`. A backward scan of the
     /// `(block_number, sequence)` unique index, so it costs one index probe.
     ///
-    /// Postgres only: no geo-db shadow. geo-db's per-Space version reads count its own version
-    /// sequence, not chain blocks, and nothing records which chain block the feeder has applied;
-    /// twinning this waits on a version-log read that carries the block (GAP5-VERSION-LOG).
+    /// Postgres answers. With `GEODB_META_BLOCK_SHADOW` on, the `cursors` row the geodb-feeder
+    /// writes (`geodb-feeder-applied`, value `<block>:<per-partition json>`) is also read and
+    /// counted against the answer, at most once per sample interval. The feeder row can lag
+    /// kg-indexer's (they apply independently), so judge mismatches as a rate. The log's
+    /// per-Space version sequence is not chain blocks, which is why the feeder records its own.
     pub async fn kg_applied_block(&self) -> Result<Option<u64>, IngestError> {
         let block: Option<i64> = sqlx::query_scalar(KG_APPLIED_BLOCK_SQL)
             .fetch_one(&self.pool)
@@ -307,7 +342,9 @@ impl EntitySpaceLookup {
                     e
                 ))
             })?;
-        Ok(block.and_then(|b| u64::try_from(b).ok()))
+        let block = block.and_then(|b| u64::try_from(b).ok());
+        self.observe_applied_block(block).await;
+        Ok(block)
     }
 
     /// Of the given `(entity_id, space_id)` pairs, return those with no value and no outgoing
@@ -365,3 +402,71 @@ const EMPTY_IN_SPACE_SQL: &str = r#"
       AND NOT EXISTS (SELECT 1 FROM public.relations r
                       WHERE r.from_entity_id = d.entity_id AND r.space_id = d.space_id)
 "#;
+
+#[cfg(test)]
+mod applied_block_shadow_tests {
+    use super::*;
+    use geodb_cursor::derived_read::DerivedReader;
+    use geodb_cursor::Config;
+
+    fn lazy_pool() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://nobody@127.0.0.1:1/none")
+            .expect("lazy pool")
+    }
+
+    fn fake_shadow(script: &str) -> Arc<MetaBlockShadow> {
+        Arc::new(MetaBlockShadow::new(
+            DerivedReader::new(Config {
+                program: "sh".into(),
+                args: vec!["-c".into(), script.into()],
+                collection: 0,
+                timeout: Duration::from_millis(1500),
+                cooldown: Duration::from_secs(60),
+            }),
+            10,
+        ))
+    }
+
+    #[test]
+    fn the_feeder_row_key_is_the_one_the_feeder_writes() {
+        assert_eq!(FEEDER_APPLIED_ID, "geodb-feeder-applied");
+    }
+
+    #[tokio::test]
+    async fn with_the_shadow_on_the_feeder_row_is_asked_for_in_collection_10() {
+        let dir = std::env::temp_dir().join(format!("applied-shadow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("sent");
+        let _ = std::fs::remove_file(&log);
+        let script = format!(
+            "echo ready; while IFS= read -r l; do printf '%s\\n' \"$l\" >> {}; printf '+4\\nnone'; done",
+            log.display()
+        );
+        let lookup =
+            EntitySpaceLookup::new(lazy_pool()).with_applied_block_shadow(fake_shadow(&script));
+        lookup.observe_applied_block(Some(100)).await;
+        let key_hex: String = FEEDER_APPLIED_ID
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            format!("get\t10\thex:{key_hex}\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn with_the_shadow_off_nothing_is_read() {
+        let lookup = EntitySpaceLookup::new(lazy_pool());
+        assert!(lookup.applied_block_shadow.is_none());
+        lookup.observe_applied_block(Some(1)).await;
+    }
+
+    #[tokio::test]
+    async fn a_dead_geodb_pipe_does_not_fail_the_caller() {
+        let lookup =
+            EntitySpaceLookup::new(lazy_pool()).with_applied_block_shadow(fake_shadow("exit 1"));
+        lookup.observe_applied_block(Some(1)).await;
+    }
+}

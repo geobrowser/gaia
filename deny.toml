@@ -9,9 +9,8 @@ all-features = false
 
 [advisories]
 version = 2
-# Baseline of advisories accepted as of this PR. Crucially, NO RUSTSEC
-# *vulnerability* is ignored here — only pre-existing unmaintained/unsound
-# advisories on transitive deps — so a newly-introduced vulnerable crate still
+# Baseline of advisories accepted as of this PR. Only pre-existing
+# unmaintained/unsound advisories on transitive deps are ignored,, so a newly-introduced vulnerable crate still
 # fails CI. Revisit as the parents upgrade.
 #
 # RUSTSEC-2023-0071 (rsa — Marvin timing side-channel) is deliberately NOT
@@ -30,6 +29,17 @@ ignore = [
     # the lru 0.18 and keccak 0.1.6 upgrades below — cargo-deny reported them as
     # `advisory-not-detected` afterwards, i.e. dead config.
     "RUSTSEC-2026-0097", # rand unsound (custom-logger edge case)
+    # Vulnerability, accepted with a removal condition:
+    # RUSTSEC-2026-0459 (bundled SQLite < 3.54 can return uninitialized page-cache
+    # memory when it opens a database + `-wal` that a less trusted party wrote).
+    # The only user is search-indexer's relation map (rusqlite 0.32), which opens
+    # a file on its own pod volume that only it writes, so the exposed case cannot
+    # arise. The fix (libsqlite3-sys >= 0.39, rusqlite >= 0.39) cannot resolve
+    # alongside sqlx 0.9 either: sqlx-sqlite 0.9.0 requires libsqlite3-sys < 0.38
+    # (via `links = "sqlite3"`, resolved even though the feature is off), while
+    # rusqlite 0.41 needs 0.39. REMOVE this line once a sqlx release allows
+    # libsqlite3-sys >= 0.39, or the sqlx dependency drops its sqlite crate.
+    "RUSTSEC-2026-0459",
 ]
 
 [bans]

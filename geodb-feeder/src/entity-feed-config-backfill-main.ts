@@ -4,19 +4,22 @@
  * Postgres into the `config` system Space as keyed records (backfillEntityFeedConfig, entityFeedConfigKeyed.ts). This
  * is the operator edit path: edit the row in Postgres, rerun this Job. See geodb/RUNBOOK.md §2c-config-entity-feed.
  *
+ * DRY_RUN=1 only prints the three row counts (Postgres only; no feeder scale-down needed). BACKFILL_MAX_ROWS_PER_S paces it.
+ *
  * Env: GEODB_RECORD_KEYS=1 and GEODB_ENTITY_FEED_CONFIG=1 are both required (the Job refuses otherwise). The rest is
  * keyedBackfillJob.ts's.
  */
 
 import {backfillEntityFeedConfig, entityFeedConfigKeyedEnabled, entityFeedConfigOffsetsDir} from "./entityFeedConfigKeyed.js"
 import {mainKeyedBackfill} from "./keyedBackfillJob.js"
-import {readEntityFeedBlockRows, readEntityTypeExclusionRows, readEntityTypeWeightRows} from "./pgSource.js"
+import {countEntityFeedConfigRows, readEntityFeedBlockRows, readEntityTypeExclusionRows, readEntityTypeWeightRows} from "./pgSource.js"
 
 mainKeyedBackfill({
 	name: "entity_feed_config",
 	refuse: (config) =>
 		entityFeedConfigKeyedEnabled(config) ? null : "GEODB_RECORD_KEYS=1 and GEODB_ENTITY_FEED_CONFIG=1 are both required",
 	offsetsDir: entityFeedConfigOffsetsDir,
+	count: countEntityFeedConfigRows,
 	run: (deps, pg, progress) =>
 		backfillEntityFeedConfig(
 			deps,

@@ -96,6 +96,18 @@ pub struct Storage {
     /// Postgres, the same question is asked of geo-db off to the side and the two are compared and
     /// counted. Never changes an answer.
     twin: Option<std::sync::Arc<crate::geodb_twin::GeoDbTwin>>,
+    /// `NOTIFICATION_INDEXER_PG_WRITES`, default on. Off: every Postgres write below is skipped and
+    /// counted instead (cutover switch, plan 10.22). Reads are unaffected.
+    pg_writes: bool,
+}
+
+/// Parse `NOTIFICATION_INDEXER_PG_WRITES`. Unset, empty or anything but an explicit off value
+/// means on, so a typo never silently stops the writes.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// An expired proposal found by the rejection poller.
@@ -135,7 +147,18 @@ impl Storage {
             webhook_cache: RwLock::new(None),
             webhooks_file: crate::webhooks_file::path_from_env(),
             twin: crate::geodb_twin::GeoDbTwin::from_env(),
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("NOTIFICATION_INDEXER_PG_WRITES")
+                    .ok()
+                    .as_deref(),
+            ),
         }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
     }
 
     /// Override the geo-db twin (used by tests).
@@ -278,6 +301,10 @@ impl Storage {
         event: &NotificationEvent,
         users: &[Uuid],
     ) -> Result<u64, StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::OutboxInsert);
+            return Ok(0);
+        }
         let mut inserted_count: u64 = 0;
 
         // Event-level webhook routing keys (identical for every recipient): the
@@ -885,6 +912,10 @@ impl Storage {
         retention_days: i32,
         batch_size: i64,
     ) -> Result<(u64, u64), StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::RetentionDelete);
+            return Ok((0, 0));
+        }
         // Deliveries first — they FK-reference notification_outbox.
         let mut deliveries_deleted: u64 = 0;
         loop {
@@ -1162,6 +1193,18 @@ impl Storage {
         cursor_updated_at: DateTime<Utc>,
         cursor_id: i64,
     ) -> Result<(), StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::PollCursorUpsert);
+            // The geo-db cursor mirror is not a Postgres statement; it keeps the cursor moving.
+            if let Some(mirror) = cursor_mirror() {
+                let (cursor, block) =
+                    crate::poll_cursor_mirror::mirror_parts(cursor_updated_at, cursor_id);
+                mirror
+                    .mirror(&crate::poll_cursor_mirror::mirror_key(name), &cursor, block)
+                    .await;
+            }
+            return Ok(());
+        }
         sqlx::query(
             r#"
             INSERT INTO notification_poll_cursors (name, cursor_updated_at, cursor_id, updated_at)

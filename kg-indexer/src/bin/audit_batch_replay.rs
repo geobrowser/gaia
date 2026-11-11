@@ -95,7 +95,7 @@ async fn main() -> Result<(), IndexerError> {
         let row: (Option<Vec<u8>>, bool) =
             sqlx::query_as("SELECT data, is_errored FROM ipfs_cache WHERE uri = $1")
                 .bind(uri)
-                .fetch_one(&storage.pool)
+                .fetch_one(&mut *storage.begin_operator_tx().await?)
                 .await
                 .map_err(|e| match e {
                     sqlx::Error::RowNotFound => {
@@ -175,7 +175,7 @@ async fn main() -> Result<(), IndexerError> {
                 .bind(entity_id)
                 .bind(property_id)
                 .bind(space_id)
-                .fetch_all(&storage.pool)
+                .fetch_all(&mut *storage.begin_operator_tx().await?)
                 .await?;
 
                 report_chain(
@@ -195,7 +195,7 @@ async fn main() -> Result<(), IndexerError> {
                 )
                 .bind(relation_id)
                 .bind(space_id)
-                .fetch_all(&storage.pool)
+                .fetch_all(&mut *storage.begin_operator_tx().await?)
                 .await?;
 
                 report_chain(

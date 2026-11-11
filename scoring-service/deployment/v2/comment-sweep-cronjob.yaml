@@ -26,6 +26,9 @@ spec:
     spec:
       ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
       template:
+        metadata:
+          labels:
+            geodb-client: "true"
         spec:
           restartPolicy: OnFailure
           securityContext:

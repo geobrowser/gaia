@@ -85,6 +85,14 @@ export type GeoDbCardConfig = {
 	 */
 	typeScan?: boolean
 	/**
+	 * Let the `entitiesConnection` shadow lower an operation that asks only `totalCount` (`filter: {typeIds, relations: {some}}`) to
+	 * geo-db's entities count form (`.args = .{ .type, .count = true, .where }`, DR-154 item 8) and compare the counts. Needs a serve
+	 * whose store has the count form with `where`: an older one refuses it (counted `unsupported_selection` / `count_refused`, and
+	 * costs one worker restart per refused read). A root with no Space argument is counted across every Space (a `*` line) and
+	 * needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_COUNT_ONLY_SHADOW=on.
+	 */
+	countOnly?: boolean
+	/**
 	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
 	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
 	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
@@ -100,6 +108,33 @@ export type GeoDbCardConfig = {
 	 * from its Name in every Space, one batch read. Off by default. GEODB_CROSS_SPACE_NAMES_SHADOW=on.
 	 */
 	crossSpaceNames?: boolean
+	/**
+	 * Re-judge an `entity` card comparison that came out `cross_space` against the card read across every Space the entity
+	 * lives in (a multi-Space line, or every Space narrowed by `.args.holders`), so the name, description, Types, `spaceIds`
+	 * and unfiltered lists are decided instead of skipped. One extra read per such comparison. Off by default.
+	 * GEODB_CROSS_SPACE_HOLDERS_SHADOW=on.
+	 */
+	crossSpaceHolders?: boolean
+	/**
+	 * Compare the fields of a relation row's nested entity (`description`, `types`, `typeIds`, `spaceIds`, `valuesList`,
+	 * `relationsList`, `values`, `relations`) in the `entity` shadow against one batched card read of the nested entities
+	 * across every Space (`.args.ids`, at most 32). Needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_NESTED_ENTITY_SHADOW=on.
+	 */
+	nestedEntity?: boolean
+	/**
+	 * Compare the Property metadata a values row's `property` object selects (`dataTypeId`, `dataTypeName`, `renderableTypeId`,
+	 * `renderableTypeName`, `format`, `isType`) against one batched card read of the Properties across every Space (`.args.ids`,
+	 * at most 64 Properties, two reads). Needs `GEODB_EVERY_SPACE_READS`. Off by default. GEODB_PROPERTY_INFO_SHADOW=on.
+	 */
+	propertyInfo?: boolean
+	/**
+	 * Compare an unfiltered `allRelationsList { spaceId }` (the `Entity` query's, and the `EntitiesBatch` projection when
+	 * `GEODB_ENTITIES_BATCH_SHADOW` is on) against geo-db's reference statements of the entity in the Spaces that hold
+	 * it: no Space may hold more than PostgreSQL lists. One more read an entity (`.args.relations = true`, geo-db
+	 * ISS-590-263; a serve without it refuses the document, counted `failed`), under the every-Space budget on the
+	 * `Entity` query. Off by default. GEODB_RELATIONS_MEMBERSHIP_SHADOW=on.
+	 */
+	relationsMembership?: boolean
 	/**
 	 * Settle an every-Space card read (an answer that names no Space) by asking geo-db which Spaces hold the entity
 	 * (`.args.holders = true`) and reading the card in those alone, in place of the card across every loaded Space.
@@ -149,9 +184,14 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
 		typeScan: env.GEODB_TYPE_SCAN_SHADOW?.trim().toLowerCase() === "on",
+		countOnly: env.GEODB_COUNT_ONLY_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
+		crossSpaceHolders: env.GEODB_CROSS_SPACE_HOLDERS_SHADOW?.trim().toLowerCase() === "on",
+		nestedEntity: env.GEODB_NESTED_ENTITY_SHADOW?.trim().toLowerCase() === "on",
+		propertyInfo: env.GEODB_PROPERTY_INFO_SHADOW?.trim().toLowerCase() === "on",
+		relationsMembership: env.GEODB_RELATIONS_MEMBERSHIP_SHADOW?.trim().toLowerCase() === "on",
 		holdersLookup: env.GEODB_HOLDERS_LOOKUP?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,

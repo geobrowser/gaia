@@ -23,6 +23,9 @@ spec:
               operator: In
               values: [3]
       template:
+        metadata:
+          labels:
+            geodb-client: "true"
         spec:
           restartPolicy: Never
           imagePullSecrets:
@@ -108,6 +111,9 @@ spec:
                 # Output mode: postgres, kafka, or all
                 - name: OUTPUT_MODE
                   value: "all"
+                # Postgres write off-switch for cutover; "1" keeps today's behaviour.
+                - name: SCORING_WRITER_PG_WRITES
+                  value: "1"
                 # Kafka configuration (uses kafka-credentials secret copied to scoring namespace)
                 - name: KAFKA_BROKER
                   valueFrom:
@@ -150,8 +156,22 @@ spec:
                 # rows whose score changed. The geodb image below carries the batch verbs.
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
+                # Per table, time spent sending. 90 minutes: the nightly z-score shift moves ~58% of the
+                # score rows (~1.05M of 1.8M in both global_scores and local_scores), and global_scores
+                # goes ~400 rows/s at 64 a request, so changed rows alone need ~2,600 s. The old 1,200 s
+                # (11-11: dropped=1,164,011) sent ~484k rows, and the changed rows below the resume key
+                # went first every night, so the resume key stalled near 46% and the tail never drained.
+                # Drop this back once the serve carries geo-db 9eb2bc3338 (in-place order move).
                 - name: GEODB_DERIVED_BUDGET_MS
-                  value: "1200000"
+                  value: "5400000"
+                # global_scores goes 64 rows a request. On the serving geo-db build a global_scores row whose
+                # score moved costs ~2 ms to apply (its order slot is memmoved past every local_scores row),
+                # so a 256-row request took 500-600 ms on average, close to the mirror's 2 s per-request
+                # timeout; one overrun kills the child and loses the session. 64 rows keep a request near
+                # 150 ms at the same rows/s. local_scores (~130 ms a 256-row request) keeps 256. Drop this
+                # once the serve carries geo-db 9eb2bc3338 (in-place order move), where both are sub-ms.
+                - name: GEODB_DERIVED_BATCH_ROWS_GLOBAL_SCORES
+                  value: "64"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH

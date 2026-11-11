@@ -35,6 +35,27 @@ pub struct PostgresCache {
     /// Flag-off shadow of the warmer cursor read against geo-db (`GEODB_META_BLOCK_SHADOW=1`);
     /// never changes what `warmer_block` returns.
     meta_shadow: Option<geodb_cursor::meta_read::MetaBlockShadow>,
+    /// Where `warmer_block` answers from (`WARMER_BLOCK_SOURCE`), default Postgres.
+    warmer_source: WarmerSource,
+}
+
+/// Where the warmer's block is read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmerSource {
+    /// The `meta` row in Postgres (default).
+    Postgres,
+    /// geo-db's copy of the cursor (collection 10). No Postgres statement is sent. Needs the same
+    /// reader configuration as `GEODB_META_BLOCK_SHADOW=1`.
+    Geodb,
+}
+
+/// Parse `WARMER_BLOCK_SOURCE`: only `geodb` selects geo-db; unset, empty or anything else keeps
+/// Postgres, so a typo never changes where the answer comes from.
+pub fn warmer_source_from(value: Option<&str>) -> WarmerSource {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("geodb") => WarmerSource::Geodb,
+        _ => WarmerSource::Postgres,
+    }
 }
 
 impl PostgresCache {
@@ -51,13 +72,44 @@ impl PostgresCache {
             .await
             .map_err(|e| CacheError::Database(e.to_string()))?;
 
-        Ok(PostgresCache {
+        Ok(Self::from_parts(
             pool,
-            blob: blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE")
+            blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE")
                 .filter(|m| m.flags().shadow_read)
                 .map(std::sync::Arc::new),
-            meta_shadow: geodb_cursor::meta_read::MetaBlockShadow::from_env(),
-        })
+            geodb_cursor::meta_read::MetaBlockShadow::from_env(),
+            warmer_source_from(env::var("WARMER_BLOCK_SOURCE").ok().as_deref()),
+        ))
+    }
+
+    /// Assemble from parts. Asking for the geo-db source with no reader configured logs an error
+    /// and keeps Postgres, so the warmer never answers "unknown" forever.
+    pub fn from_parts(
+        pool: sqlx::Pool<Postgres>,
+        blob: Option<std::sync::Arc<blob_store::Mirror>>,
+        meta_shadow: Option<geodb_cursor::meta_read::MetaBlockShadow>,
+        warmer_source: WarmerSource,
+    ) -> Self {
+        let warmer_source = if warmer_source == WarmerSource::Geodb && meta_shadow.is_none() {
+            tracing::error!(
+                "WARMER_BLOCK_SOURCE=geodb needs GEODB_META_BLOCK_SHADOW=1 and the geo-db key and \
+                 binding paths; reading the warmer cursor from Postgres"
+            );
+            WarmerSource::Postgres
+        } else {
+            warmer_source
+        };
+        PostgresCache {
+            pool,
+            blob,
+            meta_shadow,
+            warmer_source,
+        }
+    }
+
+    /// The source `warmer_block` actually uses.
+    pub fn warmer_source(&self) -> WarmerSource {
+        self.warmer_source
     }
 }
 
@@ -83,6 +135,25 @@ impl IpfsCache for PostgresCache {
     /// `warmer_wait_max` backstop (a ~2h indexer stall that day). Failures are now
     /// logged, so a wrong answer here can never again look like a slow warmer.
     async fn warmer_block(&self) -> Option<u64> {
+        if let (WarmerSource::Geodb, Some(shadow)) = (self.warmer_source, &self.meta_shadow) {
+            // geo-db is the source: no Postgres read. A failed read is "unknown" (None), like
+            // a Postgres error, never a stale answer.
+            return match shadow.read_block(IPFS_CACHE_INDEXER_ID).await {
+                Ok(block) => {
+                    if block.is_none() {
+                        tracing::warn!(
+                            id = IPFS_CACHE_INDEXER_ID,
+                            "geo-db has no IPFS warmer cursor row"
+                        );
+                    }
+                    block
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "Could not read the IPFS warmer cursor from geo-db");
+                    None
+                }
+            };
+        }
         let row = sqlx::query_scalar::<_, String>("SELECT block_number FROM meta WHERE id = $1")
             .bind(IPFS_CACHE_INDEXER_ID)
             .fetch_optional(&self.pool)
@@ -201,5 +272,113 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cache.warmer_block().await, Some(72441));
+    }
+
+    #[test]
+    fn warmer_source_defaults_to_postgres() {
+        assert_eq!(warmer_source_from(None), WarmerSource::Postgres);
+        assert_eq!(warmer_source_from(Some("")), WarmerSource::Postgres);
+        assert_eq!(warmer_source_from(Some("garbage")), WarmerSource::Postgres);
+        assert_eq!(warmer_source_from(Some(" GeoDB ")), WarmerSource::Geodb);
+        assert_eq!(warmer_source_from(Some("geodb")), WarmerSource::Geodb);
+    }
+
+    fn fake_shadow(script: &str) -> geodb_cursor::meta_read::MetaBlockShadow {
+        use geodb_cursor::{Config, derived_read::DerivedReader};
+        geodb_cursor::meta_read::MetaBlockShadow::new(
+            DerivedReader::new(Config {
+                program: "sh".into(),
+                args: vec!["-c".into(), script.into()],
+                collection: 0,
+                timeout: Duration::from_millis(1500),
+                cooldown: Duration::from_secs(60),
+            }),
+            10,
+        )
+    }
+
+    /// Answers every `get` with the row `<block>:cursor`.
+    fn geodb_with_block(block: u64) -> geodb_cursor::meta_read::MetaBlockShadow {
+        let hex: String = format!("{block}:cursor")
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let body = format!("{}\t1.0\t{hex}", "0".repeat(32));
+        fake_shadow(&format!(
+            "echo ready; while IFS= read -r l; do printf '+{}\\n{body}'; done",
+            body.len()
+        ))
+    }
+
+    /// The 2026-10-05 shape with the flag on: the Postgres `meta` row is frozen (here, not even
+    /// reachable: a listener that counts TCP accepts, so zero accepts means zero statements) and the
+    /// warmer still reports geo-db's block. With the default source the same cache goes to Postgres.
+    #[tokio::test]
+    async fn geodb_source_answers_from_geodb_and_sends_no_postgres_statement() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let seen = accepted.clone();
+        tokio::spawn(async move {
+            while let Ok((sock, _)) = listener.accept().await {
+                seen.fetch_add(1, Ordering::SeqCst);
+                drop(sock);
+            }
+        });
+        let pool = || {
+            PgPoolOptions::new()
+                .acquire_timeout(Duration::from_secs(1))
+                .connect_lazy(&format!("postgres://u:p@127.0.0.1:{port}/db"))
+                .unwrap()
+        };
+
+        let cache = PostgresCache::from_parts(
+            pool(),
+            None,
+            Some(geodb_with_block(900)),
+            WarmerSource::Geodb,
+        );
+        assert_eq!(cache.warmer_block().await, Some(900));
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "a statement reached Postgres"
+        );
+
+        // A geo-db failure is "unknown", never a stale Postgres answer.
+        let dead = PostgresCache::from_parts(
+            pool(),
+            None,
+            Some(fake_shadow("exit 1")),
+            WarmerSource::Geodb,
+        );
+        assert_eq!(dead.warmer_block().await, None);
+        assert_eq!(accepted.load(Ordering::SeqCst), 0);
+
+        // Control: the default source reads Postgres (and, unreachable there, answers None).
+        let pg = PostgresCache::from_parts(
+            pool(),
+            None,
+            Some(geodb_with_block(900)),
+            WarmerSource::Postgres,
+        );
+        assert_eq!(pg.warmer_block().await, None);
+        assert!(
+            accepted.load(Ordering::SeqCst) > 0,
+            "control saw no connection"
+        );
+    }
+
+    /// Geodb requested with no reader configured falls back to Postgres rather than answering
+    /// "unknown" forever.
+    #[tokio::test]
+    async fn geodb_source_without_a_reader_falls_back_to_postgres() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/db")
+            .unwrap();
+        let cache = PostgresCache::from_parts(pool, None, None, WarmerSource::Geodb);
+        assert_eq!(cache.warmer_source(), WarmerSource::Postgres);
     }
 }

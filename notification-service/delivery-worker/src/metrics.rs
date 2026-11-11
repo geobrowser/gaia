@@ -13,6 +13,7 @@
 pub const DELIVERIES: &str = "delivery_worker_deliveries_total";
 pub const CLAIM_ERRORS: &str = "delivery_worker_claim_errors_total";
 pub const STALE_CLAIMS_RESET: &str = "delivery_worker_stale_claims_reset_total";
+pub const PG_WRITES_SKIPPED: &str = "delivery_worker_pg_writes_skipped_total";
 pub const PENDING: &str = "delivery_worker_pending_deliveries";
 pub const IN_PROGRESS: &str = "delivery_worker_in_progress_deliveries";
 
@@ -49,6 +50,37 @@ impl Outcome {
     }
 }
 
+/// A Postgres write site skipped because `DELIVERY_WORKER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    /// The claim (UPDATE ... RETURNING), once per poll cycle.
+    Claim,
+    MarkDelivered,
+    MarkRetry,
+    MarkFailed,
+    ResetStaleClaims,
+}
+
+impl PgWriteSite {
+    const ALL: [PgWriteSite; 5] = [
+        PgWriteSite::Claim,
+        PgWriteSite::MarkDelivered,
+        PgWriteSite::MarkRetry,
+        PgWriteSite::MarkFailed,
+        PgWriteSite::ResetStaleClaims,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::Claim => "claim",
+            PgWriteSite::MarkDelivered => "mark_delivered",
+            PgWriteSite::MarkRetry => "mark_retry",
+            PgWriteSite::MarkFailed => "mark_failed",
+            PgWriteSite::ResetStaleClaims => "reset_stale_claims",
+        }
+    }
+}
+
 /// Describe every series and register the counters at zero.
 ///
 /// The gauges are left unset until the first heartbeat reads them, so a failed backlog
@@ -79,12 +111,23 @@ pub fn register() {
     for outcome in Outcome::ALL {
         metrics::counter!(DELIVERIES, "outcome" => outcome.as_str()).absolute(0);
     }
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres write calls skipped because DELIVERY_WORKER_PG_WRITES is off, by site"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
     metrics::counter!(CLAIM_ERRORS).absolute(0);
     metrics::counter!(STALE_CLAIMS_RESET).absolute(0);
 }
 
 pub fn delivery(outcome: Outcome) {
     metrics::counter!(DELIVERIES, "outcome" => outcome.as_str()).increment(1);
+}
+
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
 }
 
 pub fn claim_error() {
@@ -125,6 +168,7 @@ mod tests {
             "delivery_worker_deliveries_total{outcome=\"error\"} 0",
             "delivery_worker_claim_errors_total 0",
             "delivery_worker_stale_claims_reset_total 0",
+            "delivery_worker_pg_writes_skipped_total{site=\"claim\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

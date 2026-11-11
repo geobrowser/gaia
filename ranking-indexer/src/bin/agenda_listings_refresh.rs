@@ -26,6 +26,8 @@ use ranking_indexer::agenda_listings_mirror::{self, Ident, Listing};
 use ranking_indexer::agenda_rescore_compute as rescore;
 use ranking_indexer::entity_ranking_score_compute as scores;
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 
 /// `AGENDA_LISTINGS_RUST_COMPUTE` (default off): after the refresh, compute the listings table again
 /// in code from the graph and log how many rows differ from what the SQL wrote. It covers the
@@ -147,9 +149,37 @@ fn rescore_compute_enabled() -> bool {
 /// What `trending.refresh_agenda_listings` reads that it then changes.
 struct RescoreBefore {
     stored: std::collections::BTreeSet<compute::Listing>,
+    positions: std::collections::BTreeSet<rescore::Position>,
     terms: Vec<rescore::StoredTerm>,
     last_full_pass_on: Option<chrono::NaiveDate>,
-    cfg: (f64, f64, f64, f64, i32, i32, f64),
+    cfg: RescoreConfig,
+}
+
+/// The `entity_ranking_config` columns the re-scoring reads: boost, topic boost, day factor, debate factor,
+/// debate window, horizon, tau, then the position term's base, step, slots and day factor (migration 0122).
+type RescoreConfig = (f64, f64, f64, f64, i32, i32, f64, f64, f64, i32, f64);
+
+async fn read_positions(
+    pool: &sqlx::PgPool,
+) -> Result<std::collections::BTreeSet<rescore::Position>, IndexerError> {
+    let rows: Vec<(uuid::Uuid, uuid::Uuid, uuid::Uuid, chrono::NaiveDate, i32)> = sqlx::query_as(
+        "SELECT agenda_id, space_id, entity_id, listed_on, position \
+         FROM trending.agenda_debate_positions",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(agenda_id, space_id, entity_id, listed_on, position)| rescore::Position {
+                agenda_id,
+                space_id,
+                entity_id,
+                listed_on,
+                position,
+            },
+        )
+        .collect())
 }
 
 fn listing_source(s: &str) -> Option<&'static str> {
@@ -207,12 +237,15 @@ async fn rescore_before(pool: &sqlx::PgPool) -> Result<RescoreBefore, IndexerErr
     let cfg = sqlx::query_as(
         "SELECT trending_boost::float8, trending_topic_boost::float8, trending_day_factor::float8, \
                 trending_debate_factor::float8, trending_debate_window_days, trending_horizon_days, \
-                tau_seconds::float8 FROM public.entity_ranking_config WHERE id",
+                tau_seconds::float8, trending_position_base::float8, trending_position_step::float8, \
+                trending_position_slots, trending_position_day_factor::float8 \
+         FROM public.entity_ranking_config WHERE id",
     )
     .fetch_one(pool)
     .await?;
     Ok(RescoreBefore {
         stored: read_listings(pool).await?,
+        positions: read_positions(pool).await?,
         terms: terms
             .into_iter()
             .map(|(entity, trending_score, age_credit)| rescore::StoredTerm {
@@ -234,6 +267,7 @@ async fn rescore_shadow(
 ) -> Result<(usize, i32, usize), IndexerError> {
     use std::collections::{HashMap, HashSet};
     let incoming = read_listings(pool).await?;
+    let incoming_positions = read_positions(pool).await?;
     let rels: Vec<compute::Relation> = read_rels(pool)
         .await?
         .into_iter()
@@ -265,16 +299,39 @@ async fn rescore_shadow(
     .map(|(id, c)| (id, rescore::created_epoch(&c)))
     .collect();
     let graph = rescore::Graph::new(&rels, &spaces, created);
-    let (boost, topic_boost, day_factor, debate_factor, window, horizon, tau) = before.cfg;
+    let (
+        boost,
+        topic_boost,
+        day_factor,
+        debate_factor,
+        window,
+        horizon,
+        tau,
+        position_base,
+        position_step,
+        position_slots,
+        position_day_factor,
+    ) = before.cfg;
     let now = chrono::Utc::now();
     let today = ranking_indexer::sql_helpers::today(now);
     let sweep = rescore::Sweep {
         today,
         horizon_days: horizon,
         boost,
+        position_base,
+        position_step,
+        position_slots,
         full_pass: rescore::is_full_pass(before.last_full_pass_on, today),
     };
-    let ids = rescore::rescore_ids(&graph, &before.stored, &incoming, &before.terms, &sweep);
+    let ids = rescore::rescore_ids(
+        &graph,
+        &before.stored,
+        &incoming,
+        &before.positions,
+        &incoming_positions,
+        &before.terms,
+        &sweep,
+    );
     let want_ids: HashSet<uuid::Uuid> = ids.iter().copied().collect();
     let cfg = scores::TrendConfig {
         boost,
@@ -283,9 +340,14 @@ async fn rescore_shadow(
         debate_factor,
         horizon_days: horizon,
         tau_seconds: tau,
+        position_base,
+        position_step,
+        position_slots,
+        position_day_factor,
     };
     let terms = graph.trending_terms(
         &incoming,
+        &incoming_positions,
         &want_ids,
         &cfg,
         window,
@@ -320,7 +382,21 @@ async fn main() -> Result<(), IndexerError> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // Job lease (GEODB_JOB_LEASE, default off): one refresh at a time; exit 0 if another holds it.
+    if matches!(
+        ranking_indexer::job_lease::guard(ranking_indexer::job_lease::KEY_AGENDA_LISTINGS, 0)
+            .await?,
+        ranking_indexer::job_lease::Guard::Busy
+    ) {
+        info!("job lease held by another run; exiting without writing");
+        return Ok(());
+    }
+    let result = run().await;
+    ranking_indexer::job_lease::finish().await;
+    result
+}
 
+async fn run() -> Result<(), IndexerError> {
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let pool = PgPoolOptions::new()
@@ -359,43 +435,54 @@ async fn main() -> Result<(), IndexerError> {
     };
 
     let started = Instant::now();
-    // The app role's statement_timeout is 30s and a sweep over busy topics can pass it, so it gets
-    // its own limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
+    // The app role sets no statement_timeout (0) and a sweep over busy topics is long, so it gets
+    // its own explicit limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
     // session SET: the connection goes through a transaction-mode pooler.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout = '10min'")
-        .execute(&mut *tx)
-        .await?;
-    let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
-        .fetch_one(&mut *tx)
-        .await?;
-    // The two score counts read entity_ranking_scores_trending_idx, not the whole table.
-    let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) =
-        sqlx::query_as(
-            "SELECT (SELECT count(*) FROM trending.agenda_listings), \
-                (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
-                 WHERE source <> 'agenda_topics'), \
-                (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
-                 WHERE source = 'agenda_topics'), \
-                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
-                (SELECT count(*) FROM public.entity_ranking_scores \
-                 WHERE trending_score <> 0 AND trending_source = 'topic')",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    info!(
-        scored,
-        listings,
-        claims,
-        topics,
-        boosted,
-        topic_boosted,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "agenda listings refreshed"
-    );
-    if rust_compute_enabled() {
+    // Off: the refresh and its counts are skipped as one write (they share a transaction), so the
+    // log and the comparisons against what it wrote are skipped too; the mirrors below still run.
+    let refreshed = pg_bin_writes::run(PgWriteSite::AgendaListingsRefresh, async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SET LOCAL statement_timeout = '10min'")
+            .execute(&mut *tx)
+            .await?;
+        let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
+            .fetch_one(&mut *tx)
+            .await?;
+        // The two score counts read entity_ranking_scores_trending_idx, not the whole table.
+        let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) =
+            sqlx::query_as(
+                "SELECT (SELECT count(*) FROM trending.agenda_listings), \
+                    (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
+                     WHERE source <> 'agenda_topics'), \
+                    (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
+                     WHERE source = 'agenda_topics'), \
+                    (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
+                    (SELECT count(*) FROM public.entity_ranking_scores \
+                     WHERE trending_score <> 0 AND trending_source = 'topic')",
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+        // Fence (GEODB_JOB_LEASE): refuse to commit unless this run still holds the job lease.
+        ranking_indexer::job_lease::fence().await?;
+        tx.commit().await?;
+        Ok::<_, IndexerError>((scored, listings, claims, topics, boosted, topic_boosted))
+    })
+    .await?;
+    let scored = refreshed.map(|r| r.0);
+    if let Some((scored, listings, claims, topics, boosted, topic_boosted)) = refreshed {
+        info!(
+            scored,
+            listings,
+            claims,
+            topics,
+            boosted,
+            topic_boosted,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "agenda listings refreshed"
+        );
+    }
+    if scored.is_some() && rust_compute_enabled() {
         match shadow(&pool).await {
             Ok((0, n)) => info!(rows = n, "agenda listings rust compute matches the SQL"),
             Ok((bad, n)) => warn!(
@@ -406,7 +493,7 @@ async fn main() -> Result<(), IndexerError> {
             Err(e) => warn!(error = %e, "agenda listings rust compute skipped"),
         }
     }
-    if let Some(before) = &rescore_state {
+    if let (Some(before), Some(scored)) = (&rescore_state, scored) {
         match rescore_shadow(&pool, before, scored).await {
             Ok((n, sql, 0)) if n as i64 == i64::from(sql) => {
                 info!(ids = n, "agenda rescore rust compute matches the SQL")
@@ -453,7 +540,7 @@ async fn main() -> Result<(), IndexerError> {
             "trending refresh state mirrored to geo-db"
         );
     }
-    if scores::shadow_enabled() {
+    if scored.is_some() && scores::shadow_enabled() {
         // After the commit, so it never holds the refresh's transaction. A read or compute problem
         // is logged and skipped; the SQL scores stay the source.
         shadow_scores(&pool).await;

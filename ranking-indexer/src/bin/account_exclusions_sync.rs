@@ -47,6 +47,8 @@ use tracing::{info, warn};
 use ranking_indexer::account_exclusions_mirror::{self, AccountExclusion};
 use ranking_indexer::clickhouse::{self, KNOWN_ADDRESS, KNOWN_HASH};
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 
 const VIEW_QUERY: &str =
     "SELECT wallet_address_hash, reason FROM analytics.gaia_account_exclusions FORMAT JSONEachRow";
@@ -126,7 +128,10 @@ async fn place_on_spaces(
          FROM public.spaces s JOIN c ON c.wallet_address_hash = {SPACE_ADDRESS_HASH_SQL} \
          WHERE s.type = 'Personal' GROUP BY s.id"
     );
-    let placed: Vec<(uuid::Uuid, String)> = sqlx::query_as(&sql).bind(rows).fetch_all(pool).await?;
+    let placed: Vec<(uuid::Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(rows)
+        .fetch_all(pool)
+        .await?;
     Ok(placed.into_iter().collect())
 }
 
@@ -186,10 +191,10 @@ async fn main() -> Result<(), IndexerError> {
         .connect(&database_url)
         .await?;
 
-    let known: String = sqlx::query_scalar(&format!(
+    let known: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT {} FROM (SELECT $1::text AS address) s",
         SPACE_ADDRESS_HASH_SQL
-    ))
+    )))
     .bind(KNOWN_ADDRESS)
     .fetch_one(&pool)
     .await?;
@@ -332,23 +337,29 @@ async fn main() -> Result<(), IndexerError> {
             })
             .collect(),
     );
-    let written: i32 =
+    let written: Option<i32> = pg_bin_writes::run(PgWriteSite::AccountExclusionsReplace, async {
         sqlx::query_scalar("SELECT public.replace_account_exclusions($1::jsonb, $2)")
             .bind(rows)
             .bind(SOURCE)
             .fetch_one(&pool)
-            .await?;
-    if written as usize != placed.len() {
-        // Rows also excluded manually keep their manual reason (ON CONFLICT DO NOTHING).
-        warn!(
-            written,
-            placed = placed.len(),
-            "some spaces were already excluded by another source"
-        );
-    }
-    info!(written, "account exclusions replaced");
-    if let Some(before) = shadow_before {
-        shadow(&pool, before, &placed, written).await;
+            .await
+    })
+    .await?;
+    // Off: no replace ran, so there is no written count to check or replay; the mirror below
+    // still runs.
+    if let Some(written) = written {
+        if written as usize != placed.len() {
+            // Rows also excluded manually keep their manual reason (ON CONFLICT DO NOTHING).
+            warn!(
+                written,
+                placed = placed.len(),
+                "some spaces were already excluded by another source"
+            );
+        }
+        info!(written, "account exclusions replaced");
+        if let Some(before) = shadow_before {
+            shadow(&pool, before, &placed, written).await;
+        }
     }
     if let Some(mirror) = &mirror {
         // Read after the replace committed; a read error skips the mirror, never the job.

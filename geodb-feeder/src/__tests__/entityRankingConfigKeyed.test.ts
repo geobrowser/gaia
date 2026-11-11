@@ -53,6 +53,10 @@ const PG: Record<string, string> = {
 	trending_debate_factor: "0.75",
 	trending_debate_window_days: "7",
 	trending_horizon_days: "16",
+	trending_position_base: "2500",
+	trending_position_step: "100",
+	trending_position_slots: "50",
+	trending_position_day_factor: "0.3",
 }
 const row = (o: Record<string, string> = {}): EntityRankingConfigRow => ({...PG, ...o})
 
@@ -63,17 +67,18 @@ describe("entity_ranking_config record", () => {
 	})
 
 	it("mirrors every column once, each with its own pinned id", () => {
-		expect(ENTITY_RANKING_COLUMNS).toHaveLength(31)
-		expect(new Set(ENTITY_RANKING_COLUMNS.map((c) => c.pg)).size).toBe(31)
+		expect(ENTITY_RANKING_COLUMNS).toHaveLength(35)
+		expect(new Set(ENTITY_RANKING_COLUMNS.map((c) => c.pg)).size).toBe(35)
 		expect(ENTITY_RANKING_COLUMNS.map((c) => c.key).sort()).toEqual(Object.keys(COL).filter((k) => k !== "id").sort())
-		expect(new Set(Object.values(COL)).size).toBe(32)
-		// The five integer columns of the table (api/drizzle: intrinsic_*_target, watch_window_days, trending_*_days).
+		expect(new Set(Object.values(COL)).size).toBe(36)
+		// The six integer columns of the table (api/drizzle: intrinsic_*_target, watch_window_days, trending_*_days, trending_position_slots).
 		expect(ENTITY_RANKING_COLUMNS.filter((c) => c.int).map((c) => c.pg)).toEqual([
 			"intrinsic_property_target",
 			"intrinsic_relation_target",
 			"watch_window_days",
 			"trending_debate_window_days",
 			"trending_horizon_days",
+			"trending_position_slots",
 		])
 	})
 
@@ -101,6 +106,10 @@ describe("entity_ranking_config record", () => {
 		expect(model.cell(rec, COL.participationWeight)).toEqual(['.{ .decimal = "4,0" }'])
 		expect(model.cell(rec, COL.watchWindowDays)).toEqual([".{ .number = 30 }"])
 		expect(model.cell(rec, COL.trendingHorizonDays)).toEqual([".{ .number = 16 }"])
+		expect(model.cell(rec, COL.trendingPositionBase)).toEqual(['.{ .decimal = "25,2" }'])
+		expect(model.cell(rec, COL.trendingPositionStep)).toEqual(['.{ .decimal = "1,2" }'])
+		expect(model.cell(rec, COL.trendingPositionSlots)).toEqual([".{ .number = 50 }"])
+		expect(model.cell(rec, COL.trendingPositionDayFactor)).toEqual(['.{ .decimal = "3,-1" }'])
 		for (const {key} of ENTITY_RANKING_COLUMNS) expect(model.cell(rec, COL[key])).toHaveLength(1)
 	})
 

@@ -21,6 +21,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         environment: testnet
     spec:
       restartPolicy: Never
@@ -84,6 +85,10 @@ spec:
                 secretKeyRef:
                   name: not-interested-sync
                   key: GEO_CHAT_DATABASE_URL
+            # Kubernetes Lease exclusion between the jobs that share a lock (plan 10.21 section 10.3). Off:
+            # needs the job-lease Role (ranking-indexer/k8s/v2/job-lease-rbac.yaml) applied first. 1 = take the lease or exit 0.
+            - name: GEODB_JOB_LEASE
+              value: "0"
             - name: RUST_LOG
               value: "not_interested_sync=info,ranking_indexer=info"
           resources:

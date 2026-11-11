@@ -1,0 +1,164 @@
+# One-shot, report-only comparison of the two orphan checkers: `search-admin reconcile-orphans
+# --geodb-mode compare` scrolls the index, decides each document by Postgres (as the daily CronJob
+# does) and also asks geo-db, then logs `geodb_compare_disagreement` samples and one
+# `search_orphan_geodb_compare_summary` line (both_same_kind, both_other_kind, postgres_only,
+# geodb_only). Read that line. See the geo-db checker section of
+# search-admin/src/commands/reconcile_orphans.rs.
+#
+# READ ONLY: nothing is pruned (RECONCILE_PRUNE is "false", and --prune is refused outside
+# --geodb-mode off anyway), nothing is written to Postgres, OpenSearch or geo-db. It holds the geo-db
+# READER key only. Not in deploy-v2 and not a CronJob: it runs by hand.
+#
+# Apply with both placeholders filled. The search-admin tag must carry the geo-db checker (PR #1439
+# or later); `latest` is built only from main, so pin the tag you mean. The geodb tag is the one
+# geodb.yaml runs, so this Job's geodb-client matches serve (same as the backfill Jobs):
+#   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
+#   sed -e "s|search-admin:SEARCH_ADMIN_TAG|search-admin:<tag>|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
+#     search-indexer-deploy/k8s/v2/jobs/search-orphan-reconcile-geodb-compare-job.yaml | kubectl apply -f -
+# An unfilled placeholder fails to pull and nothing runs. Delete the Job before applying it again: a
+# Job's pod template is immutable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: search-orphan-reconcile-geodb-compare
+  namespace: gaia
+  labels:
+    app: search-orphan-reconcile-geodb-compare
+    environment: testnet
+spec:
+  # A failure stops here and is read from the logs; a rerun is a deliberate, fresh apply.
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        geodb-client: "true"
+        app: search-orphan-reconcile-geodb-compare
+        environment: testnet
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: geo
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        # The geodb-client binary and a binding to serve's node id, built by the init container, as
+        # the api does. The search-admin image carries no geodb-client.
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-reader-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
+      initContainers:
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:GEODB_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /usr/local/bin/geodb-client /geodb/geodb-client
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -z "$node" ] || [ -z "$ip" ]; then
+                echo "geodb-setup: serve has not published node-id yet, or no geodb Service"
+                exit 1
+              fi
+              printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+      containers:
+        - name: reconcile-orphans-compare
+          image: registry.digitalocean.com/geo/search-admin:SEARCH_ADMIN_TAG
+          imagePullPolicy: IfNotPresent
+          args: ["reconcile-orphans", "--geodb-mode", "compare"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: OPENSEARCH_URL
+            # The same secret ref as the daily search-orphan-reconcile CronJob. Read only.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: DATABASE_URL
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/reader.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: RECONCILE_GEODB_WORKERS
+              value: "4"
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: INDEX_ALIAS
+              value: "entities"
+            - name: RECONCILE_PRUNE
+              value: "false"
+            - name: RUST_LOG
+              value: "info"
+            - name: NO_COLOR
+              value: "1"
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "1"

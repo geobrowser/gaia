@@ -1,11 +1,12 @@
 import {type ApplyDeps, applyIntents} from "./apply.js"
+import type {AppliedBlockWriter} from "./appliedBlock.js"
 import {parseHermesEdit} from "./hermes.js"
 import {deadLetterSpaceCap, ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
 export type Decode = (payload: Uint8Array) => Promise<{ops: GrcOp[]}>
-export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; entityTimes?: boolean; legacyMap?: boolean}
+export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; entityTimes?: boolean; legacyMap?: boolean; appliedBlock?: Pick<AppliedBlockWriter, "note">}
 export type Outcome = "applied" | "empty" | "dead_letter"
 
 /**
@@ -26,12 +27,14 @@ export async function handleMessage(
 	let ops: GrcOp[]
 	let editId: string | undefined
 	let blockSeconds: number | null = null
+	let blockNumber: number | null = null
 	try {
 		const he = parseHermesEdit(message.value)
 		if (!he.payload || !he.spaceId) throw new Error("edit has no payload or space")
 		spaceId = he.spaceId
 		editId = he.id
 		blockSeconds = he.createdAt
+		blockNumber = he.blockNumber
 		ops = (await deps.decode(he.payload)).ops
 	} catch (e) {
 		deps.store.deadLetter({...meta, decode: String(e instanceof Error ? e.message : e)})
@@ -57,7 +60,7 @@ export async function handleMessage(
 	await applyIntents(
 		deps,
 		space,
-		{...meta, space: spaceId, edit: editId},
+		{...meta, space: spaceId, edit: editId, idempotent: true},
 		intents,
 		deps.chunk,
 		from,
@@ -65,5 +68,7 @@ export async function handleMessage(
 	)
 	overlay.commit()
 	for (const [k, v] of Object.entries(stats)) deps.metrics.opsDetail.inc({counter: k}, v)
+	// Every chunk of the edit is applied: the applied-block row may now name its block (appliedBlock.ts; best effort).
+	await deps.appliedBlock?.note(partition, blockNumber)
 	return intents.length === 0 ? "empty" : "applied"
 }

@@ -14,7 +14,7 @@
  * One record, in the `config` system Space, the same shape as forYouConfigKeyed.ts:
  * - record entity: `recordEntityId(entityRankingConfig, [int(1)])`, the table's key (`id` = true, one row);
  * - key column (RECORD_COLUMNS.entityRankingConfig.id): `add` + `set_active(true)`, the number 1;
- * - mutable columns (ENTITY_RANKING_COLUMNS): `put` of each, a decimal for numeric columns and a number for the five
+ * - mutable columns (ENTITY_RANKING_COLUMNS): `put` of each, a decimal for numeric columns and a number for the six
  *   integer ones, under `recordStatementId(entityRankingConfig, [record, property, value])`, so a changed value closes the
  *   old one and A -> B -> A ends on A. `updated_at` is not mirrored: it is bookkeeping, not a tunable.
  */
@@ -69,6 +69,10 @@ export const ENTITY_RANKING_COLUMNS: readonly {pg: string; key: EntityRankingKey
 	{pg: "trending_debate_factor", key: "trendingDebateFactor", int: false},
 	{pg: "trending_debate_window_days", key: "trendingDebateWindowDays", int: true},
 	{pg: "trending_horizon_days", key: "trendingHorizonDays", int: true},
+	{pg: "trending_position_base", key: "trendingPositionBase", int: false},
+	{pg: "trending_position_step", key: "trendingPositionStep", int: false},
+	{pg: "trending_position_slots", key: "trendingPositionSlots", int: true},
+	{pg: "trending_position_day_factor", key: "trendingPositionDayFactor", int: false},
 ]
 
 /** The row's values: integers as bigint, numerics as numbers. */

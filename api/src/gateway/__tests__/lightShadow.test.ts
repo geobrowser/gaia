@@ -654,6 +654,70 @@ describe("entities with the light selection", () => {
 		expect(results()).toEqual({mismatch: 1})
 	})
 
+	describe("widening a cross_space comparison (GEODB_CROSS_SPACE_HOLDERS_SHADOW)", () => {
+		// The query names Space A, selects a relation row in A and neither spaceIds nor description. The Name is held in A
+		// (the first comparison settles) or in B (loaded, outside the read: the first comparison is cross_space).
+		const SPACE_B_HEX = "5093b6ab1b48f1111dd31275b5413ddb"
+		const widened = (flag: boolean, nameIn: "A" | "B") => {
+			const bare = clone(ENTITY)
+			const own = new Set(nameIn === "A" ? [DESCRIPTION] : [NAME, DESCRIPTION])
+			bare.values.nodes = bare.values.nodes.filter((v) => !own.has(conformingId("entity", v.property.id)))
+			for (const r of [...bare.lightRels.nodes, ...bare.heavyRels.nodes]) r.spaceId = SPACE_A
+			const entities = [bare]
+			const full = geoOutput(bare)
+			const named = full.split("\n").filter((line) => line.split("\t")[0] === NAME)
+			const rest = `${full
+				.split("\n")
+				.filter((line) => ![NAME, DESCRIPTION].includes(line.split("\t")[0] as string))
+				.join("\n")}`
+			const outputs = {
+				[geoSpace(SPACE_A)]: nameIn === "A" ? `${rest}\n${named.join("\n")}\n` : rest,
+				[geoSpace(SPACE_B_HEX)]: nameIn === "B" ? `${named.join("\n")}\n` : "",
+			}
+			const s = setup(outputs, undefined, true)
+			const deps = {...s.deps, allGeoSpaces: async () => Object.keys(outputs), crossSpaceHolders: flag}
+			const query = FIXTURE.request.query
+				.replace("spaceIds", "")
+				.replace(" description", "")
+				.replace('entity(id: "' + HEX + '")', `entities(spaceIds: {in: ["${SPACE_A}"]}, first: 5)`)
+			return {
+				s,
+				run: () =>
+					call(createPointReadShadows(deps as never).get("entities") as never, query, {}, {data: {entities}}),
+			}
+		}
+
+		it("flag off: the comparison stays cross_space and nothing is read again", async () => {
+			const w = widened(false, "B")
+			await w.run()
+			expect(uncompared().cross_space).toBe(1)
+			expect(w.s.readCard).toHaveBeenCalledTimes(1)
+			expect(w.s.readCardSpaces).not.toHaveBeenCalled()
+		})
+
+		it("flag on: the first comparison is cross_space, one more read across every Space settles it", async () => {
+			const w = widened(true, "B")
+			await w.run()
+			expect(w.s.readCard).toHaveBeenCalledTimes(1)
+			expect(w.s.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(w.s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toEqual([
+				geoSpace(SPACE_A),
+				geoSpace(SPACE_B_HEX),
+			])
+			expect(uncompared().cross_space).toBeUndefined()
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flag on: a comparison that settles on the first read is not read again", async () => {
+			const w = widened(true, "A")
+			await w.run()
+			expect(w.s.readCard).toHaveBeenCalledTimes(1)
+			expect(w.s.readCardSpaces).not.toHaveBeenCalled()
+			expect(uncompared().cross_space).toBeUndefined()
+			expect(results()).toEqual({match: 1})
+		})
+	})
+
 	it("accepts an entity in one of the Spaces the spaceIds argument names", async () => {
 		const entities = list(1)
 		const s = setup(outputsFor(entities))

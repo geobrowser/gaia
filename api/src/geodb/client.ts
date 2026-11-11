@@ -42,6 +42,7 @@ import {
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
+	typeCountFromGeoDbOutput,
 	typeScanIdsFromGeoDbOutput,
 } from "./card"
 import type {GeoDbCardConfig} from "./config"
@@ -57,6 +58,13 @@ export type GeoDbCardClient = {
 	/** `names` also asks for the display names of each row's property and target (rows then carry them). */
 	readCard(args: {geoSpaceId: string; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
 	/**
+	 * One Space's card as the Space stood at its version `seq` (`pipe` line `<space>@<seq>\t<geoql>`, geo-db 'at-version'
+	 * reads): the same rows `readCard` gives, read at that version in place of the head. `seq` is a version_seq from the
+	 * version log (`GeoVersionRow.seq`). A geodb-client built before the syntax refuses the line (`MalformedLine`), which
+	 * rejects like any refusal; a `seq` past the Space's head is refused. Absent on a client that cannot do it.
+	 */
+	readCardAt?(args: {geoSpaceId: string; entityId: string; seq: number; timeoutMs?: number}): Promise<GeoCardRow[]>
+	/**
 	 * The card across several Spaces in one read (`pipe` line `<space>,<space>\t<geoql>`): the rows of every
 	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
@@ -67,6 +75,8 @@ export type GeoDbCardClient = {
 		names?: boolean
 		/** This read's timeout in ms, in place of the pool's: a shadow read wider than the serving path's budget. */
 		timeoutMs?: number
+		/** Read the entity's reference statements alone (`.args.relations = true`, geo-db ISS-590-263); an older serve refuses it. */
+		relations?: boolean
 	}): Promise<GeoCardRow[]>
 	/**
 	 * The cards of several entities in the Spaces named (`.args.ids`, geo-db ISS-625-317): the rows of every card, each
@@ -110,6 +120,14 @@ export type GeoDbCardClient = {
 	 */
 	readTypeScan?(args: TypeScanRequest): Promise<string[]>
 	/**
+	 * The exact member count of a type (`entities` root, `.args = .{ .type, .count = true }` and optionally one `.where`
+	 * reference term, geo-db DR-154 item 8) across the Spaces named, or every Space the session reads (`"every"`, a `*`
+	 * line): the pages the tool fetched from the one cursor summed, `complete` whether the walk reached the end. Needs a
+	 * store with the count form, which an older one refuses (`client_failed`, `MalformedRequest`). Absent on a client that
+	 * cannot do it.
+	 */
+	readTypeCount?(args: TypeCountRequest): Promise<TypeCount>
+	/**
 	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
 	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
 	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
@@ -118,6 +136,13 @@ export type GeoDbCardClient = {
 	 * Absent on a client that cannot do it.
 	 */
 	readLegacyIds?(args: {originalIds: string[]; timeoutMs?: number}): Promise<GeoCardRow[]>
+	/**
+	 * The from-entity of one relation (geo-db RELATION-BY-ID-READ: `entity` root, `.args.statement = "<relation id>"`), read
+	 * across every Space (`*` line; relation ids are globally unique). One row, its entity cell the from-entity; an empty page
+	 * when the relation is closed or unknown. One id a request, so a caller with many ids sends many. Absent on a client that
+	 * cannot do it.
+	 */
+	readRelationEntity?(args: {relationId: string; timeoutMs?: number}): Promise<GeoCardRow[]>
 }
 
 export type TypeScanRequest = {
@@ -127,6 +152,22 @@ export type TypeScanRequest = {
 	/** Entities asked for, 1 to `MAX_TYPE_SCAN`. */
 	first: number
 }
+
+export type TypeCountRequest = {
+	/** The Spaces to count in (distinct, 32 hex digits), or `"every"` for the `*` line. */
+	geoSpaceIds: string[] | "every"
+	/** The type whose members are counted (32 hex digits). */
+	typeId: string
+	/** Keep the members holding a statement of `property` (a `Reference` property) naming any of `targets` (1 to `MAX_COUNT_TARGETS`). */
+	where?: {property: string; targets: string[]}
+	timeoutMs?: number
+}
+
+/** The sums of a count form's pages: `members` the distinct members meeting the terms, `scanned` the member statements read. */
+export type TypeCount = {members: number; scanned: number; complete: boolean}
+
+/** Most targets one count `where` term names: geo-db's bound on an `in` set. */
+export const MAX_COUNT_TARGETS = 4
 
 /** Most entities one type scan asks for: geo-db's `MAX_TOPK_LIMIT`. */
 export const MAX_TYPE_SCAN = 4096
@@ -197,10 +238,15 @@ export function isHoldersUnknownArgument(error: unknown): boolean {
 }
 
 /** The geoql document for one entity's card. Ids are 32 hex digits, so nothing needs escaping. */
-export function cardDocument(entityId: string, options: {names?: boolean; backlinks?: number} = {}): string {
+export function cardDocument(
+	entityId: string,
+	options: {names?: boolean; backlinks?: number; relations?: boolean} = {},
+): string {
 	const names = options.names ? ", .names = true" : ""
 	const backlinks = options.backlinks ? `, .backlinks = ${options.backlinks}` : ""
-	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks} } } } }`
+	// `.relations = true` reads the reference statements alone (geo-db ISS-590-263); beside `backlinks` it is refused.
+	const relations = options.relations ? ", .relations = true" : ""
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks}${relations} } } } }`
 }
 
 /** The geoql document for the Spaces holding one entity (`.args.holders = true`). Ids are 32 hex digits, so nothing needs escaping. */
@@ -221,6 +267,11 @@ export function legacyDocument(originalIds: string[]): string {
 	return `.{ .version = 1, .select = .{ .l = .{ .field = "entity", .args = .{ .by_legacy = .{ ${ids} } } } } }`
 }
 
+/** The geoql document for one relation by its id (`.args.statement`): its from-entity, or an empty page when closed. */
+export function relationDocument(relationId: string): string {
+	return `.{ .version = 1, .select = .{ .r = .{ .field = "entity", .args = .{ .statement = "${relationId}" } } } }`
+}
+
 /**
  * The geoql document for a page of a type's entities ordered by `field`: the order's `.pick` places each entity by its
  * least or greatest value across the Spaces, equal keys follow by entity identity (`.ties = .entity`), and the rows the
@@ -235,6 +286,18 @@ export function entitiesPageDocument(request: Omit<EntitiesPageRequest, "geoSpac
 export function typeScanDocument(request: Omit<TypeScanRequest, "geoSpaceIds">): string {
 	const types = request.typeIds.map((id) => `"${id}"`).join(", ")
 	return `.{ .version = 1, .select = .{ .t = .{ .field = "entities", .args = .{ .types = .{ ${types} }, .first = ${request.first} } } } }`
+}
+
+/** The geoql document for a type's member count (`.args.count = true`), with one reference `where` term. Ids are 32 hex digits. */
+export function typeCountDocument(request: Pick<TypeCountRequest, "typeId" | "where">): string {
+	const {where} = request
+	const operand = where
+		? where.targets.length === 1
+			? `.eq = "${where.targets[0]}"`
+			: `.in = .{ ${where.targets.map((id) => `"${id}"`).join(", ")} }`
+		: ""
+	const term = where ? `, .where = .{ .@"${where.property}" = .{ ${operand} } }` : ""
+	return `.{ .version = 1, .select = .{ .n = .{ .field = "entities", .args = .{ .type = "${request.typeId}", .count = true${term} } } } }`
 }
 
 /**
@@ -383,6 +446,8 @@ type Request = {
 	legacy?: boolean
 	/** A type scan: the answer is entity ids, one a line. */
 	ids?: boolean
+	/** A type count: the answer is rows of three integers (`members`, `scanned`, `complete`), a page each. */
+	count?: boolean
 	/** A holders read: the answer is the Spaces holding `entityId`, each as a row whose `raw` is the Space. */
 	holders?: boolean
 	/** An entity-versions read: the answer is the version log's rows (`GeoVersionRow`s). */
@@ -575,25 +640,30 @@ export function createPipeGeoDbClient(
 			try {
 				outcome = request.versions
 					? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-					: request.ids
-						? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-						: request.page
-							? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-							: request.holders
-								? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
-								: request.cards
-									? rowsFromGeoDbOutput(payload, null, {
-											names: request.names,
-											spaces: request.spaces && !request.legacy,
-										})
-									: request.backlinks
-										? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
-												spaces: request.spaces,
-											})
-										: rowsFromGeoDbOutput(payload, request.entityId, {
+					: request.count
+						? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
+						: request.ids
+							? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+							: request.page
+								? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+								: request.holders
+									? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
+											prop: "",
+											raw,
+										}))
+									: request.cards
+										? rowsFromGeoDbOutput(payload, null, {
 												names: request.names,
-												spaces: request.spaces,
+												spaces: request.spaces && !request.legacy,
 											})
+										: request.backlinks
+											? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
+													spaces: request.spaces,
+												})
+											: rowsFromGeoDbOutput(payload, request.entityId, {
+													names: request.names,
+													spaces: request.spaces,
+												})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -670,6 +740,7 @@ export function createPipeGeoDbClient(
 		legacy = false,
 		holders = false,
 		versions = false,
+		count = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -687,6 +758,7 @@ export function createPipeGeoDbClient(
 				...(legacy ? {legacy} : {}),
 				...(holders ? {holders} : {}),
 				...(versions ? {versions} : {}),
+				...(count ? {count} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -762,7 +834,22 @@ export function createPipeGeoDbClient(
 			}
 			return submit(`${geoSpaceId}\t${cardDocument(entityId, {names})}\n`, entityId, names, false)
 		},
-		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs}) {
+		readCardAt({geoSpaceId, entityId, seq, timeoutMs}) {
+			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId) || !Number.isSafeInteger(seq) || seq < 1)
+				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits and seq at least 1"))
+			// One Space with a pin is still the single-Space form: a bare statement id per row.
+			return submit(
+				`${geoSpaceId}@${seq}\t${cardDocument(entityId)}\n`,
+				entityId,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+			)
+		},
+		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
 				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
 			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
@@ -771,7 +858,7 @@ export function createPipeGeoDbClient(
 			// more is the multi-Space form.
 			const spaces = geoSpaceIds.length > 1
 			return submit(
-				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`,
+				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names, relations})}\n`,
 				entityId,
 				names,
 				spaces,
@@ -905,6 +992,43 @@ export function createPipeGeoDbClient(
 				true,
 			) as unknown as Promise<string[]>
 		},
+		async readTypeCount({geoSpaceIds, typeId, where, timeoutMs}) {
+			if (geoSpaceIds !== "every") {
+				if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+					throw new GeoDbError("bad_request", "1 to 1024 space ids")
+				if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+					throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			}
+			if (!HEX32.test(typeId)) throw new GeoDbError("bad_request", "the type id must be 32 hex digits")
+			if (
+				where &&
+				(!HEX32.test(where.property) ||
+					where.targets.length === 0 ||
+					where.targets.length > MAX_COUNT_TARGETS ||
+					!where.targets.every((id) => HEX32.test(id)))
+			)
+				throw new GeoDbError(
+					"bad_request",
+					`a count term names a property and 1 to ${MAX_COUNT_TARGETS} targets of 32 hex digits`,
+				)
+			const scope = geoSpaceIds === "every" ? "*" : geoSpaceIds.join(",")
+			const rows = await submit(
+				`${scope}\t${typeCountDocument({typeId, where})}\n`,
+				NO_ENTITY,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				true,
+			)
+			return rows[0] as unknown as TypeCount
+		},
 		readLegacyIds({originalIds, timeoutMs}) {
 			if (
 				originalIds.length === 0 ||
@@ -918,6 +1042,23 @@ export function createPipeGeoDbClient(
 			// Sorted, as the engine takes the list; `*` reads every Space, so each row's statement cell carries its Space.
 			const line = `*\t${legacyDocument([...originalIds].sort())}\n`
 			return submit(line, NO_ENTITY, false, true, false, false, true, timeoutMs, false, true)
+		},
+		readRelationEntity({relationId, timeoutMs}) {
+			if (!HEX32.test(relationId))
+				return Promise.reject(new GeoDbError("bad_request", "a relation id of 32 hex digits"))
+			// `*` reads every Space; the rows have the legacy shape (an entity cell, a statement cell that may be none).
+			return submit(
+				`*\t${relationDocument(relationId)}\n`,
+				NO_ENTITY,
+				false,
+				true,
+				false,
+				false,
+				true,
+				timeoutMs,
+				false,
+				true,
+			)
 		},
 		close() {
 			clearInterval(warmTimer)

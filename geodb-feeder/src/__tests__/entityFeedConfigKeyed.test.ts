@@ -18,6 +18,8 @@ import {
 	entityTypeWeightRecordId,
 	entityTypeWeightIntents,
 } from "../entityFeedConfigKeyed.js"
+import {makePacer} from "../keyedBackfillJob.js"
+import {countEntityFeedConfigRows, type ReadOnlyPg} from "../pgSource.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "../recordKinds.js"
 import {fixture, ModelStore} from "./keyedHarness.js"
 
@@ -83,6 +85,51 @@ describe("backfill", () => {
 			blocks: [{entity_id: T1, reason: null}, {entity_id: "nope", reason: null}],
 		})
 		expect(r).toEqual({rows: 5, applied: 3, deadLetter: 2})
+	})
+})
+
+describe("backfill pacing and dry run", () => {
+	it("awaits the pace hook after each row it writes (a row that fails to decode writes nothing)", async () => {
+		const d = f()
+		let calls = 0
+		d.deps.pace = async () => {
+			calls++
+		}
+		await backfillEntityFeedConfig(d.deps, {
+			weights: [{type_id: T1, weight: "2", note: null}],
+			exclusions: [{type_id: T1, note: null}],
+			blocks: [{entity_id: "nope", reason: null}],
+		})
+		expect(calls).toBe(2)
+	})
+	it("a pacer holds the rate (20 rows/s is 50 ms a row) and does not bank time after a stall", async () => {
+		let t = 0
+		const waits: number[] = []
+		const pace = makePacer(20, () => t, async (ms) => {
+			waits.push(ms)
+			t += ms
+		})
+		if (!pace) throw new Error("no pacer")
+		await pace()
+		await pace()
+		expect(waits).toEqual([50, 50])
+		t += 1000 // a slow row
+		await pace()
+		await pace()
+		expect(waits).toEqual([50, 50, 50])
+		expect(makePacer(0)).toBeUndefined()
+		expect(makePacer(Number.NaN)).toBeUndefined()
+	})
+	it("counts the three tables with plain reads, nothing else", async () => {
+		const seen: string[] = []
+		const db = {
+			read: async (text: string) => {
+				seen.push(text)
+				return [{n: String(seen.length * 10)}]
+			},
+		} as unknown as ReadOnlyPg
+		expect(await countEntityFeedConfigRows(db)).toEqual({entity_type_weights: 10, entity_type_exclusions: 20, entity_feed_blocklist: 30})
+		expect(seen.every((q) => /^SELECT count\(\*\)::text AS n FROM entity_/.test(q))).toBe(true)
 	})
 })
 

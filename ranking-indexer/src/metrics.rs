@@ -18,6 +18,7 @@
 pub const MESSAGES_PROCESSED: &str = "ranking_indexer_messages_processed_total";
 pub const MESSAGES_SKIPPED: &str = "ranking_indexer_messages_skipped_total";
 pub const TRANSIENT_RETRIES: &str = "ranking_indexer_transient_retries_total";
+pub const PG_WRITES_SKIPPED: &str = "ranking_indexer_pg_writes_skipped_total";
 pub const USER_INTEREST_SHADOW_ROWS: &str = "ranking_indexer_user_interest_shadow_rows_total";
 pub const USER_INTEREST_SHADOW_MISMATCHES: &str =
     "ranking_indexer_user_interest_shadow_mismatches_total";
@@ -34,6 +35,96 @@ impl Topic {
         match self {
             Topic::Edits => "edits",
             Topic::Membership => "membership",
+        }
+    }
+}
+
+/// A Postgres write skipped because `RANKING_INDEXER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    AddMember,
+    RemoveMember,
+    AddEditor,
+    RemoveEditor,
+    UpsertRankingBlock,
+    UpsertRanking,
+    SetRankingBlock,
+    ReplaceRankingItems,
+    ReplaceRankPositionProjection,
+    ReplaceRankingScores,
+    AccountExclusionsReplace,
+    AccountWeightsRefresh,
+    AgendaListingsRefresh,
+    FeedCompositionRenderedSample,
+    FeedCompositionWindowSample,
+    FeedSignalsApply,
+    FeedSignalsRecord,
+    NotInterestedApply,
+    PrimerClaimsRefresh,
+    ClaimOverlapSample,
+    TopicInterestSweep,
+    TopicInterestRefit,
+    TopicRankingReconcile,
+    TopicSuggestionsRefresh,
+    StanceMapRun,
+}
+
+impl PgWriteSite {
+    pub(crate) const ALL: [PgWriteSite; 25] = [
+        PgWriteSite::AddMember,
+        PgWriteSite::RemoveMember,
+        PgWriteSite::AddEditor,
+        PgWriteSite::RemoveEditor,
+        PgWriteSite::UpsertRankingBlock,
+        PgWriteSite::UpsertRanking,
+        PgWriteSite::SetRankingBlock,
+        PgWriteSite::ReplaceRankingItems,
+        PgWriteSite::ReplaceRankPositionProjection,
+        PgWriteSite::ReplaceRankingScores,
+        PgWriteSite::AccountExclusionsReplace,
+        PgWriteSite::AccountWeightsRefresh,
+        PgWriteSite::AgendaListingsRefresh,
+        PgWriteSite::FeedCompositionRenderedSample,
+        PgWriteSite::FeedCompositionWindowSample,
+        PgWriteSite::FeedSignalsApply,
+        PgWriteSite::FeedSignalsRecord,
+        PgWriteSite::NotInterestedApply,
+        PgWriteSite::PrimerClaimsRefresh,
+        PgWriteSite::ClaimOverlapSample,
+        PgWriteSite::TopicInterestSweep,
+        PgWriteSite::TopicInterestRefit,
+        PgWriteSite::TopicRankingReconcile,
+        PgWriteSite::TopicSuggestionsRefresh,
+        PgWriteSite::StanceMapRun,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::AddMember => "add_member",
+            PgWriteSite::RemoveMember => "remove_member",
+            PgWriteSite::AddEditor => "add_editor",
+            PgWriteSite::RemoveEditor => "remove_editor",
+            PgWriteSite::UpsertRankingBlock => "upsert_ranking_block",
+            PgWriteSite::UpsertRanking => "upsert_ranking",
+            PgWriteSite::SetRankingBlock => "set_ranking_block",
+            PgWriteSite::ReplaceRankingItems => "replace_ranking_items",
+            PgWriteSite::ReplaceRankPositionProjection => "replace_rank_position_projection",
+            PgWriteSite::ReplaceRankingScores => "replace_ranking_scores",
+            PgWriteSite::AccountExclusionsReplace => "account_exclusions_replace",
+            PgWriteSite::AccountWeightsRefresh => "account_weights_refresh",
+            PgWriteSite::AgendaListingsRefresh => "agenda_listings_refresh",
+            PgWriteSite::FeedCompositionRenderedSample => "feed_composition_rendered_sample",
+            PgWriteSite::FeedCompositionWindowSample => "feed_composition_window_sample",
+            PgWriteSite::FeedSignalsApply => "feed_signals_apply",
+            PgWriteSite::FeedSignalsRecord => "feed_signals_record",
+            PgWriteSite::NotInterestedApply => "not_interested_apply",
+            PgWriteSite::PrimerClaimsRefresh => "primer_claims_refresh",
+            PgWriteSite::ClaimOverlapSample => "claim_overlap_sample",
+            PgWriteSite::TopicInterestSweep => "topic_interest_sweep",
+            PgWriteSite::TopicInterestRefit => "topic_interest_refit",
+            PgWriteSite::TopicRankingReconcile => "topic_ranking_reconcile",
+            PgWriteSite::TopicSuggestionsRefresh => "topic_suggestions_refresh",
+            PgWriteSite::StanceMapRun => "stance_map_run",
         }
     }
 }
@@ -62,6 +153,13 @@ pub fn register() {
         USER_INTEREST_SHADOW_MISMATCHES,
         "Rows where the user-interest Rust twin disagreed with the SQL (shadow only, never written)"
     );
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Storage write calls skipped because RANKING_INDEXER_PG_WRITES is off, by site"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
     metrics::counter!(USER_INTEREST_SHADOW_ROWS).absolute(0);
     metrics::counter!(USER_INTEREST_SHADOW_MISMATCHES).absolute(0);
 
@@ -70,6 +168,10 @@ pub fn register() {
         metrics::counter!(MESSAGES_SKIPPED, "topic" => topic.as_str()).absolute(0);
         metrics::counter!(TRANSIENT_RETRIES, "topic" => topic.as_str()).absolute(0);
     }
+}
+
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
 }
 
 pub fn message_processed(topic: Topic) {

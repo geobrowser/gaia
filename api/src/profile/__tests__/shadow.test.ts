@@ -105,13 +105,9 @@ describe("profile shadow", () => {
 		expect(count("batch", "mismatch")).toBe(1)
 	})
 
-	it("is unsupported with no front page entity, an unloaded Space, or two avatars", async () => {
-		const {shadow} = setup({
-			[ENTITY]: [
-				{prop: AVATAR, raw: IMAGE},
-				{prop: AVATAR, raw: "44444444444444444444444444444444"},
-			],
-		})
+	it("is unsupported with no front page entity, an unloaded Space, or too many avatars", async () => {
+		const many = Array.from({length: 9}, (_, i) => ({prop: AVATAR, raw: `${i}`.repeat(32)}))
+		const {shadow} = setup({[ENTITY]: many})
 		shadow.profiles("batch", [served({entityId: null})])
 		shadow.profiles("batch", [served({spaceId: "99999999999999999999999999999999"})])
 		shadow.profiles("batch", [served()])
@@ -120,6 +116,29 @@ describe("profile shadow", () => {
 		expect(renderProfileShadowMetrics()).toContain('reason="no_front_page"} 1')
 		expect(renderProfileShadowMetrics()).toContain('reason="unmapped_space"} 1')
 		expect(renderProfileShadowMetrics()).toContain('reason="ambiguous"} 1')
+	})
+
+	it("matches when the served avatar url is any of several avatars' urls", async () => {
+		const OTHER = "44444444444444444444444444444444"
+		const cards = {
+			[ENTITY]: [
+				{prop: NAME, raw: "Ada"},
+				{prop: AVATAR, raw: IMAGE},
+				{prop: AVATAR, raw: OTHER},
+			],
+			[IMAGE]: [{prop: IMAGE_URL, raw: "https://img/a.png"}],
+			[OTHER]: [{prop: IMAGE_URL, raw: "https://img/b.png"}],
+		}
+		const {shadow} = setup(cards)
+		shadow.profiles("batch", [
+			served(),
+			served({avatarUrl: "https://img/b.png"}),
+			served({avatarUrl: "https://img/c.png"}),
+		])
+		await settle()
+		expect(count("batch", "match")).toBe(2)
+		expect(count("batch", "mismatch")).toBe(1)
+		expect(count("batch", "unsupported")).toBe(0)
 	})
 
 	it("counts a failed geo-db read and never throws", async () => {

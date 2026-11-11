@@ -28,6 +28,18 @@ pub struct Storage {
     /// `Some` when `APP_WEBHOOKS_FILE` is set: url + secret come from the
     /// mounted file instead of the `app_webhooks` table.
     webhooks_file: Option<WebhookFile>,
+    /// `DELIVERY_WORKER_PG_WRITES`, default on. Off: every Postgres write (the claim, the result
+    /// updates and the stale-claim reset) is skipped and counted (cutover switch, plan 10.22).
+    pg_writes: bool,
+}
+
+/// Parse `DELIVERY_WORKER_PG_WRITES`. Unset, empty or anything but an explicit off value means
+/// on, so a typo never silently stops deliveries.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
 }
 
 /// Outcome of resolving a claimed delivery's webhook in file mode.
@@ -59,7 +71,16 @@ impl Storage {
         Self {
             pool,
             webhooks_file: WebhookFile::from_env(),
+            pg_writes: pg_writes_enabled_from(
+                std::env::var("DELIVERY_WORKER_PG_WRITES").ok().as_deref(),
+            ),
         }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
     }
 
     /// Override the webhook source (used by tests).
@@ -109,6 +130,12 @@ impl Storage {
         fields(limit = limit)
     )]
     pub async fn claim_pending(&self, limit: i64) -> Result<Vec<PendingDelivery>, StorageError> {
+        // The claim is an UPDATE ... RETURNING, so it is a write: nothing can be claimed with
+        // Postgres writes off.
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::Claim);
+            return Ok(Vec::new());
+        }
         if let Some(file) = &self.webhooks_file {
             return self.claim_pending_from_file(file, limit).await;
         }
@@ -245,6 +272,10 @@ impl Storage {
     /// Mark a delivery as successfully delivered.
     #[instrument(name = "delivery_worker.storage.mark_delivered", skip(self))]
     pub async fn mark_delivered(&self, delivery_id: Uuid) -> Result<(), StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::MarkDelivered);
+            return Ok(());
+        }
         sqlx::query(
             r#"
             UPDATE notification_deliveries
@@ -271,6 +302,10 @@ impl Storage {
         backoff_secs: i64,
         error_msg: &str,
     ) -> Result<(), StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::MarkRetry);
+            return Ok(());
+        }
         sqlx::query(
             r#"
             UPDATE notification_deliveries
@@ -298,6 +333,10 @@ impl Storage {
         delivery_id: Uuid,
         error_msg: &str,
     ) -> Result<(), StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::MarkFailed);
+            return Ok(());
+        }
         sqlx::query(
             r#"
             UPDATE notification_deliveries
@@ -326,6 +365,10 @@ impl Storage {
         fields(stale_after_secs = stale_after_secs)
     )]
     pub async fn reset_stale_claims(&self, stale_after_secs: i64) -> Result<u64, StorageError> {
+        if !self.pg_writes {
+            crate::metrics::pg_write_skipped(crate::metrics::PgWriteSite::ResetStaleClaims);
+            return Ok(0);
+        }
         let result = sqlx::query(
             r#"
             UPDATE notification_deliveries

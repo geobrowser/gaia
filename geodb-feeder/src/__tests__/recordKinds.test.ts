@@ -115,6 +115,10 @@ describe("record columns", () => {
 				trendingDebateFactor: "7c5c04ba24df4ec2893305a3b351653b",
 				trendingDebateWindowDays: "d39be3a05834407b86782dacdc025f79",
 				trendingHorizonDays: "10bc0fc4779c43a9ba4ee03475f8ea26",
+				trendingPositionBase: "0a93fb6c7722456c8047672803d845be",
+				trendingPositionStep: "f3a7f5dd554e40319ca94dd77c2c2c91",
+				trendingPositionSlots: "8ef101e5e2ff45519677eb8de7208be3",
+				trendingPositionDayFactor: "a68b8359f702468cb0dae2165ce8e417",
 			},
 			forYouConfig: {
 				id: "054f9998f5204c85a2eeadc923fc614c",

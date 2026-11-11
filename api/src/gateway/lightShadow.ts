@@ -44,6 +44,7 @@ import {
 	argsOf,
 	asRecord,
 	type CardCheck,
+	compareDerived,
 	compareDerivedWide,
 	ENTITY_FIELD,
 	ENTITY_TOLERATED_ROOTS,
@@ -72,9 +73,11 @@ import {
 	uuidArg,
 	VALUE_COLUMNS,
 	VALUE_IGNORED,
+	widenCrossSpace,
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 import {checkOrderedPage} from "./orderPickShadow"
+import {checkPropertyInfo, checkRelationsMembership, collectPropertyInfo, type PropertyInfos} from "./propertyInfo"
 import {checkPropertyOrder} from "./propertyOrderShadow"
 import {checkTypeScan} from "./typeScanShadow"
 
@@ -992,6 +995,73 @@ export function analyzeLightEntities(
 	}
 }
 
+/** One `totalCount`-only `entitiesConnection` root lowered to geo-db's count form (see `analyzeCountOnly`). */
+export type CountOnlyRoot = {
+	/** The root's response key (its alias). */
+	key: string
+	/** `spaceId` / `spaceIds`: the Spaces counted in (gaia ids); null counts across every Space. */
+	spaceIds: string[] | null
+	/** The one Type the entities must hold (`typeIds: {overlaps: [T]}`, `typeId` or `typeIds: {in: [T]}`). */
+	typeId: string
+	/** `relations: {some: {typeId, toEntityId}}`: the relation's Type (one) and the targets (any of), or null when no relation is asked. */
+	edge: {typeId: string; targets: string[]} | null
+}
+export type CountOnlyPlan = {roots: CountOnlyRoot[]}
+
+/** Most targets a lowered relation term names: geo-db's bound on an `in` set of a count's `where`. */
+export const MAX_COUNT_ONLY_TARGETS = 4
+/** Most aliased roots one operation lowers (each is one geo-db read). */
+export const MAX_COUNT_ONLY_ROOTS = 8
+
+/**
+ * The `entitiesConnection` roots that ask nothing but `totalCount` (alone, or several aliased: the topic page's counters),
+ * lowered to geo-db's entities count form (`.args = .{ .type, .count = true, .where }`, docs/api/03 "The count form"):
+ * `filter: {and: [{typeIds: {overlaps: [T]}}, {relations: {some: {typeId: {is: R}, toEntityId: {is|in: [..]}}}}]}` becomes the
+ * members of type T whose statements of the Reference property R name one of the targets. A root the form cannot state
+ * (a second type, several relation types, a filter clause that is neither, more than 4 targets, an id list) leaves the
+ * whole operation `count_only`. `first`, `offset`, `after` and `orderBy` do not change a `totalCount`, so they are ignored.
+ */
+export function analyzeCountOnly(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+): LightAnalysis<CountOnlyPlan> {
+	const notLowerable = {ok: false, reason: "count_only"} as const
+	try {
+		const parsed = parseOperation(document, operationName, variables)
+		const roots = parsed.roots.filter((r) => r.name.value !== METAS_FIELD)
+		if (roots.length === 0 || roots.length > MAX_COUNT_ONLY_ROOTS) return notLowerable
+		const lowered: CountOnlyRoot[] = []
+		for (const root of roots) {
+			if (root.name.value !== "entitiesConnection" || !isCountOnly(root, parsed.fragments)) return notLowerable
+			const args = argsOf(root, parsed.variables)
+			for (const arg of Object.keys(args))
+				if (!ENTITIES_ARGS.includes(arg) && arg !== "after") return notLowerable
+			if (args.systemTypeId != null || args.systemTypeIds != null) return notLowerable
+			const sink = new Set<UncomparedReason>()
+			const {claims, ids, exact} = readFilter(args.filter, sink)
+			if (ids !== null || !exact) return notLowerable
+			const spaceIds = readRootArgs(args, claims, sink)
+			const types = claims.filter((c): c is Extract<FilterClaim, {kind: "type"}> => c.kind === "type")
+			const edges = claims.filter((c): c is Extract<FilterClaim, {kind: "edge"}> => c.kind === "edge")
+			const type = types[0]
+			if (types.length !== 1 || type?.typeIds.length !== 1 || edges.length > 1) return notLowerable
+			const edge = edges[0]
+			if (edge && (edge.typeIds.length !== 1 || edge.toEntityIds.length > MAX_COUNT_ONLY_TARGETS))
+				return notLowerable
+			lowered.push({
+				key: responseKeyOf(root),
+				spaceIds,
+				typeId: type.typeIds[0] as string,
+				edge: edge ? {typeId: edge.typeIds[0] as string, targets: edge.toEntityIds} : null,
+			})
+		}
+		return {ok: true, plan: {roots: lowered}}
+	} catch {
+		return notLowerable
+	}
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Comparison
 // ---------------------------------------------------------------------------------------------------------
@@ -1004,6 +1074,12 @@ type LightCard = {
 	relationSpaces: (string | null)[]
 	/** The row spaces of the membership-only relation projections (`allRelationsList { spaceId }`). */
 	projectionSpaces: (string | null)[]
+	/** The projection lists came back at their `first` rows, so they may have been cut. */
+	projectionCut: boolean
+	/** The answer holds an unfiltered `allRelationsList { spaceId }` projection (possibly empty). */
+	hasProjection: boolean
+	/** The property_info objects of the values rows, when a list selected any (`GEODB_PROPERTY_INFO_SHADOW`). */
+	propertyInfo?: PropertyInfos
 	/** Rows of a `typeId`-filtered relations list that selects no type: the Types the filter allowed, the target, the row space. */
 	typeless: {types: string[]; to: string; space: string | null}[]
 	/** Rows of a relations list that selects a type and a target with no id: held when geo-db has a relation of the type. */
@@ -1066,6 +1142,10 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const valueSpaces: (string | null)[] = []
 	const relationSpaces: (string | null)[] = []
 	const projectionSpaces: (string | null)[] = []
+	let projectionCut = false
+	let hasProjection = false
+	const propertyInfo: PropertyInfos = {items: [], incomplete: false}
+	let planned = false
 	const typeless: LightCard["typeless"] = []
 	const typeOnly: LightCard["typeOnly"] = []
 	const targetValues: LightCard["targetValues"] = []
@@ -1074,9 +1154,12 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
 		if (list.projection) {
+			hasProjection = true
 			const nodes = object[list.key]
-			if (Array.isArray(nodes))
+			if (Array.isArray(nodes)) {
 				for (const raw of nodes) projectionSpaces.push(spaceOf(asRecord(raw) ?? {}, list.spaceKey))
+				if (nodes.length >= list.rows.first) projectionCut = true
+			} else projectionCut = true
 			continue
 		}
 		const holder = list.nodesKey ? asRecord(object[list.key]) : object
@@ -1090,11 +1173,14 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				first: list.rows.first,
 				rows: reverseRows,
 			})
+		if (list.kind === "values" && list.rows.propertyInfo) planned = true
 		for (const raw of nodes) {
 			const node = asRecord(raw)
 			if (!node) return null
 			const space = spaceOf(node, list.spaceKey)
 			if (list.kind === "values" && list.propertyFilter) {
+				// The rows name no Property, so there is no Property to hold their metadata to.
+				if (list.rows.propertyInfo) propertyInfo.incomplete = true
 				untypedValues.push({
 					props: list.propertyFilter,
 					row: {
@@ -1112,6 +1198,9 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 			} else if (list.kind === "values") {
 				const propertyId = read(node, list.rows, "propertyId")
 				if (typeof propertyId !== "string") return null
+				if (list.rows.propertyInfo) {
+					collectPropertyInfo(node, propertyId, list.rows.propertyInfo, propertyInfo)
+				}
 				values.push({
 					property_id: propertyId,
 					text: orNull(read(node, list.rows, "text")),
@@ -1201,6 +1290,9 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		valueSpaces,
 		relationSpaces,
 		projectionSpaces,
+		projectionCut,
+		hasProjection,
+		...(planned ? {propertyInfo} : {}),
 		typeless,
 		typeOnly,
 		targetValues,
@@ -1428,7 +1520,24 @@ export async function checkLight(
 		}
 		judged = {...light.card, spaceIds: mapped}
 	}
-	const derived = await compareDerivedWide(deps, plan.card, judged, read.rows, read.scope, label)
+	// A comparison of named Spaces that left `cross_space` is judged again against the card read across every Space the
+	// entity lives in (`GEODB_CROSS_SPACE_HOLDERS_SHADOW`); an every-Space read already covers them. The containment
+	// check above stays on the Spaces asked for.
+	let derivedRows = read.rows
+	let derivedScope = read.scope
+	if (
+		deps.crossSpaceHolders === true &&
+		!every &&
+		compareDerived(plan.card, judged, read.rows, read.scope).uncompared.includes("cross_space")
+	) {
+		const wide = await widenCrossSpace(deps, judged, entityId, label)
+		if (wide) {
+			judged = wide.card
+			derivedRows = wide.rows
+			derivedScope = wide.scope
+		}
+	}
+	const derived = await compareDerivedWide(deps, plan.card, judged, derivedRows, derivedScope, label)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
@@ -1474,9 +1583,36 @@ export async function checkLight(
 	if (every && read.scope.populated.length === 0) uncompared.push("no_statements")
 	// A list that came back cut, or one the plan could not hold both ways, leaves the rows it did not return unchecked.
 	if (reverse.cut) uncompared.push("partial_values")
+	// Reasons this entity's answer settled, so the operation no longer counts them uncompared.
+	const settles: UncomparedReason[] = []
+	let propertyInfoMismatches: Record<string, number> | undefined
+	if (deps.propertyInfo === true && light.propertyInfo) {
+		const verdict = await checkPropertyInfo(deps, light.propertyInfo, label)
+		if (verdict.read) {
+			uncompared.push(...verdict.uncompared)
+			if (verdict.settled) settles.push("property_info")
+			if (Object.keys(verdict.mismatches).length > 0) propertyInfoMismatches = verdict.mismatches
+		}
+	}
+	let membership: Awaited<ReturnType<typeof checkRelationsMembership>> = {read: false}
+	if (deps.relationsMembership === true && light.hasProjection) {
+		membership = await checkRelationsMembership(
+			deps,
+			entityId,
+			{spaces: light.projectionSpaces, cut: light.projectionCut},
+			read.scope.populated,
+			every,
+			async (space) => (every ? ((await deps.geoSpaceOf(space)) ?? null) : space),
+			label,
+		)
+		if (membership.read) settles.push("membership_only")
+	}
+	const badRelations = membership.read && membership.mismatch
+	const badInfo = propertyInfoMismatches !== undefined
 	return {
-		result: bad ? "mismatch" : "match",
+		result: bad || badRelations || badInfo ? "mismatch" : "match",
 		uncompared,
+		settles,
 		detail: {
 			entityId,
 			spaces: read.scope.spaces.length,
@@ -1490,6 +1626,8 @@ export async function checkLight(
 			unmetFilter: unmet.slice(0, 3),
 			notInSpace: outsideSpace,
 			targetsCompared,
+			propertyInfoMismatches,
+			relationsMembership: membership.read ? membership.detail : undefined,
 			geoDbMs: read.ms,
 		},
 	}
@@ -1689,6 +1827,15 @@ export async function runLight(
 	// The scan compared the page's members and their order, so which entities the filter selects is no longer open.
 	if (scan.result === "match") uncompared.delete("filter_completeness")
 	for (const {check} of checks) if (check.result === "match") for (const r of check.uncompared) uncompared.add(r)
+	// A reason every compared entity settled is no longer open. An entity the check could not read leaves it.
+	const matched = checks.filter((c) => c.check.result === "match")
+	for (const reason of ["property_info", "membership_only"] as const)
+		if (
+			uncompared.has(reason) &&
+			matched.length > 0 &&
+			matched.every((c) => c.check.result === "match" && c.check.settles?.includes(reason))
+		)
+			uncompared.delete(reason)
 	for (const r of backlinkUncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}
 }

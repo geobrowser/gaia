@@ -157,7 +157,17 @@ describe("the shadow", () => {
 		expect(renderRankingScoresShadowMetrics()).toBe("")
 		const reader = {get: vi.fn(), close: vi.fn()} as unknown as DerivedReader
 		createRankingScoresShadow({config, db: fakeDb({}, []), reader, log})
-		for (const r of ["match", "mismatch", "absent_ok", "missing", "stale", "unsupported", "failed"])
+		for (const r of [
+			"match",
+			"mismatch",
+			"absent_ok",
+			"missing",
+			"stale",
+			"unsupported",
+			"failed",
+			"reference_timeout",
+			"reference_failed",
+		])
 			expect(count(r)).toBe(0)
 	})
 	it("walks the overlay into Postgres and Postgres into the overlay, counting each result", async () => {
@@ -194,8 +204,28 @@ describe("the shadow", () => {
 		} as unknown as DerivedScanReader
 		const db = {execute: vi.fn().mockRejectedValue(new Error("pg down"))} as unknown as Database
 		await createRankingScoresShadow({config, db, reader, log}).runOnce()
-		expect(count("failed")).toBe(2)
+		// The scan is geo-db's; the Postgres sample read is the reference side's.
+		expect(count("failed")).toBe(1)
+		expect(count("reference_failed")).toBe(1)
 		expect(reader.get).not.toHaveBeenCalled()
+	})
+	it("counts a Postgres statement timeout as reference_timeout, not as a geo-db failure", async () => {
+		const timeout = Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})
+		const reader = {
+			get: vi.fn(),
+			scan: vi.fn(async () => ({
+				rows: [{score: 50.5, keyHex: hex(A), valueHex: overlay([3, 1, 0, 0, 2]).toString("hex")}],
+				more: false,
+			})),
+			close: vi.fn(),
+		} as unknown as DerivedScanReader
+		const db = {execute: vi.fn().mockRejectedValue(timeout)} as unknown as Database
+		await createRankingScoresShadow({config, db, reader, log}).runOnce()
+		// One overlay row's primary-key read and the Postgres sample both hit the timeout.
+		expect(count("reference_timeout")).toBe(2)
+		expect(count("failed")).toBe(0)
+		expect(count("reference_failed")).toBe(0)
+		expect(log.warn).toHaveBeenCalled()
 	})
 	it("does not start a timer when disabled", () => {
 		const reader = {get: vi.fn(), close: vi.fn()} as unknown as DerivedReader
@@ -343,6 +373,22 @@ describe("the default pass", () => {
 			log,
 		}).runOnce()
 		expect(scores).not.toHaveBeenCalled()
-		expect(renderRankingScoresShadowMetrics()).toContain('default_shadow_total{result="failed"} 1')
+		const text = renderRankingScoresShadowMetrics()
+		expect(text).toContain('default_shadow_total{result="reference_failed"} 1')
+		expect(text).toContain('default_shadow_total{result="failed"} 0')
+	})
+	it("counts a Postgres statement timeout on the default pass as reference_timeout", async () => {
+		const timeout = Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})
+		const scores = vi.fn()
+		await createRankingScoresShadow({
+			config,
+			db: {execute: vi.fn().mockRejectedValue(timeout)} as unknown as Database,
+			reader: reader(scores as never),
+			log,
+		}).runOnce()
+		expect(scores).not.toHaveBeenCalled()
+		const text = renderRankingScoresShadowMetrics()
+		expect(text).toContain('default_shadow_total{result="reference_timeout"} 1')
+		expect(text).toContain('default_shadow_total{result="failed"} 0')
 	})
 })

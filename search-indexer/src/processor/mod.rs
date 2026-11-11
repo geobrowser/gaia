@@ -280,7 +280,19 @@ impl Processor {
         let mut processed = Vec::with_capacity(events.len());
 
         let now = std::time::Instant::now();
+        // Every created relation, whatever its type, goes into the relation map. A removal
+        // only carries the relation id, and the retire sweep needs the owner of any
+        // relation, indexed or not, because any outgoing relation keeps a document alive.
+        // Without the mapping the owner has to come from a later read, which a store that
+        // already applied the removal cannot answer.
+        let mut created: Vec<(Uuid, Uuid, Uuid)> = Vec::new();
         for event in events {
+            if let (EntityEventType::CreateRelation, Some(rid), Some(rm)) =
+                (&event.event_type, event.relation_id, &self.relation_map)
+            {
+                rm.remember(rid, event.entity_id, event.space_id);
+                created.push((rid, event.entity_id, event.space_id));
+            }
             if let Some(tracker) = &self.retire {
                 // A relation the local map knows needs no Postgres resolution later.
                 let resolved = match (&event.event_type, event.relation_id, &self.relation_map) {
@@ -292,6 +304,9 @@ impl Processor {
             if let Some(result) = self.process_event(event)? {
                 processed.push(result);
             }
+        }
+        if let Some(rm) = &self.relation_map {
+            rm.insert_many(&created);
         }
 
         // Resolve RemoveRelationById via Postgres lookup when available
@@ -1634,10 +1649,7 @@ impl Processor {
                             );
                         }
 
-                        // Record mapping for future DeleteRelation lookups
-                        if let Some(ref rm) = self.relation_map {
-                            rm.insert(relation_id, event.entity_id, event.space_id);
-                        }
+                        // process_batch records the mapping for every relation type.
 
                         Ok(Some(ProcessedEvent::AddRelation {
                             entity_id: event.entity_id,

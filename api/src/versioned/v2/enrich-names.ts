@@ -21,6 +21,8 @@ export function enrichNames(
 	db: Database,
 	diff: GroupedEntityDiff,
 	spaceId: NormalizedUuid,
+	/** Handed the id to name map the stamping used (GEODB_ENTITY_AT_VERSION_SHADOW reads it); never changes the result. */
+	captureNames?: (names: ReadonlyMap<string, string>) => void,
 ): Effect.Effect<GroupedEntityDiff, QueryError> {
 	return Effect.gen(function* () {
 		const ids = new Set<NormalizedUuid>()
@@ -52,6 +54,7 @@ export function enrichNames(
 		if (ids.size === 0) return diff
 
 		const names = yield* batchGetEntityNames(db, Array.from(ids), spaceId)
+		captureNames?.(names)
 
 		const stampValues = (vals: ValueChange[]): ValueChange[] =>
 			vals.map((v) => ({...v, propertyName: names.get(v.propertyId) ?? null}))

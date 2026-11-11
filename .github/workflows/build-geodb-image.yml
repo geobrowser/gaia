@@ -19,7 +19,7 @@ on:
         description: "geo-db commit to build (full or abbreviated SHA on the `final` branch)"
         required: true
         type: string
-        default: 7d32584825
+        default: 6f47f0fe94
 
 concurrency:
   group: build-geodb-image

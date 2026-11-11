@@ -76,6 +76,7 @@ export function createMetrics() {
 		opsDetail: counter("geodb_feeder_translate_total", "Translator counters (skips, drops, predates-window)."),
 		spaceMapPublish: counter("geodb_feeder_space_map_publish_total", "Space map ConfigMap publishes, by ConfigMap key (space-map.json, system-spaces.json) and result."),
 		offsetGaps: counter("geodb_feeder_offset_gaps_total", "Offsets skipped by the broker (retention or compaction)."),
+		appliedBlockPuts: counter("geodb_feeder_applied_block_puts_total", "Puts of the applied-block row (geodb-feeder-applied in cursors), by result (ok, failed)."),
 		lag: gauge("geodb_feeder_consumer_lag", "Messages between the topic head and the last applied offset, by partition."),
 		lastApplied: gauge("geodb_feeder_last_applied_timestamp_seconds", "Unix time the feeder last finished a message."),
 		lastOffset: gauge("geodb_feeder_last_applied_offset", "Last applied offset, by partition."),

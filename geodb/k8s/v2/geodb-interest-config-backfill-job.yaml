@@ -31,6 +31,7 @@ spec:
   template:
     metadata:
       labels:
+        geodb-client: "true"
         app: geodb-interest-config-backfill
     spec:
       serviceAccountName: geodb

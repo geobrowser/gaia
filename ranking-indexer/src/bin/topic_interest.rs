@@ -19,6 +19,8 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_cooccurrence_compute as cooc;
 use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
 use ranking_indexer::topic_interest::{self, Mode, SweepOutcome};
@@ -32,7 +34,36 @@ async fn main() -> Result<(), IndexerError> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // The sweep skips when busy (every 2 minutes); the nightly refit waits, then fails loudly.
+    let mode: Mode = env::args()
+        .nth(1)
+        .ok_or_else(|| IndexerError::Config("usage: topic_interest sweep|refit".into()))?
+        .parse()?;
+    let wait = if mode == Mode::Refit { 600 } else { 0 };
+    // Job lease (GEODB_JOB_LEASE, default off): if another run holds it, exit 0 without writing.
+    if matches!(
+        ranking_indexer::job_lease::guard(
+            ranking_indexer::job_lease::KEY_USER_TOPIC_INTEREST,
+            wait
+        )
+        .await?,
+        ranking_indexer::job_lease::Guard::Busy
+    ) {
+        if mode == Mode::Refit {
+            // A skipped nightly refit must not pass silently: fail the Job so the alert fires.
+            return Err(IndexerError::Config(
+                "job lease still held after waiting; the nightly refit did not run".into(),
+            ));
+        }
+        info!("job lease held by another run; exiting without writing");
+        return Ok(());
+    }
+    let result = run().await;
+    ranking_indexer::job_lease::finish().await;
+    result
+}
 
+async fn run() -> Result<(), IndexerError> {
     let mode: Mode = env::args()
         .nth(1)
         .ok_or_else(|| IndexerError::Config("usage: topic_interest sweep|refit".into()))?
@@ -52,7 +83,14 @@ async fn main() -> Result<(), IndexerError> {
             // GEODB_DERIVED_MIRROR and GEODB_DERIVED_MIRROR_PRIVATE, default off).
             let mirror = signals_mirror::from_env_private();
             let prior = read_idents(&pool, mirror.as_ref()).await;
-            let outcome = topic_interest::sweep(&pool, None).await?;
+            // Off: the sweep is skipped and counted, so none of the Ran-only steps below fire.
+            let swept = pg_bin_writes::run(
+                PgWriteSite::TopicInterestSweep,
+                topic_interest::sweep(&pool, None),
+            )
+            .await?;
+            let writes_off = swept.is_none();
+            let outcome = swept.unwrap_or(SweepOutcome::Skipped);
             if matches!(outcome, SweepOutcome::Ran(_)) {
                 if let (Some(m), Some(prior)) = (&mirror, prior) {
                     mirror_signals(
@@ -87,6 +125,9 @@ async fn main() -> Result<(), IndexerError> {
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "topic interest swept"
                 ),
+                SweepOutcome::Skipped if writes_off => {
+                    info!("topic interest sweep skipped: RANKING_INDEXER_PG_WRITES is off")
+                }
                 SweepOutcome::Skipped => {
                     info!("topic interest sweep skipped: the nightly refit is running")
                 }
@@ -106,11 +147,17 @@ async fn main() -> Result<(), IndexerError> {
             };
             let signals = signals_mirror::from_env_private();
             let signals_prior = read_idents(&pool, signals.as_ref()).await;
-            let r = topic_interest::refit(&pool, None).await?;
+            // Off: the refit (co-occurrence refresh and the rebuild, one transaction) is skipped and
+            // counted; the mirrors still run against the tables as they stand.
+            let refit = pg_bin_writes::run(
+                PgWriteSite::TopicInterestRefit,
+                topic_interest::refit(&pool, None),
+            )
+            .await?;
             if let (Some(m), Some(prior)) = (&signals, signals_prior) {
                 mirror_signals(&pool, m, &prior, signals_mirror::refit_since()).await;
             }
-            if cooc_rust_enabled() {
+            if refit.is_some() && cooc_rust_enabled() {
                 match cooc_shadow(&pool).await {
                     Ok((0, n)) => info!(rows = n, "co-occurrence rust compute matches the SQL"),
                     Ok((bad, n)) => warn!(
@@ -138,6 +185,10 @@ async fn main() -> Result<(), IndexerError> {
                     Err(e) => warn!(error = %e, "topic co-occurrence mirror skipped: read failed"),
                 }
             }
+            let Some(r) = refit else {
+                info!("topic interest refit skipped: RANKING_INDEXER_PG_WRITES is off");
+                return Ok(());
+            };
             let elapsed_ms = started.elapsed().as_millis() as u64;
             if r.disagreeing_rows > 0 {
                 // Expected occasionally (a claim re-tagged after people voted on it, a deleted

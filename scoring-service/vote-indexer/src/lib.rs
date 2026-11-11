@@ -3,6 +3,7 @@
 //! This crate provides functionality for consuming vote events from Kafka
 //! and indexing them into PostgreSQL.
 
+pub mod batch;
 pub mod consumer;
 pub mod derived_scores;
 pub mod entity_scores_default;
@@ -20,3 +21,6 @@ pub mod scores_snapshot;
 pub mod storage;
 pub mod votes_count_mirror;
 pub mod write_retry;
+
+#[cfg(test)]
+mod pg_writes_off_tests;

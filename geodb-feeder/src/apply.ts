@@ -1,3 +1,4 @@
+import {createHash} from "node:crypto"
 import {type GeoDb, classify} from "./geodb.js"
 import {log} from "./log.js"
 import type {Metrics} from "./metrics.js"
@@ -52,7 +53,34 @@ export function createLock(): <T>(fn: () => Promise<T>) => Promise<T> {
 	}
 }
 
-export type Meta = {edit?: string; space: string; partition: number; offset: string}
+export type Meta = {
+	edit?: string
+	space: string
+	partition: number
+	offset: string
+	/**
+	 * Send each chunk under an idempotency key derived from the message and the chunk's content, so a chunk geo-db
+	 * committed whose progress the feeder never saved (a crash or a lost reply between the two) is answered with the
+	 * first apply's receipt on redelivery instead of becoming a second version. Only the edits consumer sets it.
+	 */
+	idempotent?: boolean
+}
+
+/**
+ * The idempotency key of `slice`, intents `[lo, hi)` of one message: a UUIDv4-shaped hash of the Space, the edit id
+ * (the offset when the message has none), the range and the intents themselves. Content is in the hash so a
+ * redelivery that translates differently gets a new key rather than a refused reuse of an old one.
+ */
+export function chunkKey(meta: Meta, lo: number, hi: number, slice: readonly string[]): string {
+	const h = createHash("sha256")
+		.update(`geodb-feeder:chunk:v1\0${meta.space}\0${meta.edit ?? `${meta.partition}:${meta.offset}`}\0${lo}\0${hi}\0`)
+		.update(slice.join("\0"))
+		.digest()
+		.subarray(0, 16)
+	h[6] = ((h[6] ?? 0) & 0x0f) | 0x40
+	h[8] = ((h[8] ?? 0) & 0x3f) | 0x80
+	return h.toString("hex")
+}
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -79,7 +107,7 @@ export async function applyIntents(
 
 	const range = async (lo: number, hi: number): Promise<void> => {
 		const slice = intents.slice(lo, hi)
-		const outcome = await tryApply(deps, space, slice)
+		const outcome = await tryApply(deps, space, slice, meta.idempotent ? chunkKey(meta, lo, hi, slice) : null)
 		if (outcome === "ok") {
 			applied += slice.length
 			progress(hi)
@@ -107,6 +135,7 @@ async function tryApply(
 	deps: ApplyDeps,
 	space: SpaceRecord & {geo: string},
 	slice: string[],
+	key: string | null,
 ): Promise<"ok" | {error: string}> {
 	const sleep = deps.sleep ?? defaultSleep
 	let delay = 1000
@@ -114,7 +143,7 @@ async function tryApply(
 		if (deps.signal?.aborted) throw new Error("shutting down")
 		const t0 = Date.now()
 		const attempt = async () => {
-			const res = await deps.db.apply(zonDoc(space.geo, space.keyed ? null : space.nonce, slice))
+			const res = await deps.db.apply(zonDoc(space.geo, space.keyed ? key : space.nonce, slice))
 			if (res.rc === 0 && !space.keyed) {
 				space.keyed = true
 				if (deps.saveSpace) deps.saveSpace()

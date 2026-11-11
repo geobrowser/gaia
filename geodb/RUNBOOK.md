@@ -793,8 +793,11 @@ Enable, each step only after the one before it is live:
 
 1. A feeder image that carries this path and a geo-db serve at 9d97069a78 or later (`put`).
 2. Kafka: describe on every feeder group (the Job's empty-group check).
-3. The backfill Job (`geodb/k8s/v2/geodb-entity-feed-config-backfill-job.yaml`), feeder scaled to 0, applied as in
-   §2c-quater step 4. It reads three small tables READ ONLY and is rerunnable.
+3. Count first: `geodb/k8s/v2/geodb-entity-feed-config-count-job.yaml` (the same code with `DRY_RUN=1`; Postgres only, so the
+   feeder can stay up) prints the three row counts and writes nothing. Then the backfill Job
+   (`geodb/k8s/v2/geodb-entity-feed-config-backfill-job.yaml`), feeder scaled to 0, applied as in §2c-quater step 4 (the
+   apply command is in the file's header). It reads three small tables READ ONLY, is paced by `BACKFILL_MAX_ROWS_PER_S`
+   (20), has a one hour `activeDeadlineSeconds` and is rerunnable.
 4. The gate, once per table: `bun src/entityFeedConfigGate.ts <weights|exclusions|blocklist> <postgres.tsv> <dump dir>`
    (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key
    or a value difference.

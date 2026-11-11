@@ -329,7 +329,11 @@ export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerat
 		        trending_day_factor::text AS trending_day_factor,
 		        trending_debate_factor::text AS trending_debate_factor,
 		        trending_debate_window_days::text AS trending_debate_window_days,
-		        trending_horizon_days::text AS trending_horizon_days
+		        trending_horizon_days::text AS trending_horizon_days,
+		        trending_position_base::text AS trending_position_base,
+		        trending_position_step::text AS trending_position_step,
+		        trending_position_slots::text AS trending_position_slots,
+		        trending_position_day_factor::text AS trending_position_day_factor
 		 FROM public.entity_ranking_config WHERE id`,
 		[],
 		60_000,
@@ -406,6 +410,16 @@ export async function* readEntityFeedBlockRows(db: ReadOnlyPg): AsyncGenerator<E
 		[],
 		120_000,
 	)
+}
+
+/** Row counts of the three entity-feed config tables, for the Job's DRY_RUN. Three exact counts, each its own READ ONLY transaction. */
+export async function countEntityFeedConfigRows(db: ReadOnlyPg): Promise<Record<string, number>> {
+	const out: Record<string, number> = {}
+	for (const table of ["entity_type_weights", "entity_type_exclusions", "entity_feed_blocklist"]) {
+		const [r] = await db.read<{n: string}>(`SELECT count(*)::text AS n FROM ${table}`, [], 60_000)
+		out[table] = Number(r?.n ?? 0)
+	}
+	return out
 }
 
 /** Every `space_voting_settings` row (one per Space, a small table), read in one query. The bigints and `updated_at*` come back as text. */

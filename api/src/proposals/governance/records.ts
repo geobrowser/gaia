@@ -28,6 +28,22 @@ export const PROPOSAL_VERSION_COLUMNS = {
 	executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
 } as const
 
+/** A settings escalation (`PROPOSAL_SETTINGS_UPDATED`): an immutable record keyed (proposal, event block). */
+export const PROPOSAL_ESCALATION_KIND = "69352153d76946afa5d926c13c3613e9"
+
+export const PROPOSAL_ESCALATION_COLUMNS = {
+	proposal: "49c19599b0694221841396f0db5f9995",
+	block: "89cbe515c863439dbf2a7686c676c90a",
+	votingMode: "e3f7ba26068849658179f6d443b0a064",
+	startTime: "0c2fcb7931a34133a8a4258ae111f20e",
+	endTime: "31d689b4544b4fcd91af181db291a4d8",
+	quorum: "43a88c623ad243cebadbff37b0e6d567",
+	partial: "4e2cf0e3c88d4b998b9a4932469f702e",
+	universal: "d4124abe7be548548d39f67383669975",
+	flat: "473d72f8ac84495284b3623afef491a0",
+	executeBy: "7ef74c02759c4e658a3a73e18f8f0733",
+} as const
+
 export const PROPOSAL_ACTION_KIND = "22335b74e17a4c9e867d4ac2a32c3a4a"
 
 export const PROPOSAL_ACTION_COLUMNS = {
@@ -181,4 +197,34 @@ export function decodeVoteRecord(rows: GeoCardRow[]): {version: bigint; option: 
 	const version = single(rows, PROPOSAL_VOTE_KEY_COLUMNS.version)
 	if (version === null) throw new AmbiguousRecordError("vote version missing")
 	return {version: wholeNumber(version), option}
+}
+
+/** An escalation record's event block and the settings it set (all eight), or null when the card is empty. Same shape as a version's. */
+export function decodeProposalEscalation(rows: GeoCardRow[]): DecodedVersion | null {
+	if (rows.length === 0) return null
+	const need = (property: string): string => {
+		const v = single(rows, property)
+		if (v === null) throw new AmbiguousRecordError(`escalation column ${property} missing`)
+		return v
+	}
+	const C = PROPOSAL_ESCALATION_COLUMNS
+	const mode = need(C.votingMode)
+	if (mode !== "Fast" && mode !== "Slow") throw new AmbiguousRecordError(`unknown voting mode ${mode}`)
+	const flat = wholeNumber(need(C.flat))
+	const partial = wholeNumber(need(C.partial))
+	const executeBy = single(rows, C.executeBy)
+	return {
+		block: wholeNumber(need(C.block)),
+		snapshot: {
+			votingMode: mode,
+			startTime: wholeNumber(need(C.startTime)),
+			endTime: wholeNumber(need(C.endTime)),
+			quorum: wholeNumber(need(C.quorum)),
+			threshold: mode === "Fast" ? flat : partial,
+			flatSupportThreshold: flat,
+			partialPercentageSupportThreshold: partial,
+			universalPercentageSupportThreshold: wholeNumber(need(C.universal)),
+			executeBy: executeBy === null ? null : wholeNumber(executeBy),
+		},
+	}
 }

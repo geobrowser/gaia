@@ -10,10 +10,13 @@ export const STATEMENT_TIMEOUT_SQLSTATE = "57014"
 /** A failure that came from the Postgres reference side of a shadow, wrapping the original error as `cause`. */
 export class ReferenceSideError extends Error {
 	readonly sqlState: string | undefined
-	constructor(cause: unknown) {
+	/** Which reference query failed, a fixed label from the caller (never an id), or undefined when the caller named none. */
+	readonly step: string | undefined
+	constructor(cause: unknown, step?: string) {
 		super(cause instanceof Error ? cause.message : String(cause), {cause})
 		this.name = "ReferenceSideError"
 		this.sqlState = sqlStateOf(cause)
+		this.step = step
 	}
 }
 
@@ -28,12 +31,12 @@ export function sqlStateOf(error: unknown): string | undefined {
 	return undefined
 }
 
-/** Await a Postgres reference read; any rejection leaves as a ReferenceSideError. */
-export async function viaReference<T>(read: Promise<T>): Promise<T> {
+/** Await a Postgres reference read; any rejection leaves as a ReferenceSideError, tagged with `step` when given. */
+export async function viaReference<T>(read: Promise<T>, step?: string): Promise<T> {
 	try {
 		return await read
 	} catch (error) {
-		throw new ReferenceSideError(error)
+		throw new ReferenceSideError(error, step)
 	}
 }
 

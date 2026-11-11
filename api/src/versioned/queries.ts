@@ -988,3 +988,18 @@ export function batchGetEntityNames(
 		}),
 	)
 }
+
+/**
+ * Whether Postgres holds any live value or outgoing relation of the entity (a row not yet closed by a later version).
+ * The entity-versions shadow asks it when geo-db answers an empty version log: geo-db lists versions only of Spaces that
+ * hold the entity live, so a log of none beside a served history is expected exactly when this is false.
+ */
+export async function entityHasLiveStatements(db: Database, entityId: string): Promise<boolean> {
+	const result = await db.execute<{live: boolean}>(sql`
+		SELECT (
+			EXISTS (SELECT 1 FROM value_versions WHERE entity_id = ${entityId} AND valid_to_key IS NULL)
+			OR EXISTS (SELECT 1 FROM relation_versions WHERE from_entity_id = ${entityId} AND valid_to_key IS NULL)
+		) AS live
+	`)
+	return result.rows[0]?.live === true
+}
