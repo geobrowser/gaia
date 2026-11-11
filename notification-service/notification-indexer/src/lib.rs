@@ -11,6 +11,7 @@ pub mod health;
 pub mod ids;
 pub mod metrics;
 pub mod models;
+pub mod outbox_replay;
 pub mod poll_cursor_mirror;
 pub mod poll_cursor_shadow;
 pub mod storage;

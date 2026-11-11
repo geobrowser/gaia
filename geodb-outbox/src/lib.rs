@@ -174,6 +174,27 @@ impl Config {
     }
 }
 
+/// Enters units one at a time over one held `work pipe`, for a caller that wants each answer
+/// (the replay tool) rather than the mirror's fire-and-forget queue. It goes through the same
+/// [`enter_line`] and the same pipe worker as the live mirror, so a unit entered here carries
+/// the key, event-type byte and payload encoding the mirror gives it, and an enter that finds
+/// the key already held answers [`Entered::Duplicate`] and writes nothing.
+pub struct Enterer {
+    worker: Worker,
+}
+
+impl Enterer {
+    pub fn new(cfg: Config) -> Self {
+        Enterer {
+            worker: Worker::new(cfg),
+        }
+    }
+
+    pub async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
+        self.worker.enter(unit).await
+    }
+}
+
 /// The line `work pipe` reads for `unit`, or why it cannot be sent.
 pub fn enter_line(unit: &Unit) -> Result<String, MirrorError> {
     let key = &unit.ledger_key_hex;
@@ -572,6 +593,19 @@ mod tests {
         let sent = std::fs::read_to_string(&log).unwrap();
         assert_eq!(sent.lines().count(), 2);
         assert!(sent.starts_with(&format!("enter\t{KEY}\t5\thex:")));
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn enterer_sends_the_mirrors_line_and_reports_duplicates() {
+        let log = tmp("enterer");
+        let mut e = Enterer {
+            worker: worker(&script(&log), Duration::ZERO),
+        };
+        assert_eq!(e.enter(&unit()).await.unwrap(), Entered::New);
+        assert_eq!(e.enter(&unit()).await.unwrap(), Entered::Duplicate);
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(sent, enter_line(&unit()).unwrap().repeat(2));
         let _ = std::fs::remove_file(&log);
     }
 

@@ -42,6 +42,8 @@ RUN apt-get update && \
     useradd -r -u 1001 -g root appuser
 
 COPY --from=builder /app/notification-service/notification-indexer/target/release/notification-indexer /usr/local/bin/notification-indexer
+# Operator tool (RUNBOOK section 11): replays outbox rows the geo-db mirror missed.
+COPY --from=builder /app/notification-service/notification-indexer/target/release/outbox-replay /usr/local/bin/outbox-replay
 
 USER 1001
 
