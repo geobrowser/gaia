@@ -1174,9 +1174,11 @@ impl PostgresCheckpointStore {
         pool: &'a PgPool,
     ) -> Result<Transaction<'a, Postgres>, sqlx::Error> {
         let mut tx = pool.begin().await?;
-        sqlx::query(&set_local_statement_timeout_sql(self.statement_timeout_ms))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(set_local_statement_timeout_sql(
+            self.statement_timeout_ms,
+        )))
+        .execute(&mut *tx)
+        .await?;
         Ok(tx)
     }
 

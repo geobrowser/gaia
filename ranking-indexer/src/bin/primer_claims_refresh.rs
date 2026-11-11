@@ -79,9 +79,9 @@ async fn overlap_shadow(pool: &sqlx::PgPool) -> Result<Option<bool>, IndexerErro
     let Some((as_of, min_votes, min_shared, users, pairs, sharing, share, set_id)) = sample else {
         return Ok(None);
     };
-    let claims: Vec<Uuid> = sqlx::query_scalar(&format!(
+    let claims: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT DISTINCT r.from_entity_id FROM public.relations r WHERE {CLAIM_REL}"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     let weights: Vec<(Uuid, f64)> =
@@ -187,9 +187,9 @@ async fn stats_shadow(pool: &sqlx::PgPool) -> Result<(usize, usize, usize), Inde
     let Some(as_of_us) = table.first().map(|r| r.computed_us) else {
         return Ok((0, 0, 0));
     };
-    let claim_spaces: Vec<(Uuid, Uuid)> = sqlx::query_as(&format!(
+    let claim_spaces: Vec<(Uuid, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT r.from_entity_id, r.space_id FROM public.relations r WHERE {CLAIM_REL}"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     let claim_topics: Vec<(Uuid, Uuid)> = sqlx::query_as(
@@ -207,10 +207,10 @@ async fn stats_shadow(pool: &sqlx::PgPool) -> Result<(usize, usize, usize), Inde
     )
     .fetch_all(pool)
     .await?;
-    let ineligible: Vec<Uuid> = sqlx::query_scalar(&format!(
+    let ineligible: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT DISTINCT r.from_entity_id FROM public.relations r WHERE {CLAIM_REL} \
            AND NOT public.entity_topic_ranking_eligible(r.from_entity_id)"
-    ))
+    )))
     .fetch_all(pool)
     .await?;
     let weights: Vec<(Uuid, f64)> =

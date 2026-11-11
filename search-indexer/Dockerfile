@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm as builder
+FROM rust:1.94-bookworm as builder
 
 # Build argument to enable auto_index_creation feature for local development
 # Default is empty (feature disabled) for production safety

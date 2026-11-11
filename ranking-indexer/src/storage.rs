@@ -162,15 +162,17 @@ impl Storage {
     /// the migration must be applied before this indexer version starts.
     pub async fn check_membership_view(&self) -> Result<(), IndexerError> {
         for table in ["ranks.members", "ranks.editors"] {
-            sqlx::query(&format!("SELECT 1 FROM {table} LIMIT 1"))
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    IndexerError::Config(format!(
-                        "{table} not readable — has migration 0062_ranks_members_editors \
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT 1 FROM {table} LIMIT 1"
+            )))
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                IndexerError::Config(format!(
+                    "{table} not readable — has migration 0062_ranks_members_editors \
                          been applied? ({e})"
-                    ))
-                })?;
+                ))
+            })?;
         }
         Ok(())
     }

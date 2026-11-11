@@ -66,10 +66,12 @@ async fn seed_delivery(pool: &PgPool, outbox_id: uuid::Uuid, age_days: i64) {
 }
 
 async fn count(pool: &PgPool, table: &str) -> i64 {
-    let row = sqlx::query(&format!("SELECT count(*) AS c FROM {table}"))
-        .fetch_one(pool)
-        .await
-        .expect("count");
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) AS c FROM {table}"
+    )))
+    .fetch_one(pool)
+    .await
+    .expect("count");
     row.get::<i64, _>("c")
 }
 

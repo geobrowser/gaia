@@ -173,9 +173,11 @@ impl Storage {
         timeout_ms: u64,
     ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query(&set_local_statement_timeout_sql(timeout_ms))
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(sqlx::AssertSqlSafe(set_local_statement_timeout_sql(
+            timeout_ms,
+        )))
+        .execute(&mut *tx)
+        .await?;
         Ok(tx)
     }
 

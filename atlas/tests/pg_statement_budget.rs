@@ -132,8 +132,8 @@ async fn set_local_budget_applies_in_transaction_and_ends_with_it() {
 
     // The statement the store runs at the start of each transaction sets the budget there.
     let mut tx = pool.begin().await.expect("begin");
-    sqlx::query(&atlas::persistence::set_local_statement_timeout_sql(
-        BUDGET_MS as i32,
+    sqlx::query(sqlx::AssertSqlSafe(
+        atlas::persistence::set_local_statement_timeout_sql(BUDGET_MS as i32),
     ))
     .execute(&mut *tx)
     .await
