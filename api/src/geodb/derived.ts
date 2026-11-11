@@ -158,10 +158,11 @@ export type DerivedReader = {
 /** A reader that can also scan; `createDerivedReader` returns one. Kept apart so a get-only fake still types as a `DerivedReader`. */
 export type DerivedScanReader = DerivedReader & {
 	/**
-	 * The first `first` rows (1 to 512) of `group` (hex, up to 32 digits) in `collection`, score descending. One page:
-	 * `more` says the group holds rows past them.
+	 * Up to `pages` pages (default 1, at most `MAX_SCAN_PAGES`) of `first` rows (1 to 512) of `group` (hex, up to 32 digits)
+	 * in `collection`, score descending, the pages joined: the client resumes each at the previous page's cursor.
+	 * `more` says the group holds rows past what was read.
 	 */
-	scan(collection: number, groupHex: string, first: number): Promise<DerivedScan>
+	scan(collection: number, groupHex: string, first: number, pages?: number): Promise<DerivedScan>
 }
 
 /** A reader that can also serve computed score rows (geo-db wire frame revision 11). */
@@ -179,6 +180,8 @@ const defaultSpawn: SpawnPipe = (config) =>
 
 /** The most rows one scan page holds (geo-db `wire_derived.page_max`). */
 export const MAX_SCAN_ROWS = 512
+/** The most pages one `scan` may ask the client to join (its `--pages`): 64 pages of 512 rows, a few MB of answer at most. */
+export const MAX_SCAN_PAGES = 64
 const FRAME = /^([+-])(\d{1,9})$/
 const STDERR_TAIL = 300
 const START_BACKOFF_MS = 1000
@@ -677,20 +680,26 @@ export function createDerivedReader(
 				pump()
 			}).then(parseDerivedGet)
 		},
-		scan(collection, groupHex, first) {
+		scan(collection, groupHex, first, pages = 1) {
 			if (
 				!Number.isInteger(collection) ||
 				collection < 0 ||
 				!/^[0-9a-f]{1,32}$/.test(groupHex) ||
 				!Number.isInteger(first) ||
 				first < 1 ||
-				first > MAX_SCAN_ROWS
+				first > MAX_SCAN_ROWS ||
+				!Number.isInteger(pages) ||
+				pages < 1 ||
+				pages > MAX_SCAN_PAGES
 			)
 				return Promise.reject(
-					new GeoDbError("bad_request", "derived scan wants a collection, a hex group and 1 to 512 rows"),
+					new GeoDbError(
+						"bad_request",
+						`derived scan wants a collection, a hex group, 1 to ${MAX_SCAN_ROWS} rows and 1 to ${MAX_SCAN_PAGES} pages`,
+					),
 				)
 			return new Promise<string>((resolve, reject) => {
-				queue.push({line: `scan\t${collection}\t0x${groupHex}\t${first}\t1`, resolve, reject})
+				queue.push({line: `scan\t${collection}\t0x${groupHex}\t${first}\t${pages}`, resolve, reject})
 				pump()
 			}).then(parseDerivedScan)
 		},

@@ -23,7 +23,7 @@
  *  - absent: geo-db holds no row in the user's group (the mirror is off or has not reached the user), not a disagreement;
  *  - restricted: geo-db refused the scan as `NotFoundOrRestricted`: the key's `derived_read=` grant is not applied;
  *  - unsupported: the twin cannot answer this user exactly (`..._unsupported_total{reason}`: truncated, the group has
- *    more rows than one page of 512; too_many_topics, more than 128 collection 23 scans; config_missing; ambiguous_config;
+ *    more rows than USER_SCAN_PAGES pages of 512; too_many_topics, more than MAX_SPREAD_SCANS collection 23 scans; config_missing; ambiguous_config;
  *    busy, the previous pass still running);
  *  - malformed: a row is not the mirror's shape;
  *  - failed: a geo-db read failed otherwise;
@@ -71,8 +71,16 @@ import {failureResult, viaReference} from "./referenceSide"
 
 /** The seen window the shadow asks for; the route's comes from the request (`seen.days`), a week is its usual. */
 export const SEEN_SAMPLE_DAYS = 7
-/** Collection 23 scans one weights sample may make: one per own topic of positive weight. */
-export const MAX_SPREAD_SCANS = 128
+/**
+ * Collection 23 scans one weights sample may make: one per own topic of positive weight. A pass runs every five minutes
+ * and a scan is one round trip on a held pipe, so a couple of thousand is a few seconds for the heaviest user.
+ */
+export const MAX_SPREAD_SCANS = 2048
+/**
+ * Pages of 512 rows one user's group is read in (collections 28 and 29): 32 pages, 16,384 rows. A user with more is
+ * `truncated`. Postgres has no such limit, so this only bounds what one sampled pass reads.
+ */
+export const USER_SCAN_PAGES = 32
 
 export type PrivateReadersShadowConfig = {enabled: boolean; intervalMs: number; keyPath: string | null}
 
@@ -136,7 +144,7 @@ export function renderPrivateReadersShadowMetrics(): string {
 					`gaia_api_private_readers_shadow_total{reader="${reader}",result="${r}"} ${results.get(`${reader}|${r}`) ?? 0}`,
 			),
 		),
-		"# HELP gaia_api_private_readers_shadow_unsupported_total Why a per-user reader sample was unsupported: truncated (more rows than one scan page), too_many_topics, config_missing, ambiguous_config, busy.",
+		"# HELP gaia_api_private_readers_shadow_unsupported_total Why a per-user reader sample was unsupported: truncated (more rows than the scan pages), too_many_topics, config_missing, ambiguous_config, busy.",
 		"# TYPE gaia_api_private_readers_shadow_unsupported_total counter",
 		...UNSUPPORTED_REASONS.map(
 			(r) => `gaia_api_private_readers_shadow_unsupported_total{reason="${r}"} ${unsupported.get(r) ?? 0}`,
@@ -267,7 +275,7 @@ async function scanRestricted(
 ): Promise<DerivedScan> {
 	let scan: DerivedScan
 	try {
-		scan = await reader.scan(collection, groupHex(userId), MAX_SCAN_ROWS)
+		scan = await reader.scan(collection, groupHex(userId), MAX_SCAN_ROWS, USER_SCAN_PAGES)
 	} catch (error) {
 		if (refusalToken(error) === "NotFoundOrRestricted") throw new Restricted()
 		throw error

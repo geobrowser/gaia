@@ -9,6 +9,7 @@ import {
 	countsRefusal,
 	createDerivedReader,
 	FormGatedError,
+	MAX_SCAN_PAGES,
 	parseDerivedCounts,
 	parseDerivedGet,
 	parseDerivedScan,
@@ -166,8 +167,18 @@ describe("scan", () => {
 		expect(await reader.scan(0, GROUP, 3)).toEqual({rows: [{score: 4, keyHex: KEY, valueHex: ""}], more: true})
 		await reader.close()
 	})
+	it("sends the page count as the last field", async () => {
+		const {reader} = fake(`frame("+", line === "scan\\t0\\t0x${GROUP}\\t512\\t7" ? "4\\t${KEY}\\t\\n" : "bad")`)
+		expect(await reader.scan(0, GROUP, 512, 7)).toEqual({
+			rows: [{score: 4, keyHex: KEY, valueHex: ""}],
+			more: false,
+		})
+		await reader.close()
+	})
 	it("refuses bad arguments without a read", async () => {
 		const {reader, starts} = fake(`frame("+", "")`)
+		await expect(reader.scan(0, GROUP, 3, 0)).rejects.toThrow(GeoDbError)
+		await expect(reader.scan(0, GROUP, 3, MAX_SCAN_PAGES + 1)).rejects.toThrow(GeoDbError)
 		await expect(reader.scan(0, "zz", 3)).rejects.toThrow(GeoDbError)
 		await expect(reader.scan(0, GROUP, 0)).rejects.toThrow(GeoDbError)
 		await expect(reader.scan(0, GROUP, 513)).rejects.toThrow(GeoDbError)

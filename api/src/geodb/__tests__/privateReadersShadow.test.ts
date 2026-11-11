@@ -32,6 +32,7 @@ import {
 	sameWeights,
 	twinSeen,
 	twinWeights,
+	USER_SCAN_PAGES,
 } from "../privateReadersShadow"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -208,6 +209,20 @@ describe("twinWeights", () => {
 		expect(rows[1]).toMatchObject({topKind: "related", relatedViaTopicId: TOPIC_A})
 		expect(rows[1]?.weight).toBeCloseTo(0.5)
 	})
+	it("reads a heavy user's group across pages and a topic with more than 128 spreading topics", async () => {
+		const config = await readTwinConfig(geoDbOf(), systemSpaceOf)
+		// 600 own topics: past one 512-row page and past the old 128-scan cap; the client joins the pages.
+		const topics = Array.from(
+			{length: 600},
+			(_, i) => `00000000-0000-4000-8000-${(i + 1).toString(16).padStart(12, "0")}`,
+		)
+		const rows = topics.map((t) => signalRow(t, "vote", 1))
+		const reader = readerOf({[groupA]: {rows, more: false}})
+		const out = await twinWeights(reader, config, USER, AS_OF)
+		expect(reader.scan).toHaveBeenCalledWith(28, groupHex(USER), 512, USER_SCAN_PAGES)
+		expect(reader.scan).toHaveBeenCalledTimes(1 + 600)
+		expect(out).toHaveLength(config.maxTopics)
+	})
 	it("names restricted, absent, truncated and too many topics", async () => {
 		const config = await readTwinConfig(geoDbOf(), systemSpaceOf)
 		await expect(twinWeights(readerOf({[groupA]: refused()}), config, USER, AS_OF)).rejects.toThrow()
@@ -225,6 +240,11 @@ describe("twinWeights", () => {
 })
 
 describe("twinSeen", () => {
+	it("asks for the same pages", async () => {
+		const reader = readerOf({[`29:${groupHex(USER)}`]: {rows: [seenRow(AS_OF, 1)], more: false}})
+		await twinSeen(reader, USER, new Date(AS_OF.getTime() - 86400000))
+		expect(reader.scan).toHaveBeenCalledWith(29, groupHex(USER), 512, USER_SCAN_PAGES)
+	})
 	it("counts the window and calls a full page inside it truncated", async () => {
 		const since = new Date(AS_OF.getTime() - 86400000)
 		const recent = seenRow(new Date(AS_OF.getTime() - 3600000), 4)
