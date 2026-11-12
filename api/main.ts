@@ -63,6 +63,12 @@ import {
 	readProposalDiffShadowConfig,
 } from "./src/geodb/proposalDiffShadow"
 import {
+	createAppliedBlockFreshness,
+	createRankedReadsServe,
+	readPgHeadBlock,
+	readRankedReadsServeConfig,
+} from "./src/geodb/rankedReadsServe"
+import {
 	createBudgetedPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
@@ -515,6 +521,22 @@ if (bestOrderShadowConfig.enabled) {
 		log,
 	}).start()
 }
+// GEODB_RANKED_READS_SERVE (off by default) lists the ranked reads (typeCounts, bestOrder, entityColumns, trending, feeds) that may answer
+// from geo-db's twin, falling back to Postgres on error, timeout or a geo-db read more than GEODB_RANKED_READS_SERVE_MAX_LAG_BLOCKS behind
+// (gaia_api_ranked_read_serve_total, gaia_api_ranked_read_serve_fallback_total). Nothing is listed unless the flag is set.
+const rankedReadsServeConfig = readRankedReadsServeConfig(process.env)
+createRankedReadsServe({
+	config: rankedReadsServeConfig,
+	freshness:
+		rankedReadsServeConfig.reads.size > 0
+			? createAppliedBlockFreshness({
+					reader: createDerivedReader(geoDbCardConfig),
+					pgHead: () => readPgHeadBlock(db),
+					cacheMs: rankedReadsServeConfig.cacheMs,
+				})
+			: undefined,
+	log,
+})
 // GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
 // timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.
 const keyedRecordsShadowConfig = readKeyedRecordsShadowConfig(process.env)
