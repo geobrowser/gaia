@@ -27,12 +27,15 @@ import {
 	readPrivateReadersShadowConfig,
 	readTwinConfig,
 	renderPrivateReadersShadowMetrics,
+	rowsBucket,
 	sameCounts,
 	sameOwnWeights,
 	sameWeights,
+	spreadBucket,
 	twinSeen,
 	twinWeights,
 	USER_SCAN_PAGES,
+	weightsDifference,
 } from "../privateReadersShadow"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -271,6 +274,31 @@ describe("comparisons", () => {
 	})
 })
 
+describe("weightsDifference", () => {
+	it("names the first thing that differs, and nothing for a match or a boundary tie", () => {
+		expect(weightsDifference([pgRow()], [pgRow()])).toBeNull()
+		expect(weightsDifference([pgRow()], [])).toBe("length")
+		expect(weightsDifference([pgRow()], [pgRow({weight: 2})])).toBe("weight")
+		const three = [
+			pgRow({topicId: TOPIC_A, weight: 3}),
+			pgRow({topicId: TOPIC_B, weight: 2}),
+			pgRow({topicId: OBJECT, weight: 1}),
+		]
+		const swapped = [three[0], pgRow({topicId: ITEM, weight: 2}), three[2]] as TopicWeightRow[]
+		expect(weightsDifference(three, swapped)).toBe("missing_topic")
+		expect(weightsDifference([pgRow()], [pgRow({ownWeight: 0.5})])).toBe("own_weight")
+		expect(weightsDifference([pgRow()], [pgRow({relatedWeight: 0.5})])).toBe("related_weight")
+		expect(weightsDifference([pgRow()], [pgRow({topKind: "comment"})])).toBe("top_kind")
+		expect(weightsDifference([pgRow()], [pgRow({topKindCount: 4})])).toBe("top_kind_count")
+		expect(weightsDifference([pgRow()], [pgRow({topObjectId: ITEM})])).toBe("top_object")
+		expect(weightsDifference([pgRow()], [pgRow({relatedViaTopicId: ITEM})])).toBe("related_via")
+	})
+	it("buckets sizes", () => {
+		expect([0, 512, 513, 20000].map(rowsBucket)).toEqual(["le_0", "le_512", "le_2048", "gt_16384"])
+		expect([0, 128, 129, 2049, 9000].map(spreadBucket)).toEqual(["le_0", "le_128", "le_512", "le_4096", "gt_8192"])
+	})
+})
+
 describe("createPrivateReadersShadow", () => {
 	const db = {} as Database
 	const log = {warn: vi.fn()}
@@ -324,6 +352,58 @@ describe("createPrivateReadersShadow", () => {
 		expect(metric("seen", "mismatch")).toBe(1)
 		const logged = JSON.stringify(log.warn.mock.calls)
 		for (const secret of [USER, ITEM, TOPIC_A, "5"]) expect(logged).not.toContain(secret)
+	})
+	it("labels a mismatch by field, size and recheck, and logs nothing of the user", async () => {
+		log.warn.mockClear()
+		// Postgres says weight 3 where the twin reads 2, every time: it persists.
+		await shadow(live(), reference({weights: async () => [pgRow({weight: 3, ownWeight: 3})]})).runOnce()
+		const text = renderPrivateReadersShadowMetrics()
+		expect(text).toContain(
+			'gaia_api_private_readers_shadow_mismatch_total{reader="weights",field="weight",rows="le_512",spread="le_0",duplicates="false",recheck="persists"} 1',
+		)
+		expect(text).toContain('reader="own_weights",field="weight"')
+		expect(text).toContain('gaia_api_private_readers_shadow_spread_total{bucket="le_0"} 1')
+		// A difference that is gone on the second read (a lag) is cleared.
+		__resetPrivateReadersShadowMetricsForTests()
+		let calls = 0
+		await shadow(
+			live(),
+			reference({
+				weights: async () => [pgRow(calls++ === 0 ? {weight: 3, ownWeight: 3} : {weight: 2, ownWeight: 2})],
+			}),
+		).runOnce()
+		expect(renderPrivateReadersShadowMetrics()).toContain('recheck="cleared"')
+		const logged = JSON.stringify(log.warn.mock.calls)
+		for (const secret of [USER, TOPIC_A, OBJECT]) expect(logged).not.toContain(secret)
+	})
+	it("flags a scan that returned a (topic, kind) twice", async () => {
+		const dup = readerOf({
+			[`28:${groupHex(USER)}`]: {
+				rows: [signalRow(TOPIC_A, "vote", 1), signalRow(TOPIC_A, "vote", 1)],
+				more: false,
+			},
+			[`29:${groupHex(USER)}`]: {rows: [seenRow(new Date(AS_OF.getTime() - 3600000), 4)], more: false},
+		})
+		await shadow(dup, reference({weights: async () => [pgRow({weight: 1, ownWeight: 1})]})).runOnce()
+		expect(renderPrivateReadersShadowMetrics()).toContain('duplicates="true"')
+	})
+	it("counts a too-many-topics user in the spread histogram", async () => {
+		const many = Array.from({length: MAX_SPREAD_SCANS + 1}, (_, i) =>
+			signalRow(`00000000-0000-4000-8000-${(i + 1).toString(16).padStart(12, "0")}`, "vote", 1),
+		)
+		const withSpread = createPrivateReadersShadow({
+			config: {enabled: true, intervalMs: 1000, keyPath: "/k"},
+			db,
+			reader: readerOf({[`28:${groupHex(USER)}`]: {rows: many, more: false}}),
+			geoDb: geoDbOf(),
+			systemSpaceOf,
+			log,
+			reference: reference(),
+			now: () => AS_OF,
+		})
+		await withSpread.runOnce()
+		expect(reasonMetric("too_many_topics")).toBe(1)
+		expect(renderPrivateReadersShadowMetrics()).toContain('spread_total{bucket="le_4096"} 1')
 	})
 	it("counts restricted and absent apart", async () => {
 		await shadow(readerOf({[`28:${groupHex(USER)}`]: refused(), [`29:${groupHex(USER)}`]: refused()})).runOnce()
