@@ -58,7 +58,7 @@ pub fn claim_source_from(value: Option<&str>) -> ClaimSource {
 }
 
 /// In geo-db claim mode the webhook url and secret come from the mounted `app-webhooks` file and
-/// nowhere else (plan 22, section 28): the unit carries only the webhook id, and a fallback to
+/// nowhere else (plan 22, section 30): the unit carries only the webhook id, and a fallback to
 /// the `app_webhooks` table would keep a Postgres read the cutover is meant to remove. `Err`
 /// names what is missing, so the worker stops at startup instead of failing every unit later.
 pub fn require_webhooks_file(source: ClaimSource, file_in_use: bool) -> Result<(), &'static str> {
