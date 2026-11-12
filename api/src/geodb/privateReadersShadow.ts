@@ -29,6 +29,14 @@
  *  - failed: a geo-db read failed otherwise;
  *  - reference_timeout / reference_failed: the Postgres side (referenceSide.ts).
  *
+ * `gaia_api_private_readers_shadow_mismatch_total{reader, field, rows, spread, duplicates, recheck}` says what kind of user
+ * and what kind of difference a mismatch was, as labels only: `field` the first thing that differs, `rows` and `spread` the
+ * size buckets of the user's group and of its spreading topics, `duplicates` whether one scan returned a (topic, kind) twice
+ * (a write landed between pages), `recheck` whether the same user, read again at once, still differs (`persists`), no
+ * longer does (`cleared`: a lag or a torn read, not arithmetic) or could not be read (`failed`).
+ * `gaia_api_private_readers_shadow_spread_total{bucket}` counts every sampled weights pass by its spreading-topic count,
+ * so the `too_many_topics` cap can be judged against how many topics users have.
+ *
  * Privacy: these are per-user rows. Nothing here logs or exports a user id, topic, item or value: logs and metrics carry
  * counts and labels only, and a pass reads one sampled user's group and nothing else of collection 28 or 29.
  */
@@ -82,6 +90,18 @@ export const MAX_SPREAD_SCANS = 2048
  */
 export const USER_SCAN_PAGES = 32
 
+/** What one weights pass saw of its user, for a mismatch's labels: sizes only, never an id. */
+export type TwinShape = {rows: number; spreading: number; duplicates: boolean}
+
+const bucketOf = (n: number, edges: readonly number[]): string => {
+	for (const e of edges) if (n <= e) return `le_${e}`
+	return `gt_${edges[edges.length - 1]}`
+}
+export const ROWS_BUCKETS = [0, 512, 2048, 16384] as const
+export const SPREAD_BUCKETS = [0, 128, 512, 2048, 4096, 8192] as const
+export const rowsBucket = (n: number): string => bucketOf(n, ROWS_BUCKETS)
+export const spreadBucket = (n: number): string => bucketOf(n, SPREAD_BUCKETS)
+
 export type PrivateReadersShadowConfig = {enabled: boolean; intervalMs: number; keyPath: string | null}
 
 export function readPrivateReadersShadowConfig(env: Record<string, string | undefined>): PrivateReadersShadowConfig {
@@ -128,6 +148,8 @@ class Restricted extends Error {}
 let active = false
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
+const mismatches = new Map<string, number>()
+const spreads = new Map<string, number>()
 const bump = (map: Map<string, number>, key: string): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
@@ -149,6 +171,16 @@ export function renderPrivateReadersShadowMetrics(): string {
 		...UNSUPPORTED_REASONS.map(
 			(r) => `gaia_api_private_readers_shadow_unsupported_total{reason="${r}"} ${unsupported.get(r) ?? 0}`,
 		),
+		"# HELP gaia_api_private_readers_shadow_mismatch_total A mismatch by the first field that differs, the size buckets of the user's group (rows) and spreading topics (spread), whether one scan returned a row twice (duplicates) and whether the same user still differs when read again at once (recheck: persists, cleared, failed). Labels only, series appear as they occur.",
+		"# TYPE gaia_api_private_readers_shadow_mismatch_total counter",
+		...[...mismatches]
+			.sort()
+			.map(([labels, n]) => `gaia_api_private_readers_shadow_mismatch_total{${labels}} ${n}`),
+		"# HELP gaia_api_private_readers_shadow_spread_total Sampled weights passes by the number of own topics that spread (the collection 23 scans a pass needs), including those past MAX_SPREAD_SCANS.",
+		"# TYPE gaia_api_private_readers_shadow_spread_total counter",
+		...[...spreads]
+			.sort()
+			.map(([bucket, n]) => `gaia_api_private_readers_shadow_spread_total{bucket="${bucket}"} ${n}`),
 	].join("\n")
 }
 
@@ -156,34 +188,52 @@ export function __resetPrivateReadersShadowMetricsForTests(): void {
 	active = false
 	results.clear()
 	unsupported.clear()
+	mismatches.clear()
+	spreads.clear()
 }
 
 // ---- comparisons (pure) ---------------------------------------------------------------------------------------------------
 
-/** Same rows in the same order, values within `close`; a tie at the top-N boundary may change which topic is last. */
-export function sameWeights(postgres: TopicWeightRow[], twin: TopicWeightRow[]): boolean {
-	if (postgres.length !== twin.length) return false
+/** What first differs between Postgres' weights list and the twin's: a label, never a value. */
+export const WEIGHT_DIFFERENCES = [
+	"length",
+	"weight",
+	"missing_topic",
+	"own_weight",
+	"related_weight",
+	"top_kind",
+	"top_kind_count",
+	"top_object",
+	"related_via",
+] as const
+export type WeightsDifference = (typeof WEIGHT_DIFFERENCES)[number]
+
+/** Null when the lists match: the same rows in the same order, values within `close`; a boundary tie may change which topic is last. */
+export function weightsDifference(postgres: TopicWeightRow[], twin: TopicWeightRow[]): WeightsDifference | null {
+	if (postgres.length !== twin.length) return "length"
 	for (let i = 0; i < postgres.length; i++)
-		if (!close((postgres[i] as TopicWeightRow).weight, (twin[i] as TopicWeightRow).weight)) return false
+		if (!close((postgres[i] as TopicWeightRow).weight, (twin[i] as TopicWeightRow).weight)) return "weight"
 	const byTopic = new Map(twin.map((r) => [r.topicId, r]))
 	const boundary = postgres[postgres.length - 1]?.weight
 	for (const p of postgres) {
 		const t = byTopic.get(p.topicId)
 		if (!t) {
 			if (boundary !== undefined && close(p.weight, boundary)) continue
-			return false
+			return "missing_topic"
 		}
-		if (
-			!close(p.ownWeight, t.ownWeight) ||
-			!close(p.relatedWeight, t.relatedWeight) ||
-			p.topKind !== t.topKind ||
-			p.topKindCount !== t.topKindCount ||
-			p.topObjectId !== t.topObjectId ||
-			p.relatedViaTopicId !== t.relatedViaTopicId
-		)
-			return false
+		if (!close(p.ownWeight, t.ownWeight)) return "own_weight"
+		if (!close(p.relatedWeight, t.relatedWeight)) return "related_weight"
+		if (p.topKind !== t.topKind) return "top_kind"
+		if (p.topKindCount !== t.topKindCount) return "top_kind_count"
+		if (p.topObjectId !== t.topObjectId) return "top_object"
+		if (p.relatedViaTopicId !== t.relatedViaTopicId) return "related_via"
 	}
-	return true
+	return null
+}
+
+/** Same rows in the same order, values within `close`; a tie at the top-N boundary may change which topic is last. */
+export function sameWeights(postgres: TopicWeightRow[], twin: TopicWeightRow[]): boolean {
+	return weightsDifference(postgres, twin) === null
 }
 
 export function sameOwnWeights(
@@ -323,11 +373,15 @@ export async function twinWeights(
 	config: TwinConfig,
 	userId: string,
 	asOf: Date,
+	shape?: TwinShape,
 ): Promise<TopicWeightRow[]> {
 	const scan = await scanRestricted(reader, USER_TOPIC_SIGNALS_COLLECTION, userId)
+	if (shape) shape.rows = scan.rows.length
 	if (scan.more) throw new Unsupported("truncated")
 	const signals = decodeSignals(userId, scan.rows)
+	if (shape) shape.duplicates = new Set(signals.map((s) => `${s.topicId}|${s.kind}`)).size !== signals.length
 	const spreading = spreadingTopics(ownContributions(signals, config.interest, config.weights, asOf), config.interest)
+	if (shape) shape.spreading = spreading.length
 	if (spreading.length > MAX_SPREAD_SCANS) throw new Unsupported("too_many_topics")
 	const neighbours = new Map<string, Neighbour[]>()
 	for (const topicId of spreading) {
@@ -402,7 +456,29 @@ export function createPrivateReadersShadow(deps: {
 			warn("private readers shadow failed", {readers, result: outcome.result})
 	}
 
+	const ownMatches = (postgres: TopicWeightRow[], twin: TopicWeightRow[]): boolean =>
+		sameOwnWeights(
+			postgres.filter((r) => r.ownWeight > 0).map((r) => ({topicId: r.topicId, weight: r.ownWeight})),
+			ownTopicWeights(twin),
+		)
+
+	/** The same user read again at once: does it still differ? (A lag or a torn read does not.) */
+	async function recheck(userId: string): Promise<"persists" | "cleared" | "failed"> {
+		try {
+			const at = now()
+			const twinConfig = await readTwinConfig(geoDb, systemSpaceOf)
+			const [postgres, twin] = await Promise.all([
+				viaReference(reference.weights(db, userId, at)),
+				twinWeights(reader, twinConfig, userId, at),
+			])
+			return sameWeights(postgres, twin) && ownMatches(postgres, twin) ? "cleared" : "persists"
+		} catch {
+			return "failed"
+		}
+	}
+
 	async function weightsSample(): Promise<void> {
+		const shape: TwinShape = {rows: 0, spreading: 0, duplicates: false}
 		try {
 			const userId = await viaReference(reference.sampleSignalsUser(db))
 			if (!userId) return
@@ -410,14 +486,23 @@ export function createPrivateReadersShadow(deps: {
 			const twinConfig = await readTwinConfig(geoDb, systemSpaceOf)
 			const [postgres, twin] = await Promise.all([
 				viaReference(reference.weights(db, userId, asOf)),
-				twinWeights(reader, twinConfig, userId, asOf),
+				twinWeights(reader, twinConfig, userId, asOf, shape),
 			])
-			count(["weights"], {result: sameWeights(postgres, twin) ? "match" : "mismatch"})
-			const pgOwn = postgres
-				.filter((r) => r.ownWeight > 0)
-				.map((r) => ({topicId: r.topicId, weight: r.ownWeight}))
-			count(["own_weights"], {result: sameOwnWeights(pgOwn, ownTopicWeights(twin)) ? "match" : "mismatch"})
+			bump(spreads, spreadBucket(shape.spreading))
+			const difference = weightsDifference(postgres, twin)
+			const ownSame = ownMatches(postgres, twin)
+			count(["weights"], {result: difference === null ? "match" : "mismatch"})
+			count(["own_weights"], {result: ownSame ? "match" : "mismatch"})
+			if (difference !== null || !ownSame) {
+				const again = await recheck(userId)
+				const labels = (reader: Reader, field: string) =>
+					`reader="${reader}",field="${field}",rows="${rowsBucket(shape.rows)}",spread="${spreadBucket(shape.spreading)}",duplicates="${shape.duplicates}",recheck="${again}"`
+				if (difference !== null) bump(mismatches, labels("weights", difference))
+				if (!ownSame) bump(mismatches, labels("own_weights", difference ?? "own_list"))
+			}
 		} catch (error) {
+			if (error instanceof Unsupported && error.reason === "too_many_topics")
+				bump(spreads, spreadBucket(shape.spreading))
 			count(["weights", "own_weights"], classify(error))
 		}
 	}

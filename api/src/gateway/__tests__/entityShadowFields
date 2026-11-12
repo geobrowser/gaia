@@ -1,0 +1,598 @@
+[
+  {
+    "name": "analyzeSearchOperation > accepts search and searchConnection with a space",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > accepts a search without a space, as unscoped",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses a filter",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses an offset",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses a similarity threshold",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses no id selected",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses a directive",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses a query geo-db cannot take, and a bad space",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "analyzeSearchOperation > refuses the connection without nodes { id }, aliases twice, and another root",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "ranking metrics > buckets",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "ranking metrics > measures overlap of PostGraphile's top ten in geo-db's top ten and top twenty",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "extractRankedIds > reads a list and a connection in rank order, conformed, distinct",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > records overlap and counts for a compared search, and asks geo-db for the query in the mapped space",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > compares a connection through nodes",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > counts an empty side without an overlap figure",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > asks geo-db once over every mapped Space for a search without a space",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > counts an unscoped search unsupported (no_space) when the space map is empty",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > asks for every Space (not a list) when the space map holds more than 1024",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > counts an unscoped search unsupported (many_spaces) over more than 4096 Spaces, and does not search",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > counts failed when geo-db errors or the space is not loaded, and logs",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > skips an answer that is not a search result",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "search shadow > runs off the response path through the gateway and never changes the response",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "geo-db search client > parses hits in order, each entity once, ignoring partial lines",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "geo-db search client > runs one search verb with the space, mode and limit, and refuses unusable input",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "geo-db search client > sends one search with a --space per Space, each once, and bounds the list",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "geo-db search client > sends --space '*' for an every-Space search, bounded at 4096",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "geo-db search client > refuses past the concurrency cap instead of queueing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > holds Claim and the default excluded types in geo-db's id space",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > drops entities with an excluded Type, keeps order and the limit, and keeps a card without a Type",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > reads no cards for an empty answer (readCards refuses an empty id list)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > reads the Spaces in lines of at most 1024",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > asks for 60 hits, filters them, and compares the filtered list",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > counts a failed card read as its own result, not failed, and skips the comparison",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "type exclusion > counts a refused Space list as unavailable, and a missing reader as unavailable (compares unfiltered)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word fallback > splits a query into distinct searchable words",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word fallback > searches each word when the whole query finds too little, appending after the whole query's hits",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word fallback > stops at the limit and skips the words once the whole query fills it",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word fallback > does not search a single word twice",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word fallback > lets a failed word search fail the read",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > makes one call, and the old path's answer always begins with it",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > returns the same hits in the same order when the engine's own page is full, or the query is one word",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > matches the old path on a serve with the word leg for queries whose words are all 3+ code points",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > differs only for a word under three code points, which the engine does not search alone",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > loses the per-word hits on a serve without the word leg, so the flag needs the newer serve",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > keeps the per-word spawns for bm25, which has no word leg",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "word leg owned by geo-db (wordLeg: engine) > one spawn per shadowed search through the shadow, and a failure is counted by reason",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/gateway/__tests__/searchShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > is flag-off by default and exports nothing until mounted",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > reads the statement budget, defaulting to 5 minutes and capped at 10",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > times each source call into the stage metric",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > timedSource records elapsed seconds and tags a thrown error with its stage, once",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > runs each Postgres call in its own read-only transaction that sets the budget first",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > counts a match for each read when twin and Postgres agree",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > counts a mismatch, without logging an id, when one row differs",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > counts every read failed when the rows cannot be loaded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > sameRows requires equal length and order",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > samples something non-trivial",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > counts a match for each feed and primer read when twin and Postgres agree",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > counts a mismatch for the read that differs and no other",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > counts the feed reads failed when their rows cannot be loaded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > names the stage that failed in the failure log",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > draws the random voter point in the process, not per row in Postgres",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "ranked reads shadow > feed and primer reads > exports zero series for the feed reads when no feeds source is configured",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/geodb/__tests__/rankedReadsShadow.test.ts"
+  },
+  {
+    "name": "operatorPredicate > isNull: false → merge with v.text IS NOT NULL",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > isNull: true → standalone NOT EXISTS (… v.text IS NOT NULL)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > equalTo / is → merge with v.text = $val",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > isNot / notEqualTo → merge with v.text <> $val (NULL implicitly excluded)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > isInsensitive / equalToInsensitive → merge with lower(v.text) = lower($val)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > in → merge with v.text = ANY(...)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > comparison ops → merge with v.text <op> $val",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > includes / startsWith / endsWith → merge with LIKE/ILIKE",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notIn → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notIncludes → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notIncludesInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notStartsWith → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notStartsWithInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notEndsWith → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notEndsWithInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notLike → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notLikeInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > isNotInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > notEqualToInsensitive → merge with \"v.text IS NOT NULL AND NOT (...)\" so name-less entities are excluded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > unknown operator → null (caller delegates to default resolver)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "operatorPredicate > uses the per-field property ID (description vs name) — not relevant for inner preds, but property hits buildMergedExists",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > single positive op → exactly one EXISTS containing the predicate",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > two positive ops merge into ONE EXISTS so the same row must satisfy both (P2 fix)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > classic isNull:false + isNot:'' → ONE EXISTS with both predicates",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > positive + negative ops merge into ONE EXISTS (same row must satisfy both)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > isNull:true alone → standalone NOT EXISTS, no merged EXISTS",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > isNull:true + positive op → AND of standalone NOT EXISTS + merged EXISTS",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — multi-operator merging (P2 fix) > returns null for null / non-object / empty input",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — fallback to default resolver > delegates unknown operators to the default resolver, AND-joins with fast-path ops",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — fallback to default resolver > falls through entirely to default when every op is unknown",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "EntityComputedTextFilterPlugin (wiring) > wraps connectionFilterRegisterResolver and substitutes for EntityFilter.name / .description",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "EntityComputedTextFilterPlugin (wiring) > no-ops when connection-filter plugin not loaded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "EntityComputedTextFilterPlugin (wiring) > no-ops when pgSql missing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "EntityComputedTextFilterPlugin (wiring) > does not substitute on filter types other than EntityFilter",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for includes (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for includesInsensitive (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for like (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for likeInsensitive (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for startsWith (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for startsWithInsensitive (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for endsWith (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for endsWithInsensitive (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for notIncludes (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for notLike (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for notStartsWith (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > logs warn for notEndsWith (signaling caller should use /search)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > does NOT warn for equality / existence ops (typeahead-style is fine)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > warns once per search-like op in a mixed bag, not for the equality op",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > uses the GraphQL field name (description vs name) in the log",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "buildResolver — search-like operator warn > truncates very long values in the log to keep payload bounded",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('isNull') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('isNull') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('is') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('equalTo') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('isNot') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notEqualTo') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('isInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('equalToInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('isNotInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notEqualToInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('in') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notIn') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('lessThan') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('lessThanOrEqualTo') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('greaterThan') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('greaterThanOrEqualTo') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('includes') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('includesInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('startsWith') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('startsWithInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('endsWith') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('endsWithInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('like') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('likeInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notIncludes') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notIncludesInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notStartsWith') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notStartsWithInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notEndsWith') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notEndsWithInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notLike') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > operatorPredicate('notLikeInsensitive') compiles via real pg-sql2 without throwing",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > buildResolver — single op compiles",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > buildResolver — multi-op merge compiles (regression: sql.join string-separator)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > buildResolver — standalone + merged compiles (top-level join also uses string separator)",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > buildResolver — many-op merge (5 predicates) compiles",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  },
+  {
+    "name": "entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration) > buildResolver — fallback fragment (from default resolver) composes with merged EXISTS",
+    "file": "/Users/poreilly/code/gaia-wt-so/api/src/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
+  }
+]

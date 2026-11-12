@@ -56,6 +56,10 @@ path = "src/bin/primer_claims_refresh.rs"
 
 # geo-chat -> gaia "Not interested" sync into topic interest, every 2 minutes (GEO-3088, migration 0105).
 [[bin]]
+name = "user_topic_signals_reconcile"
+path = "src/bin/user_topic_signals_reconcile.rs"
+
+[[bin]]
 name = "not_interested_sync"
 path = "src/bin/not_interested_sync.rs"
 
