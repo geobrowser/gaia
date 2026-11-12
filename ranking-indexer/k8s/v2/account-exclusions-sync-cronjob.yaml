@@ -144,9 +144,6 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
-                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
-                - name: RANKING_INDEXER_PG_WRITES
-                  value: "1"
                 # Copy account_exclusions into geo-db derived collection 12 after the replace commits (RUNBOOK
                 # section 2f-exclusions), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR

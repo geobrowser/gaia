@@ -62,7 +62,7 @@ export type GovernanceSampler = {
 export function createGovernanceSampler(deps: {
 	config: GovernanceSamplerConfig
 	db: NodePgDatabase<Record<string, unknown>>
-	shadow: Pick<GovernanceShadow, "detail" | "list">
+	shadow: GovernanceShadow
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
 	random?: () => string
 }): GovernanceSampler {

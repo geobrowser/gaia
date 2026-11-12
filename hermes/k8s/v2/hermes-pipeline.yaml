@@ -129,9 +129,6 @@ spec:
               mountPath: /etc/geodb/key
               readOnly: true
           env:
-            # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
-            - name: HERMES_PIPELINE_PG_WRITES
-              value: "1"
             # Object-store home for the Postgres blob tables (zero-Postgres, plan 10.22 section 6). Every flag is
             # "0": nothing reads or writes the bucket until one is flipped to "1". Credentials come only from the
             # geodb-blob-key Secret (optional, so a pod starts without it while the flags are off).
@@ -177,9 +174,9 @@ spec:
             # Shadow read of the IPFS warmer's meta block (hermes_ipfs_cache) from geo-db's cursors collection
             # (10), counted in geodb_meta_block_shadow_total. Postgres stays the source. Reads with the cursor
             # key above (GEODB_KEY_PATH, derived=10); collection 10 is not restricted, so any authenticated key
-            # may read it. "1" = on (Postgres stays the source); "0" is the rollback.
+            # may read it. "0" = off; flipping it to "1" is a separate decision.
             - name: GEODB_META_BLOCK_SHADOW
-              value: "1"
+              value: "0"
             # Where the warmer's block is read from: "postgres" (default) or "geodb" (geo-db's cursor copy; no
             # Postgres read; needs GEODB_META_BLOCK_SHADOW "1" and the key paths above). Compare first with the
             # shadow on; flip to "geodb" before IPFS_CACHE_PG_WRITES goes to 0.

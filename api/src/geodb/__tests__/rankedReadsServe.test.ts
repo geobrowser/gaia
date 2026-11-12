@@ -445,6 +445,17 @@ describe("bestOrder", () => {
 		expect(servedBy("bestOrder", "geodb")).toBe(1)
 	})
 
+	it("ranks only the ids with a score row, so an unscored entity stays after them in the caller's order", async () => {
+		// geo-db serves a default row (here a high 9) for an entity with no entity_ranking_scores row; the scored port keeps it out.
+		const ports = scoresPorts(
+			{[A]: 1, [B]: 9, [C]: 5},
+			{scored: async (ids) => new Set(ids.filter((id) => id !== B))},
+		)
+		const scores = vi.spyOn(ports.reader, "scores")
+		expect(await serveBestOrder(ports, [B, A, C])).toEqual([C, A, B])
+		expect(scores.mock.calls[0]?.[1]).toHaveLength(2)
+	})
+
 	it("falls back to Postgres on a failed scores read, a missing config and a short reply", async () => {
 		const serve = serveOf(["bestOrder"])
 		const ask = (ports: ScoresPorts) =>

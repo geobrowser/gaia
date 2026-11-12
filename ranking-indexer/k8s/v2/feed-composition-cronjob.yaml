@@ -137,9 +137,6 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
-                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
-                - name: RANKING_INDEXER_PG_WRITES
-                  value: "1"
                 # Copy the recent feed composition samples into geo-db derived collection 25 after the run (RUNBOOK
                 # section 2f-composition), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR

@@ -137,9 +137,6 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
-                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
-                - name: RANKING_INDEXER_PG_WRITES
-                  value: "1"
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL
@@ -171,9 +168,9 @@ spec:
                   value: "0"
                 - name: RUST_LOG
                   value: "topic_interest=info,ranking_indexer=info,geodb_cursor=info"
-                # Shadow of the Rust twin of the interest compute: read-only, counts only. On ("0" is the rollback).
+                # Shadow of the Rust twin of the interest compute: read-only, counts only. Off.
                 - name: USER_INTEREST_RUST_SHADOW
-                  value: "1"
+                  value: "0"
               resources:
                 requests:
                   memory: "64Mi"
@@ -322,9 +319,6 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
-                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
-                - name: RANKING_INDEXER_PG_WRITES
-                  value: "1"
                 # Copy topic_cooccurrence into geo-db derived collection 23 after the refit commits (RUNBOOK
                 # section 2f-cooccurrence), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
