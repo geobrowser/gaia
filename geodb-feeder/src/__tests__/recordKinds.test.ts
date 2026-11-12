@@ -31,6 +31,7 @@ describe("record kinds", () => {
 			entityTypeWeight: ["96a0897a18d240db9ce98df56649e1a6", "config"],
 			entityTypeExclusion: ["b3d4c18e3754433c95d3e31f628dca75", "config"],
 			entityFeedBlock: ["1f351a8ff80c4a8c9c6c01b830d60a6f", "config"],
+			editMeta: ["cc660587787041049babf9da7f029485", "governance"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -53,6 +54,12 @@ describe("record columns", () => {
 			},
 			entityTypeExclusion: {typeId: "83cd54ae27b34a8688c3b3bc54d7d59c", note: "9c9d13fbf7e04b26bc2e841f227f3a10"},
 			entityFeedBlock: {entityId: "e545438c24c54980a9aad2dedb9ff465", reason: "7c07f1706dbc44e3a654fd6e8c08f883"},
+			editMeta: {
+				editId: "6f0f639e8505469fa4b789751a4e5c43",
+				block: "27bd10d8489e4299a244afdfcbf079ed",
+				sequence: "991fc3cc35a34d1393bbbecb613672cb",
+				name: "7f65c9f311f346a984cb125e7d9db946",
+			},
 			feedExperimentMember: {
 				experiment: "5478f85923d94274a98d6fbdb527e5f5",
 				user: "07d8f8c9c7884c039ae0ae4fc8f18f4c",
