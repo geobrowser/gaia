@@ -1,0 +1,41 @@
+name: env flags are in a manifest
+
+# An unset flag reads as its code default, and an unset *_PG_WRITES reads as on. scripts/check-env-flags.py
+# fails when code reads a GEODB_*, *_PG_WRITES, *_SOURCE, *_SERVE or DELIVERY_WORKER_CLAIM_* name that is in no
+# v2 manifest and not in ci/env-flags-allowlist.txt. The fixture test proves it fails on an unlisted flag.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.py'
+      - '**/v2/*.yaml'
+      - '**/v2/*.yml'
+      - 'ci/env-flags-allowlist.txt'
+      - 'scripts/check-env-flags.py'
+      - 'scripts/test-check-env-flags.sh'
+      - '.github/workflows/env-flags.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.py'
+      - '**/v2/*.yaml'
+      - '**/v2/*.yml'
+      - 'ci/env-flags-allowlist.txt'
+      - 'scripts/check-env-flags.py'
+      - 'scripts/test-check-env-flags.sh'
+      - '.github/workflows/env-flags.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash scripts/test-check-env-flags.sh
+      - run: python3 scripts/check-env-flags.py .
