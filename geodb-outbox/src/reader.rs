@@ -8,13 +8,17 @@
 //! the ledger key (32 bytes) then the webhook id (16). `complete` is not epoch-fenced (a stale
 //! epoch still completes), so an acknowledgement after a lease lapsed is harmless.
 
-use crate::{Config, MirrorError, PAYLOAD_MAX, Worker};
+use crate::{Config, ENTER_ANSWER_MAX, MirrorError, PAYLOAD_MAX, Worker};
 
 /// The longest delivery key: 32 ledger bytes and a 16 byte webhook id.
 pub const KEY_BYTES: usize = 48;
 
 /// The most units one claim asks for. A row is at most `2 * PAYLOAD_MAX` hex digits and a head.
 pub const CLAIM_MAX: u16 = 16;
+
+/// The longest acknowledgement body: a `-code=<Token> ...` refusal can run to the enter answer's
+/// bound, so an ack is held to the same one.
+const ACK_ANSWER_MAX: usize = ENTER_ANSWER_MAX;
 
 const ROW_MAX: usize = 2 * KEY_BYTES + 2 * PAYLOAD_MAX + 64;
 
@@ -183,7 +187,7 @@ impl OutboxReader {
     pub async fn complete(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
         let body = self
             .worker
-            .call_replaying(&complete_line(&c.key, c.epoch), 64)
+            .call_replaying(&complete_line(&c.key, c.epoch), ACK_ANSWER_MAX)
             .await?;
         parse_ack(&body)
     }
@@ -193,7 +197,7 @@ impl OutboxReader {
     pub async fn retry(&mut self, c: &Claimed, delay_ms: u64) -> Result<Ack, MirrorError> {
         let body = self
             .worker
-            .call_replaying(&retry_line(&c.key, c.epoch, delay_ms), 64)
+            .call_replaying(&retry_line(&c.key, c.epoch, delay_ms), ACK_ANSWER_MAX)
             .await?;
         parse_ack(&body)
     }
@@ -203,7 +207,7 @@ impl OutboxReader {
     pub async fn fail(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
         let body = self
             .worker
-            .call_replaying(&fail_line(&c.key, c.epoch), 64)
+            .call_replaying(&fail_line(&c.key, c.epoch), ACK_ANSWER_MAX)
             .await?;
         parse_ack(&body)
     }
@@ -351,6 +355,24 @@ mod tests {
         };
         assert_eq!(r.retry(&c, 30_000).await.unwrap(), Ack::Ok);
         assert_eq!(r.fail(&c).await.unwrap(), Ack::LeaseLost);
+    }
+
+    #[tokio::test]
+    async fn a_long_coded_refusal_of_an_ack_is_a_refusal_and_keeps_the_child() {
+        let body = format!("code=Busy {}", "y".repeat(200));
+        let mut r = reader(&format!(
+            "echo ready; while IFS= read -r a; do printf -- '-{}\\n%s' '{body}'; done",
+            body.len()
+        ));
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 1,
+            payload: Vec::new(),
+        };
+        for _ in 0..2 {
+            assert!(matches!(r.complete(&c).await, Err(MirrorError::Refused(_))));
+        }
     }
 
     #[tokio::test]
