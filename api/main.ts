@@ -705,6 +705,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							orderPick: geoDbCardConfig.orderPick === true,
 							typeScan: geoDbCardConfig.typeScan === true,
 							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+							relationFacets: geoDbCardConfig.relationFacets === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {
 										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
@@ -740,6 +741,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 										derivedFields: geoDbCardConfig.derivedFields === true,
 										orderPick: geoDbCardConfig.orderPick === true,
 										relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+										relationFacets: geoDbCardConfig.relationFacets === true,
 										...(geoDbCardConfig.everySpaceReads === true &&
 										geoDbCardConfig.everySpaceEntities === true
 											? {

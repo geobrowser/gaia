@@ -171,7 +171,7 @@ async function main(config: Config): Promise<void> {
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
-				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
+				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, facets: config.relationFacets, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
 				let outcome: string
 				for (;;) {
 					try {
