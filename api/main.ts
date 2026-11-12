@@ -47,11 +47,7 @@ import {
 	createEntityFeedConfigShadow,
 	readEntityFeedConfigShadowConfig,
 } from "./src/geodb/entityFeedConfigShadow"
-import {
-	createEditMetaShadow,
-	type EditMetaShadow,
-	readEditMetaShadowConfig,
-} from "./src/geodb/editMetaShadow"
+import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {
 	createEntityVersionsShadow,
 	type EntityVersionsShadow,
