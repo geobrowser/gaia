@@ -5,14 +5,16 @@
 //! ```text
 //! outbox-replay --from <rfc3339> --to <rfc3339> [--apply] [--batch N] [--rate N] [--max-units N]
 //! ```
-//! `--to` is exclusive. Postgres is opened read-only.
+//! `--to` is exclusive. Postgres is opened read-only. A dry run asks geo-db which of the window's
+//! keys it already holds with the read-only `has` verb when the geodb client and node have it, and
+//! otherwise reports `present unknown`.
 
 use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
 use notification_indexer::outbox_replay::{
-    interval_for, read_only_pool, run, Options, PgSource, BATCH_DEFAULT, BATCH_MAX, RATE_DEFAULT,
-    RATE_MAX,
+    interval_for, read_only_pool, run, Options, PgSource, Probe, BATCH_DEFAULT, BATCH_MAX,
+    RATE_DEFAULT, RATE_MAX,
 };
 
 struct Args {
@@ -91,17 +93,14 @@ async fn main() -> ExitCode {
         eprintln!("outbox-replay: DATABASE_URL is not set");
         return ExitCode::from(2);
     };
-    let mut enterer = None;
-    if args.apply {
-        match geodb_outbox::Config::from_env() {
-            Some(cfg) => enterer = Some(geodb_outbox::Enterer::new(cfg)),
-            None => {
-                eprintln!(
-                    "outbox-replay: --apply needs GEODB_OUTBOX_MIRROR=1, GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
-                );
-                return ExitCode::from(2);
-            }
-        }
+    // An apply needs the geo-db connection. A dry run uses it only for the read-only `has` probe,
+    // so without it the dry run still works and says `present unknown`.
+    let mut enterer = geodb_outbox::Config::from_env().map(geodb_outbox::Enterer::new);
+    if args.apply && enterer.is_none() {
+        eprintln!(
+            "outbox-replay: --apply needs GEODB_OUTBOX_MIRROR=1, GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
+        );
+        return ExitCode::from(2);
     }
     let pool = match read_only_pool(&url).await {
         Ok(p) => p,
@@ -155,8 +154,16 @@ fn print_report(r: &notification_indexer::outbox_replay::Report, apply: bool) {
     if apply {
         println!("present     {} (geo-db already held the key)", r.present);
         println!("entered     {}", r.entered);
+    } else if r.probe == Probe::Used {
+        println!("present     {} (geo-db already holds the key)", r.held);
+        println!("missing     {} (an apply enters these)", r.missing);
+        println!("would-enter {} (the missing ones)", r.missing);
     } else {
-        println!("present     unknown (a dry run never touches geo-db; --apply reports it)");
+        let why = match &r.probe {
+            Probe::Unavailable(why) => format!("the has probe is unavailable: {why}"),
+            _ => "nothing to probe".to_string(),
+        };
+        println!("present     unknown ({why}; --apply reports it)");
         println!(
             "would-enter {} (at most; an apply skips the ones geo-db holds)",
             r.would_enter
@@ -167,7 +174,7 @@ fn print_report(r: &notification_indexer::outbox_replay::Report, apply: bool) {
     }
 }
 
-/// A dry run never calls its sink.
+/// A dry run with no geo-db connection: it never enters, and `has` is its default, unsupported.
 struct NoSink;
 impl notification_indexer::outbox_replay::Sink for NoSink {
     async fn enter(

@@ -9,10 +9,11 @@
 //!
 //! Idempotence is geo-db's. An enter is put-if-absent on the ledger key, so a unit the mirror
 //! already entered (or a previous replay did) is answered `duplicate` and writes nothing. Running the
-//! same window twice therefore enters nothing the second time. geo-db has no read-only per-key probe
-//! (its only reads are `claim`, which leases and so disturbs the delivery-side shadow, and `counts`),
-//! so "present" is learned from the enter's own answer and a dry run, which never touches geo-db,
-//! cannot report it.
+//! same window twice therefore enters nothing the second time. An apply learns "present" from the
+//! enter's own answer. A dry run writes nothing, but where the geodb client in the image has the
+//! read-only `has` verb it asks geo-db which of the window's keys it already holds (`has` never
+//! leases, counts or writes, unlike `claim`) and reports present and missing. Where the client or
+//! the node predates `has` the dry run says "present unknown", as before.
 //!
 //! The source and the sink are traits so the loop is tested against fixtures with no Postgres and no
 //! geo-db.
@@ -21,7 +22,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use geodb_outbox::{enter_line, Entered, Enterer, MirrorError, Unit};
+use geodb_outbox::{enter_line, Entered, Enterer, MirrorError, Unit, HAS_MAX};
 use uuid::Uuid;
 
 /// One outbox row as read from Postgres.
@@ -134,11 +135,24 @@ pub trait Sink {
         &mut self,
         unit: &Unit,
     ) -> impl std::future::Future<Output = Result<Entered, MirrorError>>;
+
+    /// Which of `keys` (at most [`HAS_MAX`]) the store holds, without writing: the read-only
+    /// probe a dry run uses. A sink with no probe answers [`MirrorError::Unsupported`].
+    fn has(
+        &mut self,
+        _keys: &[String],
+    ) -> impl std::future::Future<Output = Result<Vec<bool>, MirrorError>> {
+        async { Err(MirrorError::Unsupported("no geo-db connection".into())) }
+    }
 }
 
 impl Sink for Enterer {
     async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
         Enterer::enter(self, unit).await
+    }
+
+    async fn has(&mut self, keys: &[String]) -> Result<Vec<bool>, MirrorError> {
+        Enterer::has(self, keys).await
     }
 }
 
@@ -172,13 +186,31 @@ pub struct Report {
     pub entered: u64,
     /// Apply only: enters answered `duplicate`, the units already present.
     pub present: u64,
+    /// Dry run only: how the `has` probe went. `Unused` in an apply.
+    pub probe: Probe,
+    /// Dry run with the probe in use: encodable rows whose key geo-db already holds.
+    pub held: u64,
+    /// Dry run with the probe in use: encodable rows geo-db does not hold, what an apply enters.
+    pub missing: u64,
     /// The last row handled, to resume a stopped run from.
     pub last: Option<Cursor>,
 }
 
+/// Whether a dry run could ask geo-db which keys it holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Probe {
+    /// Not asked yet (an apply, or a window with nothing encodable).
+    #[default]
+    Unused,
+    /// Every encodable row was checked: `held` and `missing` are exact as of the read.
+    Used,
+    /// The client or node has no `has` (or none is configured), so present is unknown.
+    Unavailable(String),
+}
+
 #[derive(Debug)]
 pub struct Stopped {
-    pub report: Report,
+    pub report: Box<Report>,
     pub reason: String,
 }
 
@@ -199,12 +231,13 @@ pub async fn run<S: RowSource, K: Sink>(
             None => opts.batch,
         };
         let rows = source.page(after, want).await.map_err(|e| Stopped {
-            report: rep.clone(),
+            report: Box::new(rep.clone()),
             reason: format!("postgres: {e}"),
         })?;
         if rows.is_empty() {
             break;
         }
+        let mut sendable: Vec<Unit> = Vec::new();
         for row in &rows {
             rep.scanned += 1;
             after = Some((row.created_at, row.id));
@@ -215,25 +248,60 @@ pub async fn run<S: RowSource, K: Sink>(
                 continue;
             }
             rep.would_enter += 1;
-            if !opts.apply {
-                continue;
+            if opts.apply || !matches!(rep.probe, Probe::Unavailable(_)) {
+                sendable.push(unit);
             }
-            match sink.enter(&unit).await {
-                Ok(Entered::New) => rep.entered += 1,
-                Ok(Entered::Duplicate) => rep.present += 1,
-                Err(e) => {
-                    return Err(Stopped {
-                        report: rep,
-                        reason: format!("geo-db enter of {}: {e}", unit.ledger_key_hex),
-                    })
+        }
+        if opts.apply {
+            for unit in &sendable {
+                match sink.enter(unit).await {
+                    Ok(Entered::New) => rep.entered += 1,
+                    Ok(Entered::Duplicate) => rep.present += 1,
+                    Err(e) => {
+                        return Err(Stopped {
+                            report: Box::new(rep),
+                            reason: format!("geo-db enter of {}: {e}", unit.ledger_key_hex),
+                        })
+                    }
+                }
+                if !opts.interval.is_zero() {
+                    tokio::time::sleep(opts.interval).await;
                 }
             }
-            if !opts.interval.is_zero() {
-                tokio::time::sleep(opts.interval).await;
+        } else {
+            if let Err(reason) = probe_page(sink, &sendable, &mut rep).await {
+                return Err(Stopped {
+                    report: Box::new(rep),
+                    reason,
+                });
             }
         }
     }
     Ok(rep)
+}
+
+/// A dry run's read-only look at which of a page's encodable units geo-db holds. The first call
+/// decides whether the probe exists: an unsupported client or node turns it off for the rest of
+/// the run (the counts then stay at "unknown" rather than half-filled). Any other failure, or an
+/// unsupported answer after the probe was working, stops the run with the report so far.
+async fn probe_page<K: Sink>(sink: &mut K, units: &[Unit], rep: &mut Report) -> Result<(), String> {
+    for chunk in units.chunks(HAS_MAX) {
+        let keys: Vec<String> = chunk.iter().map(|u| u.ledger_key_hex.clone()).collect();
+        match sink.has(&keys).await {
+            Ok(flags) => {
+                rep.probe = Probe::Used;
+                let held = flags.iter().filter(|h| **h).count() as u64;
+                rep.held += held;
+                rep.missing += flags.len() as u64 - held;
+            }
+            Err(MirrorError::Unsupported(why)) if rep.probe == Probe::Unused => {
+                rep.probe = Probe::Unavailable(why);
+                return Ok(());
+            }
+            Err(e) => return Err(format!("geo-db has: {e}")),
+        }
+    }
+    Ok(())
 }
 
 /// The enter interval for `rate` units a second, clamped to `1..=RATE_MAX`.
@@ -296,6 +364,29 @@ mod tests {
         }
     }
 
+    /// A store whose `has` is the read-only probe: it never writes and counts its calls. `probe`
+    /// off answers `Unsupported`, as a client or node without the verb does.
+    #[derive(Default)]
+    struct Probing {
+        store: Store,
+        probe: bool,
+        has_calls: u64,
+        keys_asked: Vec<usize>,
+    }
+    impl Sink for Probing {
+        async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
+            self.store.enter(unit).await
+        }
+        async fn has(&mut self, keys: &[String]) -> Result<Vec<bool>, MirrorError> {
+            self.has_calls += 1;
+            self.keys_asked.push(keys.len());
+            if !self.probe {
+                return Err(MirrorError::Unsupported("want enter|note|...".into()));
+            }
+            Ok(keys.iter().map(|k| self.store.held.contains(k)).collect())
+        }
+    }
+
     fn opts(apply: bool) -> Options {
         Options {
             batch: 2,
@@ -318,6 +409,109 @@ mod tests {
         assert_eq!((rep.scanned, rep.would_enter), (5, 5));
         assert_eq!((rep.entered, rep.present), (0, 0));
         assert_eq!(store.calls, 0);
+    }
+
+    #[tokio::test]
+    async fn dry_run_with_the_probe_reports_present_and_missing_and_writes_nothing() {
+        let all = rows(5);
+        let mut sink = Probing {
+            probe: true,
+            ..Probing::default()
+        };
+        for r in &all[..2] {
+            sink.store.held.insert(r.idempotency_key.clone());
+        }
+        let rep = run(&mut Rows(all), &mut sink, &opts(false)).await.unwrap();
+        assert_eq!(rep.probe, Probe::Used);
+        assert_eq!((rep.scanned, rep.held, rep.missing), (5, 2, 3));
+        // The dry run is read-only: nothing was entered, and a rerun over the same window agrees.
+        assert_eq!((sink.store.calls, sink.store.writes), (0, 0));
+        assert_eq!(sink.store.held.len(), 2);
+        assert_eq!((rep.entered, rep.present), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn the_probe_is_batched_per_page_and_skips_unencodable_rows() {
+        let mut all = rows(3);
+        all.push(row(4, "not_a_type"));
+        let mut sink = Probing {
+            probe: true,
+            ..Probing::default()
+        };
+        // pages of 2 rows: [1, 2] then [3, bad]
+        let rep = run(&mut Rows(all), &mut sink, &opts(false)).await.unwrap();
+        assert_eq!(sink.keys_asked, vec![2, 1]);
+        assert_eq!((rep.unencodable, rep.held, rep.missing), (1, 0, 3));
+    }
+
+    #[tokio::test]
+    async fn a_page_over_the_has_bound_is_split() {
+        let mut o = opts(false);
+        o.batch = HAS_MAX + 10;
+        let mut sink = Probing {
+            probe: true,
+            ..Probing::default()
+        };
+        let rep = run(&mut Rows(rows(HAS_MAX as u32 + 10)), &mut sink, &o)
+            .await
+            .unwrap();
+        assert_eq!(sink.keys_asked, vec![HAS_MAX, 10]);
+        assert_eq!(rep.missing, HAS_MAX as u64 + 10);
+    }
+
+    #[tokio::test]
+    async fn a_client_without_has_falls_back_to_present_unknown_and_asks_once() {
+        let mut sink = Probing::default();
+        let rep = run(&mut Rows(rows(5)), &mut sink, &opts(false))
+            .await
+            .unwrap();
+        assert!(matches!(rep.probe, Probe::Unavailable(_)));
+        // Today's output: counted, present unknown, and no half-filled held/missing figures.
+        assert_eq!((rep.scanned, rep.would_enter), (5, 5));
+        assert_eq!((rep.held, rep.missing), (0, 0));
+        assert_eq!(sink.has_calls, 1);
+        assert_eq!(sink.store.calls, 0);
+    }
+
+    #[tokio::test]
+    async fn a_sink_with_no_probe_at_all_is_the_same_fallback() {
+        // `Store` leaves `has` at the trait default, as the no-connection dry run does.
+        let mut store = Store::default();
+        let rep = run(&mut Rows(rows(3)), &mut store, &opts(false))
+            .await
+            .unwrap();
+        assert!(matches!(rep.probe, Probe::Unavailable(_)));
+        assert_eq!(rep.would_enter, 3);
+    }
+
+    #[tokio::test]
+    async fn a_real_refusal_of_has_stops_the_dry_run() {
+        struct Denied;
+        impl Sink for Denied {
+            async fn enter(&mut self, _: &Unit) -> Result<Entered, MirrorError> {
+                unreachable!()
+            }
+            async fn has(&mut self, _: &[String]) -> Result<Vec<bool>, MirrorError> {
+                Err(MirrorError::Refused("NotFoundOrRestricted".into()))
+            }
+        }
+        let stopped = run(&mut Rows(rows(3)), &mut Denied, &opts(false))
+            .await
+            .unwrap_err();
+        assert!(stopped.reason.contains("geo-db has"));
+    }
+
+    #[tokio::test]
+    async fn an_apply_never_probes() {
+        let mut sink = Probing {
+            probe: true,
+            ..Probing::default()
+        };
+        let rep = run(&mut Rows(rows(4)), &mut sink, &opts(true))
+            .await
+            .unwrap();
+        assert_eq!(sink.has_calls, 0);
+        assert_eq!((rep.entered, rep.probe), (4, Probe::Unused));
     }
 
     #[tokio::test]

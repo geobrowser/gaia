@@ -43,6 +43,34 @@ pub struct EntitySpaceLookup {
     applied_block_shadow: Option<Arc<MetaBlockShadow>>,
 }
 
+/// Longest the timer's Postgres read of one Space may take.
+const TIMER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The `(entity, space)` pairs Postgres holds for one Space, as `entities_for_spaces` reads them,
+/// but bounded: `None` when the Space holds more than the shadow's scan cap
+/// ([`crate::geodb_shadow::MAX_SCAN_ENTITIES`]), since the comparison would skip it as too large
+/// anyway, and the read is cut off after [`TIMER_READ_TIMEOUT`].
+async fn bounded_space_pairs(
+    pool: &PgPool,
+    space: Uuid,
+) -> Result<Option<Vec<(Uuid, Uuid)>>, String> {
+    let cap = crate::geodb_shadow::MAX_SCAN_ENTITIES as i64;
+    let read = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT entity_id FROM values WHERE space_id = $1 LIMIT $2",
+    )
+    .bind(space)
+    .bind(cap + 1)
+    .fetch_all(pool);
+    let entities = tokio::time::timeout(TIMER_READ_TIMEOUT, read)
+        .await
+        .map_err(|_| format!("timed out after {TIMER_READ_TIMEOUT:?}"))?
+        .map_err(|e| e.to_string())?;
+    if entities.len() as i64 > cap {
+        return Ok(None);
+    }
+    Ok(Some(entities.into_iter().map(|e| (e, space)).collect()))
+}
+
 /// The `cursors` row (collection 10) the geodb-feeder writes the chain block it has applied to.
 /// See plan 10.22 section 19.
 pub const FEEDER_APPLIED_ID: &str = "geodb-feeder-applied";
@@ -122,9 +150,25 @@ impl EntitySpaceLookup {
                     max_connections = max_connections,
                     "Connected to Postgres for score lookups"
                 );
+                let shadow = GeoDbShadow::from_env();
+                if let Some(shadow) = &shadow {
+                    match GeoDbShadow::timer_interval(|k| env::var(k).ok()) {
+                        Ok(Some(every)) => {
+                            let pool = pool.clone();
+                            shadow.spawn_timer(every, move |space| {
+                                let pool = pool.clone();
+                                async move { bounded_space_pairs(&pool, space).await }
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!(error = %e, "geo-db shadow timer is misconfigured; running without it")
+                        }
+                    }
+                }
                 Some(Self {
                     pool,
-                    shadow: GeoDbShadow::from_env(),
+                    shadow,
                     applied_block_shadow: MetaBlockShadow::from_env().map(Arc::new),
                 })
             }

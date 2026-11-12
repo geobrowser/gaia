@@ -31,6 +31,7 @@ export type HeldRepairOptions = {
 	pauseMs: number
 	exclude: ReadonlySet<string>
 	positions?: boolean
+	facets?: boolean
 	/** Stop after this many entities this run (0: no limit). */
 	maxEntities: number
 	dryRun: boolean
@@ -204,7 +205,7 @@ export async function runHeldRepair(deps: HeldRepairDeps, opts: HeldRepairOption
 				ops.push(...r.ops)
 			}
 			if (!opts.dryRun) {
-				const {intents, stats: tstats} = translateOps(ops, overlay, {positions: opts.positions})
+				const {intents, stats: tstats} = translateOps(ops, overlay, {positions: opts.positions, facets: opts.facets})
 				const result = await applyIntents(
 					applyDeps,
 					geoSpace,
