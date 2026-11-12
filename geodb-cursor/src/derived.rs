@@ -232,20 +232,36 @@ impl DerivedMirror {
     /// As [`put`](Self::put), and returns how many rows the node acknowledged. A one-shot backfill
     /// uses it to tell a short send (dead pipe, cooldown, budget, an unencodable row) from a full one.
     pub async fn put_counted(&self, table: &str, rows: &[DerivedRow]) -> usize {
+        let units: Vec<&[DerivedRow]> = rows.chunks(1).collect();
+        self.put_units(table, &units).await
+    }
+
+    /// As [`put_counted`](Self::put_counted) for rows that belong together: each unit (a count's
+    /// row of one collection and its row of another, say) goes into one request, and a request
+    /// boundary, the time budget and a refused request never fall inside one. Needs
+    /// `GEODB_DERIVED_BATCH` for a unit of two rows or more to be one log frame in geo-db; with
+    /// batch off every row is its own frame and a unit is only kept together by the chunking.
+    /// A unit larger than the batch size is still sent whole. Returns the rows acknowledged.
+    pub async fn put_units(&self, table: &str, units: &[&[DerivedRow]]) -> usize {
         if self.filtered(table) {
             return 0;
         }
-        let mut lines = Vec::with_capacity(rows.len());
-        for r in rows {
-            match r.put_line() {
-                Ok(l) => lines.push(l),
-                Err(e) => self.skipped(table, &e),
+        let total: usize = units.iter().map(|u| u.len()).sum();
+        let mut lines = Vec::with_capacity(total);
+        let mut ends = Vec::with_capacity(units.len());
+        for unit in units {
+            for r in *unit {
+                match r.put_line() {
+                    Ok(l) => lines.push(l),
+                    Err(e) => self.skipped(table, &e),
+                }
             }
+            ends.push(lines.len());
         }
-        let sent = self.send(table, &lines).await;
+        let sent = self.send(table, &lines, &ends).await;
         metrics::counter!("geodb_derived_mirror_puts_total", "table" => table.to_string())
             .increment(sent as u64);
-        self.report("put", table, rows.len(), sent);
+        self.report("put", table, total, sent);
         sent
     }
 
@@ -289,7 +305,8 @@ impl DerivedMirror {
                 Err(e) => self.skipped(table, &e),
             }
         }
-        let sent = self.send(table, &lines).await;
+        let ends: Vec<usize> = (1..=lines.len()).collect();
+        let sent = self.send(table, &lines, &ends).await;
         metrics::counter!("geodb_derived_mirror_deletes_total", "table" => table.to_string())
             .increment(sent as u64);
         self.report("delete", table, keys.len(), sent);
@@ -302,12 +319,21 @@ impl DerivedMirror {
     }
 
     /// Sends `lines` in chunks while the budget holds; returns how many were answered `+`.
-    async fn send(&self, table: &str, lines: &[String]) -> usize {
+    /// `ends` are the cumulative ends of the units `lines` falls into (non-decreasing, the last
+    /// `lines.len()`): a chunk takes whole units, as many as fit the size, and at least one.
+    async fn send(&self, table: &str, lines: &[String], ends: &[usize]) -> usize {
         let start = Instant::now();
         let mut sent = 0;
         let size = if self.batch { self.batch_rows } else { CHUNK };
         let mut paused = Duration::ZERO; // waiting for the pace is not spending the budget
-        for chunk in lines.chunks(size) {
+        let mut unit = 0;
+        while sent < lines.len() {
+            let mut end = sent;
+            while unit < ends.len() && (end == sent || ends[unit] - sent <= size) {
+                end = ends[unit];
+                unit += 1;
+            }
+            let chunk = &lines[sent..end];
             if sent > 0 && start.elapsed().saturating_sub(paused) > self.budget {
                 let dropped = lines.len() - sent;
                 metrics::counter!("geodb_derived_mirror_dropped_total", "table" => table.to_string())
@@ -493,6 +519,92 @@ mod tests {
         );
         let heads = std::fs::read_to_string(&log).unwrap();
         assert_eq!(heads.lines().filter(|l| l.starts_with("putn")).count(), 4);
+        let _ = std::fs::remove_file(&log);
+    }
+
+    // A batch-aware pipe that logs each request's head (`putn<tab><n>`) and swallows its rows.
+    fn batch_script(log: &std::path::Path) -> String {
+        format!(
+            "echo ready; while IFS= read -r h; do n=${{h#*\t}}; printf '%s\\n' \"$h\" >> {0}; i=0; while [ $i -lt $n ]; do IFS= read -r r; i=$((i+1)); done; printf '+10\\napplied: 1'; done",
+            log.display()
+        )
+    }
+
+    // `n` units of the shapes in `sizes` (cycled), each row keyed apart, with a collection per
+    // position so a unit reads as (26, 33) or a lone 26.
+    fn units_of(n: usize, sizes: &[usize]) -> Vec<Vec<DerivedRow>> {
+        let mut key = 0u16;
+        (0..n)
+            .map(|i| {
+                (0..sizes[i % sizes.len()])
+                    .map(|j| {
+                        key += 1;
+                        DerivedRow {
+                            collection: 26 + 7 * j as u32,
+                            key: key.to_be_bytes().to_vec(),
+                            ..row(0, 1.0)
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_odd_batch_size_never_cuts_a_pair() {
+        let log = tmp("pairs-odd");
+        let m = fake(&batch_script(&log), Duration::from_secs(5))
+            .with_batch(true)
+            .with_batch_rows(3);
+        // Four counts of two rows: rows-per-request 3 used to cut 3, 3, 2 (a pair split twice).
+        let units = units_of(4, &[2]);
+        let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+        assert_eq!(m.put_units("t", &refs).await, 8);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "putn\t2\nputn\t2\nputn\t2\nputn\t2\n"
+        );
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn a_lone_row_is_a_unit_and_chunks_fill_with_whole_units() {
+        let log = tmp("pairs-mixed");
+        let m = fake(&batch_script(&log), Duration::from_secs(5))
+            .with_batch(true)
+            .with_batch_rows(5);
+        // Units of 2, 1, 2, 2, 1, 2 rows (a count with no 33 row is one row): 5 rows fit 2+1+2,
+        // then 2+1+2 again.
+        let units = units_of(6, &[2, 1, 2]);
+        let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+        assert_eq!(m.put_units("t", &refs).await, 10);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "putn\t5\nputn\t5\n");
+        // A unit past the batch size still goes whole, alone.
+        let log2 = tmp("pairs-big");
+        let m = fake(&batch_script(&log2), Duration::from_secs(5))
+            .with_batch(true)
+            .with_batch_rows(2);
+        let units = units_of(2, &[3]);
+        let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+        assert_eq!(m.put_units("t", &refs).await, 6);
+        assert_eq!(
+            std::fs::read_to_string(&log2).unwrap(),
+            "putn\t3\nputn\t3\n"
+        );
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&log2);
+    }
+
+    #[tokio::test]
+    async fn a_spent_budget_stops_on_a_unit_boundary() {
+        let log = tmp("pairs-budget");
+        // Batch off: chunks of 64 rows. Units of three rows: 21 of them are 63 rows, and the
+        // 64th row would be the first of a unit the budget stop must not start.
+        let m = fake(&ok_script(&log), Duration::ZERO);
+        let units = units_of(30, &[3]);
+        let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+        assert_eq!(m.put_units("t", &refs).await, 63);
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 63);
         let _ = std::fs::remove_file(&log);
     }
 
