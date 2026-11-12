@@ -1126,6 +1126,31 @@ wiring (init container, scores key, binding) and set `GEODB_DERIVED_MIRROR=1` an
 Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
 `derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
 
+### 2f-reconcile. Stale rows in collection 28 (one-shot reconcile Job)
+
+Before gaia#1501, `not_interested_sync`'s delete-and-reinsert of a user's `user_topic_signals` rows was never mirrored, and the
+sweep and the refit only delete identities that were in their own prior, so a row Postgres dropped stayed in geo-db and inflated
+that user's private `weights`. #1501 stops new ones; `user_topic_signals_reconcile` removes the old ones. For every user (every
+id in `user_topic_signals` plus every Personal space) it scans the user's group in collection 28, compares it with Postgres,
+and plans a delete for each key only geo-db holds and a put for each row geo-db lacks or holds with another score or value.
+A key that is not a 33-byte collection 28 key is left alone. Counts and kinds are logged, never an id. A user in geo-db who is
+in neither id list is not found (a deleted account is the erasure path's job).
+
+Run it as a Job, the same way as the snapshot Job (`ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml`, by hand,
+not part of any deploy, same init containers, scores key and `GEODB_*` wiring as `private-mirror-snapshot-job.yaml`):
+
+1. Needs a ranking-indexer image that contains the binary (the Dockerfile copies it) and the `_PRIVATE` switch on.
+2. Dry run (the manifest's default, no write possible): `sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml | kubectl apply -f -`,
+   then `kubectl -n gaia logs -f job/ranking-indexer-signals-reconcile`. Read the `reconcile: counts` line: `delete_stale` is the
+   rows to remove, `put_missing` and `put_drifted` the rows to write, `partial_groups` users with over 8,192 rows (not fully judged).
+   Exit 0 means nothing to change, 2 means it found changes, 1 means it could not read.
+3. Apply: delete the finished Job, change the container args to `["--apply"]`, apply again. It plans the whole table first and
+   refuses (exit 1) if it would delete over 20% of geo-db's rows, Postgres returned nothing, or it changes over 200,000 rows
+   (`--max-delete-fraction`, `--max-changes`; `--allow-mass-change` overrides). Then it walks again, per page scanning geo-db
+   before reading Postgres, and applies each page at once. Last write wins, so re-running is safe after any stop.
+4. Verify: delete the Job and run the dry run again. It must exit 0 with `delete_stale=0`. Deletes are not individually
+   acknowledged by the pipe, so this re-run is the check.
+
 ### 2f-state-and-loud. Watermark collections 6 and 7, the collection 11 backfill, and loud mirror failures
 
 - **Collections 6 `interest_sweep_state` and 7 `trending_refresh_state`** are one-row watermarks written inside plpgsql
