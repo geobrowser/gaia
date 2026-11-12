@@ -733,6 +733,50 @@ describe("relation facets shadow", () => {
 		expect(totals("relation")).toEqual({mismatch: 1})
 	})
 
+	describe("the relation's own entity", () => {
+		const OWN = "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b"
+		const WITH_ENTITY = FACETS.replace("toSpaceId verified", "entityId")
+		const own: [string, string][] = [[RELATION_FACET_PROPERTIES.entity, hex(OWN)]]
+
+		it("matches when geo-db holds the entity claim", async () => {
+			const {shadows, readRelationClaims} = facetSetup(own)
+			await run(shadows, "relation", WITH_ENTITY, {data: {relation: node({entityId: OWN})}}, vars)
+			expect(totals("relation")).toEqual({match: 1})
+			expect(readRelationClaims).toHaveBeenCalled()
+		})
+
+		it("is a mismatch when the claim is missing or names another entity, and says so", async () => {
+			const missing = facetSetup([])
+			await run(missing.shadows, "relation", WITH_ENTITY, {data: {relation: node({entityId: OWN})}}, vars)
+			expect(totals("relation")).toEqual({mismatch: 1})
+			expect(missing.log.warn).toHaveBeenCalledWith(
+				"gateway relation shadow mismatch",
+				expect.objectContaining({
+					first: {facets: expect.objectContaining({diff: {entity: {postgres: hex(OWN), geoDb: null}}})},
+				}),
+			)
+			__resetGatewayMetricsForTests()
+			const other = facetSetup([[RELATION_FACET_PROPERTIES.entity, hex(C)]])
+			await run(other.shadows, "relation", WITH_ENTITY, {data: {relation: node({entityId: OWN})}}, vars)
+			expect(totals("relation")).toEqual({mismatch: 1})
+		})
+
+		it("is read only with the shadow on", async () => {
+			const {shadows, readRelationClaims} = facetSetup([], false)
+			await run(shadows, "relation", WITH_ENTITY, {data: {relation: node({entityId: OWN})}}, vars)
+			expect(totals("relation")).toEqual({match: 1})
+			expect(readRelationClaims).not.toHaveBeenCalled()
+		})
+
+		it("compares the entity claim in facetDiff beside the other facets", () => {
+			expect(facetDiff({statementId: hex(A), entity: hex(OWN)}, {entity: hex(OWN)})).toBeNull()
+			expect(facetDiff({statementId: hex(A), entity: hex(OWN)}, {})).toEqual({
+				entity: {postgres: hex(OWN), geoDb: null},
+			})
+			expect(facetDiff({statementId: hex(A)}, {entity: hex(OWN)})).toBeNull()
+		})
+	})
+
 	it("leaves the facets alone when the shadow is off", async () => {
 		const {shadows, readRelationClaims} = facetSetup([], false)
 		await run(shadows, "relation", FACETS, {data: {relation: node()}}, vars)
@@ -800,6 +844,7 @@ describe("relation facet claims on the wire", () => {
 			toVersion: derive("relationToVersion"),
 			fromVersion: derive("relationFromVersion"),
 			verified: derive("relationVerified"),
+			entity: derive("relationEntity"),
 		})
 	})
 })

@@ -44,7 +44,6 @@ import {
 	readConfigRevisionShadowConfig,
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
-import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {
 	createEntityAtVersionShadow,
@@ -243,8 +242,6 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
-// The same page's edit block, sequence and name against geo-db's edit_meta records (GEODB_EDIT_META_SHADOW; off by default).
-const editMetaShadowRef: {current: EditMetaShadow | null} = {current: null}
 // GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
 // statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
 const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
@@ -257,10 +254,7 @@ const entityDiffShadowRef: {current: EntityDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
-		versions: (served) => {
-			entityVersionsShadowRef.current?.versions(served)
-			editMetaShadowRef.current?.versions(served)
-		},
+		versions: (served) => entityVersionsShadowRef.current?.versions(served),
 		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
 		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
@@ -329,9 +323,17 @@ if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
 	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
+	// Gated by GAIA_INTERNAL_TOKEN (x-internal-token, 401 otherwise); not mounted without a long enough token.
 	if (process.env.GEODB_REPLAY_PAIRS === "on") {
-		app.route("/geodb", createReplayPairsRouter(db))
-		log.info("GeoDB replay pairs route enabled")
+		const replayToken = process.env.GAIA_INTERNAL_TOKEN?.trim()
+		if (replayToken && replayToken.length >= MIN_INTERNAL_TOKEN_LENGTH) {
+			app.route("/geodb", createReplayPairsRouter(db, replayToken))
+			log.info("GeoDB replay pairs route enabled")
+		} else {
+			log.error(
+				"GEODB_REPLAY_PAIRS=on but GAIA_INTERNAL_TOKEN is unset or too short; replay pairs route not mounted",
+			)
+		}
 	}
 }
 
@@ -342,16 +344,6 @@ if (entityVersionsShadowConfig.enabled) {
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
 		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
-	})
-}
-
-const editMetaShadowConfig = readEditMetaShadowConfig(process.env)
-if (editMetaShadowConfig.enabled) {
-	editMetaShadowRef.current = createEditMetaShadow({
-		config: editMetaShadowConfig,
-		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
-		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
-		log,
 	})
 }
 

@@ -178,6 +178,18 @@ describe("api pair source", () => {
 		expect(pools.random).toEqual([])
 	})
 
+	it("sends the token in x-internal-token, and none when no token is given", async () => {
+		const seen: (Record<string, string> | undefined)[] = []
+		const f = async (_url: string, init: {headers?: Record<string, string>}) => {
+			seen.push(init.headers)
+			return {status: 200, text: async () => JSON.stringify({top: [], recent: [], random: []})}
+		}
+		await loadPoolsFromApi(f, target, [S1], 50, 1500, 90_000, "tok-123")
+		await loadPoolsFromApi(f, target, [S1])
+		expect(seen[0]).toEqual({"content-type": "application/json", "x-internal-token": "tok-123"})
+		expect(seen[1]).toEqual({"content-type": "application/json"})
+	})
+
 	it("drops malformed rows, and throws on a non-2xx or a malformed answer", async () => {
 		const bad = {top: [{entity: "x", space: S1, score: "1"}, {entity: E1, space: S1, score: "nope"}], recent: [{entity: E1}], random: []}
 		expect(await loadPoolsFromApi(reply(bad), target, [S1])).toEqual({top: [], recent: [], random: []})

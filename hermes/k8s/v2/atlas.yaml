@@ -27,6 +27,9 @@ spec:
               containerPort: 9464
               protocol: TCP
           env:
+            # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+            - name: ATLAS_PG_WRITES
+              value: "1"
             # Object-store home for atlas_checkpoints (zero-Postgres, plan 10.22 section 6). Both flags are "0": nothing
             # touches the bucket until one is flipped to "1". Credentials come only from the geodb-blob-key Secret.
             - name: ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH

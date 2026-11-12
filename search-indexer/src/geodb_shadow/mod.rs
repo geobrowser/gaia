@@ -33,6 +33,7 @@
 
 pub mod ids;
 pub mod pipe;
+pub mod serve;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -685,6 +686,19 @@ impl GeoDbShadow {
             cursor: AtomicUsize::new(0),
             timer_cursor: AtomicUsize::new(0),
         }
+    }
+
+    /// `entities_for_spaces` answered from geo-db (see [`serve::entities_for_spaces`]). `Err` names
+    /// why the caller must ask Postgres instead.
+    pub async fn serve_entities_for_spaces(
+        &self,
+        space_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, serve::Fallback> {
+        let spaces = self
+            .spaces
+            .current()
+            .map_err(|e| serve::Fallback::Error(e.to_string()))?;
+        serve::entities_for_spaces(self.reader.as_ref(), &spaces, space_ids).await
     }
 
     /// The timer's period from the environment: `None` (off) when [`TIMER_VAR`] is unset or `0`,

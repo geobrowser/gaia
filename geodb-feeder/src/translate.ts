@@ -44,8 +44,8 @@ export type TranslateContext = {
 /**
  * Where a relation lives in geo-db, keyed by the relation's gaia statement id. A move (`set_position`) closes the
  * relation's statement and writes a copy under a new id, so `current` is the id that is open now; `from` and `prop`
- * name its cell. `facets` are the facet claims the relation carries (field -> 32 hex digits, or "true" for
- * `verified`), kept so a move can write them again on the copy: a claim belongs to the statement it was made about.
+ * name its cell. `facets` are the facet claims the relation carries (field -> 32 hex digits, "true" for
+ * `verified`, or the referenced id for `entity`, the relation's own entity), kept so a move can write them again on the copy: a claim belongs to the statement it was made about.
  */
 export type RelationRecord = {from: string; prop: string; current: string; facets?: Record<string, string>}
 
@@ -92,13 +92,18 @@ export const RELATION_FACET_PROPERTY = {
 	toVersion: conformingId("reserved-property", "relationToVersion"),
 	fromVersion: conformingId("reserved-property", "relationFromVersion"),
 	verified: conformingId("reserved-property", "relationVerified"),
+	/** The relation's own entity: a reference-valued claim (an entity id, conformed as every reference is). */
+	entity: conformingId("reserved-property", "relationEntity"),
 } as const
 
 /**
  * The facet claims of one relation, as `add` intents on its statement. Each claim's id is derived from the relation
  * and the facet, so a replay of the edit names the same statements.
  */
-function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: number; held: Record<string, string>} {
+function facetIntents(
+	sid: string,
+	op: GrcOp,
+): {intents: string[]; present: number; held: Record<string, string>; entity: string | null} {
 	const intents: string[] = []
 	const held: Record<string, string> = {}
 	let present = 0
@@ -122,7 +127,17 @@ function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: numb
 			held.verified = "true"
 		}
 	}
-	return {intents, present, held}
+	// The relation's own entity is no facet to drop with the rest: it is counted apart (`relation-entity-*`). It is held
+	// with the facets, so a position move carries it to the replacement statement.
+	let entity: string | null = null
+	if (op.entity != null && (typeof op.entity === "string" || op.entity instanceof Uint8Array)) {
+		const before = intents.length
+		const ref = cid("entity", op.entity)
+		claim("entity", `.{ .reference = "${ref}" }`)
+		entity = intents.splice(before, 1)[0] ?? null
+		if (entity) held.entity = ref
+	}
+	return {intents, present, held, entity}
 }
 
 /** One facet claim as an `add` on the statement `sid`; its id is derived from the statement and the facet. */
@@ -133,7 +148,11 @@ function facetClaim(sid: string, facet: keyof typeof RELATION_FACET_PROPERTY, va
 
 /** A held facet value (see `RelationRecord`) as the ZON value its claim carries. */
 const heldFacetValue = (facet: string, held: string): string =>
-	facet === "verified" ? ".{ .boolean = true }" : `.{ .text = ${zigString(held)} }`
+	facet === "verified"
+		? ".{ .boolean = true }"
+		: facet === "entity"
+			? `.{ .reference = "${held}" }`
+			: `.{ .text = ${zigString(held)} }`
 
 /** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
 const POSITION = /^[\x20-\x7e]{1,64}$/
@@ -358,12 +377,18 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 						if (facets.intents.length > 0) bump("relation-facet-claims", facets.intents.length)
 					} else bump("relation-facets-dropped")
 				}
+				// The relation's own entity is a reference-valued claim under the facets flag; off, it is dropped as before.
+				if (op.entity != null) {
+					if (opts.facets && facets.entity) {
+						intents.push(facets.entity)
+						bump("relation-entity-claims")
+					} else bump("relation-entity-dropped")
+				}
 				// The cell and the current statement id, so a later position move can name them (GEODB_RELATION_POSITIONS).
 				if (opts.positions && ctx.markRelation) {
 					const held = opts.facets ? facets.held : {}
 					ctx.markRelation(sid, {from, prop, current: sid, ...(Object.keys(held).length > 0 ? {facets: held} : {})})
 				}
-				if (op.entity != null) bump("relation-entity-dropped")
 				changed.add(from)
 				touched.push(from)
 				bump("createRelation")
