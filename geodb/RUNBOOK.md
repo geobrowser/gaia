@@ -2093,9 +2093,11 @@ the row's `notification_deliveries` rows, so a webhook that matched at insert bu
 listed (the live mirror lists it).
 
 It is a dry run unless `--apply` is given. A dry run reads Postgres only (opened read-only) and prints `scanned`,
-`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. It
-cannot print `present`: geo-db has no read-only per-key probe (`claim` leases the unit and would disturb the
-delivery-side shadow), so `present` comes from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
+`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. When the
+`geodb-client` in the image and the geo-db node both support the read-only batched `has` verb (wire revision 17), it
+also asks geo-db which units it holds and prints `present` and `missing` (`would-enter` is then `missing`); `has`
+does not lease or write. Otherwise it prints `present unknown (<reason>; --apply reports it)`, and `present` comes
+from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
 `--batch` (default 500, max 5000) bounds rows per query, `--rate` (default 50, max 1000) bounds enters a second,
 `--max-units` bounds the scan. A geo-db error stops the run and prints how far it got; rerun the same command.
 
