@@ -3,7 +3,7 @@
  * `conformingId`, and "what geo-db already holds" comes in through the context.
  */
 import {blockInstant, CREATED_AT_PROPERTY, timeIntent, UPDATED_AT_PROPERTY} from "./entityTimes.js"
-import {cid, hexId} from "./ids.js"
+import {cid, conformingId, hexId} from "./ids.js"
 import {legacyMapIntent} from "./legacyMap.js"
 import {languageTag} from "./languages.js"
 
@@ -20,6 +20,11 @@ export type GrcOp = {
 	relationType?: string | Uint8Array
 	position?: unknown
 	entity?: unknown
+	toSpace?: unknown
+	fromSpace?: unknown
+	toVersion?: unknown
+	fromVersion?: unknown
+	verified?: unknown
 	[k: string]: unknown
 }
 
@@ -36,6 +41,12 @@ export type TranslateOptions = {
 	/** Write a relation's position (geodb-client's `.position`, ISS-587-318). Off, positions are dropped and counted. */
 	positions?: boolean
 	/**
+	 * Write a relation's facets (to-space, from-space, the two version pins, verified) as claims on the relation's
+	 * statement, in the same Edit (geo-db docs/api/10 section 5.5). A facet at its default (absent) writes no claim.
+	 * Off, the facets are dropped and counted.
+	 */
+	facets?: boolean
+	/**
 	 * The edit's block time in unix seconds. Given (not undefined), the edit also writes each changed entity's
 	 * reserved createdAt (once, for an entity new to the Space) and updatedAt; a `null` is an edit with no block
 	 * time, which writes none and is counted. Undefined is the feature off.
@@ -46,6 +57,51 @@ export type TranslateOptions = {
 	 * id. Off, nothing is written or counted.
 	 */
 	legacyMap?: boolean
+}
+
+/**
+ * A relation's facets, each a claim on the relation's statement under a reserved property fixed by name (the same
+ * way `createdAt` / `updatedAt` are). The four pins are text claims holding the id as 32 lowercase hex digits (a
+ * Space or a version is not an entity, so a reference value, which this feeder conforms as an entity id, would
+ * rewrite a legacy id); `verified` is a boolean claim written only where true. Mirrored as literals in
+ * `api/src/geodb/card.ts` (`RELATION_FACET_PROPERTIES`); a test on each side pins them to each other.
+ */
+export const RELATION_FACETS = [
+	{field: "toSpace", name: "relationToSpace"},
+	{field: "fromSpace", name: "relationFromSpace"},
+	{field: "toVersion", name: "relationToVersion"},
+	{field: "fromVersion", name: "relationFromVersion"},
+] as const
+export const RELATION_FACET_PROPERTY = {
+	toSpace: conformingId("reserved-property", "relationToSpace"),
+	fromSpace: conformingId("reserved-property", "relationFromSpace"),
+	toVersion: conformingId("reserved-property", "relationToVersion"),
+	fromVersion: conformingId("reserved-property", "relationFromVersion"),
+	verified: conformingId("reserved-property", "relationVerified"),
+} as const
+
+/**
+ * The facet claims of one relation, as `add` intents on its statement. Each claim's id is derived from the relation
+ * and the facet, so a replay of the edit names the same statements.
+ */
+function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: number} {
+	const intents: string[] = []
+	let present = 0
+	const claim = (facet: keyof typeof RELATION_FACET_PROPERTY, value: string) => {
+		const id = conformingId("relation-facet", `${sid}${facet}`)
+		intents.push(`.{ .add = .{ .id = "${id}", .statement = "${sid}", .property = "${RELATION_FACET_PROPERTY[facet]}", .value = ${value} } }`)
+	}
+	for (const {field} of RELATION_FACETS) {
+		const v = op[field]
+		if (v == null) continue
+		present++
+		if (typeof v === "string" || v instanceof Uint8Array) claim(field, `.{ .text = ${zigString(hexId(v).replaceAll("-", "").toLowerCase())} }`)
+	}
+	if (op.verified != null) {
+		present++
+		if (op.verified === true) claim("verified", ".{ .boolean = true }")
+	}
+	return {intents, present}
 }
 
 /** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
@@ -261,10 +317,65 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 				intents.push(
 					`.{ .add = .{ .id = "${sid}", .entity = "${from}", .property = "${prop}", .value = .{ .reference = "${to}" }${position} } }`,
 				)
+				const facets = facetIntents(sid, op)
+				if (facets.present > 0) {
+					if (opts.facets) {
+						intents.push(...facets.intents)
+						if (facets.intents.length > 0) bump("relation-facet-claims", facets.intents.length)
+					} else bump("relation-facets-dropped")
+				}
 				if (op.entity != null) bump("relation-entity-dropped")
 				changed.add(from)
 				touched.push(from)
 				bump("createRelation")
+				break
+			}
+			case "updateRelation": {
+				// Neither flag: untouched from before, counted as a skipped op.
+				if (!opts.positions && !opts.facets) {
+					bump("skip:op-updateRelation")
+					break
+				}
+				const sid = cid("statement", op.id as string | Uint8Array)
+				if (!ctx.knownStmt(sid)) {
+					bump("updateRelation-predates-window")
+					break
+				}
+				const unset = new Set<string>(
+					(Array.isArray(op.unset) ? op.unset : []).filter((u): u is string => typeof u === "string"),
+				)
+				const facetsSet = RELATION_FACETS.filter(({field}) => op[field] != null)
+				const facetsUnset = RELATION_FACETS.filter(({field}) => op[field] == null && unset.has(field))
+				const positionTouched = op.position != null || unset.has("position")
+				if (!positionTouched && facetsSet.length === 0 && facetsUnset.length === 0) {
+					bump("updateRelation-noop")
+					break
+				}
+				// A move or an unset of the position needs geo-db's `set_position`, which names the relation's cell
+				// (from, type) and a replacement statement id; the op carries neither and geodb-client's ZON edit
+				// cannot say the verb (ISS-587-318 "Not covered: A move"). Nothing is sent, and it is counted.
+				if (positionTouched) bump("relation-position-update-dropped")
+				if (opts.facets) {
+					// A facet claim is the cell (the relation's statement, the facet's reserved property). `set` closes
+					// the cell's active claim whatever id it was written under (createRelation's `add`, an earlier
+					// `set`) and opens the new one, so a change replaces; `unset` closes it. A set wins over an unset of
+					// the same field, as gaia applies an op's unsets first.
+					for (const {field} of facetsSet) {
+						const v = op[field]
+						if (typeof v !== "string" && !(v instanceof Uint8Array)) {
+							bump("relation-facet-update-malformed")
+							continue
+						}
+						const value = `.{ .text = ${zigString(hexId(v).replaceAll("-", "").toLowerCase())} }`
+						intents.push(`.{ .set = .{ .statement = "${sid}", .property = "${RELATION_FACET_PROPERTY[field]}", .value = ${value} } }`)
+						bump("relation-facet-claims-set")
+					}
+					for (const {field} of facetsUnset) {
+						intents.push(`.{ .unset = .{ .statement = "${sid}", .property = "${RELATION_FACET_PROPERTY[field]}" } }`)
+						bump("relation-facet-claims-unset")
+					}
+				} else if (facetsSet.length + facetsUnset.length > 0) bump("relation-facets-dropped")
+				bump("updateRelation")
 				break
 			}
 			case "deleteRelation": {

@@ -63,7 +63,7 @@ pub const MIN_TIMER_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_SAMPLE: usize = 4;
 const MAX_SAMPLE: usize = 32;
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(5000);
-const COOLDOWN: Duration = Duration::from_secs(30);
+const COOLDOWN: Duration = Duration::from_secs(5);
 /// A `space_entities` page, the most the read allows.
 const SCAN_PAGE: usize = 512;
 /// Pages read of one Space, so one comparison costs at most this many reads a Space. A Space past

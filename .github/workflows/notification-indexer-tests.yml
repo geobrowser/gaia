@@ -25,6 +25,26 @@ jobs:
     name: Run Unit Tests
     runs-on: ubuntu-latest
 
+    # The integration tests in tests/*.rs return early without
+    # NOTIF_TEST_DATABASE_URL, which no workflow used to set, so their six cases
+    # never ran. They DROP and CREATE the tables they need, so they get their own
+    # empty database rather than a migrated one (a migrated schema has foreign
+    # keys that make the DROPs fail).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: notif_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -69,3 +89,31 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           NOTIFICATION_MIN_AGE_SECS: "0"
+
+      # One thread: the four cases in expired_proposals.rs share the same tables
+      # and drop them on entry, so they race each other when run in parallel.
+      # A case without the URL prints "skipping" and reports ok, so the step
+      # fails on any skip line and on a pass count below the six that exist.
+      - name: Run database integration tests
+        run: |
+          set -euo pipefail
+          min=6
+          cargo test -p notification-indexer \
+            --test retention --test webhook_filtering --test expired_proposals \
+            -- --test-threads=1 --nocapture 2>&1 | tee integration-output.log
+          if grep -qi 'skipping' integration-output.log; then
+            echo "::error::an integration case printed a skip message, so it did not execute"
+            exit 1
+          fi
+          passed=$(grep -E '^test result: ok\.' integration-output.log \
+            | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' \
+            | paste -sd+ - | bc)
+          echo "integration cases passed: ${passed}"
+          if [ "${passed:-0}" -lt "$min" ]; then
+            echo "::error::expected at least ${min} integration cases to run, saw ${passed:-0}"
+            exit 1
+          fi
+        env:
+          RUST_BACKTRACE: 1
+          NOTIFICATION_MIN_AGE_SECS: "0"
+          NOTIF_TEST_DATABASE_URL: "postgresql://test:test@localhost:5432/notif_test"
