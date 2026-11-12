@@ -138,7 +138,7 @@ export type ServedVersions = {
 	spaceId?: string | undefined
 	limit: number
 	offset: number
-	versions: readonly {editId: string; createdById: string | null}[]
+	versions: readonly {editId: string; createdById: string | null; blockNumber?: string; name?: string | null}[]
 }
 
 export type EntityVersionsShadow = {
