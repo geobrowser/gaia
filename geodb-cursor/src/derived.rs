@@ -595,6 +595,104 @@ mod tests {
         let _ = std::fs::remove_file(&log2);
     }
 
+    // As `batch_script`, but logs every row too, so a test can read back each request whole.
+    fn batch_log_script(log: &std::path::Path) -> String {
+        format!(
+            "echo ready; while IFS= read -r h; do n=${{h#*\t}}; printf '%s\\n' \"$h\" >> {0}; i=0; while [ $i -lt $n ]; do IFS= read -r r; printf '%s\\n' \"$r\" >> {0}; i=$((i+1)); done; printf '+10\\napplied: 1'; done",
+            log.display()
+        )
+    }
+
+    // Property test, a seeded loop (no proptest in the workspace): random counts of units of 1, 2
+    // or 3 rows (a lone 26 row, a 26 + 33 pair, a unit past any small cap), random rows per
+    // request. Reads back each request the pipe received and checks, for every case:
+    //  - a request ends only on a unit boundary, so none falls between a collection 26 row and
+    //    its 33 row;
+    //  - every row arrives exactly once and in the order sent;
+    //  - a request holds at most `cap` rows, unless it is one unit larger than the cap, which is
+    //    sent whole (the code sends an oversized unit whole and alone, it does not refuse it).
+    #[tokio::test]
+    async fn random_batches_never_cut_a_unit_and_lose_or_reorder_no_row() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for case in 0..60 {
+            let cap = 1 + next(12) as usize;
+            let sizes: Vec<usize> = (0..next(30)).map(|_| 1 + next(3) as usize).collect();
+            let units: Vec<Vec<DerivedRow>> = {
+                let mut key = 0u16;
+                sizes
+                    .iter()
+                    .map(|&n| {
+                        (0..n)
+                            .map(|j| {
+                                key += 1;
+                                DerivedRow {
+                                    collection: 26 + 7 * j as u32,
+                                    key: key.to_be_bytes().to_vec(),
+                                    ..row(0, 1.0)
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect()
+            };
+            let log = tmp(&format!("prop-{case}"));
+            let m = fake(&batch_log_script(&log), Duration::from_secs(5))
+                .with_batch(true)
+                .with_batch_rows(cap);
+            let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+            let total: usize = sizes.iter().sum();
+            assert_eq!(m.put_units("t", &refs).await, total, "case {case}");
+            let sent = std::fs::read_to_string(&log).unwrap_or_default();
+            let _ = std::fs::remove_file(&log);
+            let want: Vec<String> = units
+                .iter()
+                .flatten()
+                .map(|r| r.put_line().unwrap().trim_end().to_string())
+                .collect();
+
+            // Read the requests back: a `putn<tab>n` head, then n rows; a lone row goes as a plain
+            // `put` line, one request of its own.
+            let mut lines = sent.lines();
+            let mut frames: Vec<Vec<&str>> = Vec::new();
+            while let Some(head) = lines.next() {
+                if head.starts_with("put\t") {
+                    frames.push(vec![head]);
+                    continue;
+                }
+                let n: usize = head.strip_prefix("putn\t").unwrap().parse().unwrap();
+                frames.push((&mut lines).take(n).collect());
+                assert_eq!(frames.last().unwrap().len(), n, "case {case}: short frame");
+            }
+            let got: Vec<&str> = frames.iter().flatten().copied().collect();
+            assert_eq!(got, want, "case {case}: rows lost, doubled or reordered");
+
+            // Walk the units alongside the requests: each request must end exactly where a unit does.
+            let mut ui = 0;
+            for f in &frames {
+                let mut taken = 0;
+                let mut whole_units = 0;
+                while taken < f.len() {
+                    taken += sizes[ui];
+                    whole_units += 1;
+                    ui += 1;
+                }
+                assert_eq!(taken, f.len(), "case {case}: a request cut a unit");
+                assert!(
+                    f.len() <= cap || whole_units == 1,
+                    "case {case}: {} rows over cap {cap} with {whole_units} units",
+                    f.len()
+                );
+            }
+            assert_eq!(ui, sizes.len(), "case {case}");
+        }
+    }
+
     #[tokio::test]
     async fn a_spent_budget_stops_on_a_unit_boundary() {
         let log = tmp("pairs-budget");
