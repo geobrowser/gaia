@@ -1677,10 +1677,11 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
     // `ranks.rankings` has no row for RANK to attach them to yet.
     for (entity, position) in [(ENT_A, "a0"), (ENT_B, "a1")] {
         sqlx::query(
-            "INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position) \
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO ranks.ranking_items (ranking_id, rank_space_id, entity_id, space_id, position) \
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(u(RANK))
+        .bind(u(MEMBER_SPACE))
         .bind(u(entity))
         .bind(u(MEMBER_SPACE))
         .bind(position)
@@ -1703,12 +1704,12 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
     // --- the sweep's recovery path: find it, reconstruct it, score it ------
     let candidates = storage.find_unregistered_ranks().await.unwrap();
     assert!(
-        candidates.contains(&u(RANK)),
+        candidates.contains(&(u(RANK), u(MEMBER_SPACE))),
         "find_unregistered_ranks must surface the orphaned rank"
     );
 
     let recovered = storage
-        .get_rank_config_from_kg(u(RANK))
+        .get_rank_config_from_kg(u(RANK), u(MEMBER_SPACE))
         .await
         .unwrap()
         .expect("rank must be reconstructable from the KG");
@@ -1721,7 +1722,7 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
          an unregistered rank)"
     );
 
-    storage.upsert_ranking(&recovered).await.unwrap();
+    assert!(storage.recover_ranking(&recovered).await.unwrap());
     recompute_block(u(BLOCK), BlockMeta::default(), Utc::now(), &storage)
         .await
         .unwrap();
@@ -2500,7 +2501,10 @@ async fn deleted_rank_votes_leave_the_ballot_and_a_cleared_ranker_is_no_ballot()
     .await;
     assert_eq!(state().await, (vec![(u(A), 1), (u(C), 1)], 2));
     assert_eq!(
-        storage.block_id_for_ranking(u(RANKS[2])).await.unwrap(),
+        storage
+            .block_id_for_ranking(u(RANKS[2]), u(MEMBERS[2]))
+            .await
+            .unwrap(),
         None
     );
 
@@ -2764,7 +2768,10 @@ async fn sdk_shaped_update_rank_clears_and_reranks() {
     assert_eq!(left, 0);
     // The Rank and its link are untouched; it just isn't a ballot any more.
     assert_eq!(
-        storage.block_id_for_ranking(u(RANKS[0])).await.unwrap(),
+        storage
+            .block_id_for_ranking(u(RANKS[0]), u(MEMBERS[0]))
+            .await
+            .unwrap(),
         Some(u(BLOCK))
     );
     assert_eq!(
@@ -2972,10 +2979,11 @@ async fn rank_edits_from_another_space_change_nothing() {
     apply_in(&storage, OTHER, &attack, 20).await;
 
     let items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
-        "SELECT entity_id, relation_id FROM ranks.ranking_items WHERE ranking_id = $1 \
-         ORDER BY entity_id",
+        "SELECT entity_id, relation_id FROM ranks.ranking_items \
+         WHERE ranking_id = $1 AND rank_space_id = $2 ORDER BY entity_id",
     )
     .bind(u(RANK))
+    .bind(u(VICTIM))
     .fetch_all(pool)
     .await
     .unwrap();
@@ -2985,7 +2993,10 @@ async fn rank_edits_from_another_space_change_nothing() {
         "the victim's ballot is untouched"
     );
     assert_eq!(
-        storage.block_id_for_ranking(u(RANK)).await.unwrap(),
+        storage
+            .block_id_for_ranking(u(RANK), u(VICTIM))
+            .await
+            .unwrap(),
         Some(u(BLOCK)),
         "still linked"
     );
@@ -3159,7 +3170,7 @@ async fn deleted_rank_stays_deleted_and_a_cleared_rank_supersedes_an_older_one()
         .find_unregistered_ranks()
         .await
         .unwrap()
-        .contains(&u(NEW)));
+        .contains(&(u(NEW), u(M1))));
 
     // A Rank that was never registered (LOST) is recovered with its link's
     // relation id, so a later delete of the link unlinks it.
@@ -3189,19 +3200,22 @@ async fn deleted_rank_stays_deleted_and_a_cleared_rank_supersedes_an_older_one()
         .find_unregistered_ranks()
         .await
         .unwrap()
-        .contains(&u(LOST)));
+        .contains(&(u(LOST), u(M2))));
     let recovered = storage
-        .get_rank_config_from_kg(u(LOST))
+        .get_rank_config_from_kg(u(LOST), u(M2))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(recovered.block_relation_id, Some(u(0x3594_40B0)));
-    storage.upsert_ranking(&recovered).await.unwrap();
+    assert!(storage.recover_ranking(&recovered).await.unwrap());
     let unlink = EditBuilder::new(gid(0x3594_0D11))
         .delete_relation(gid(0x3594_40B0))
         .build();
     apply_in(&storage, M2, &unlink, 22).await;
-    assert_eq!(storage.block_id_for_ranking(u(LOST)).await.unwrap(), None);
+    assert_eq!(
+        storage.block_id_for_ranking(u(LOST), u(M2)).await.unwrap(),
+        None
+    );
 
     // Creating NEW again undoes its delete.
     apply_in(
@@ -3290,6 +3304,17 @@ async fn a_retried_clear_still_rescores_the_block() {
         .await
         .unwrap();
     assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
+    // The drain is not this edit's own work, so what it mints is stamped with
+    // the chain cursor, not with this edit's block (20).
+    let (prov, _) = ranking_indexer::publish::provenance_ids(u(BLOCK), u(R2));
+    let stamped: String = sqlx::query_scalar("SELECT updated_at_block FROM entities WHERE id = $1")
+        .bind(prov)
+        .fetch_one(storage.pool())
+        .await
+        .unwrap();
+    let chain = storage.current_chain_meta().await.unwrap().number;
+    assert_ne!(chain, 20, "precondition: the cursor differs from the edit");
+    assert_eq!(stamped, chain.to_string());
     let queued: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ranks.pending_recomputes WHERE block_id = $1")
             .bind(u(BLOCK))
@@ -3310,18 +3335,14 @@ async fn queued(storage: &Storage, block: u128) -> Vec<(i64, i32)> {
     .unwrap()
 }
 
-/// `url` with a session `lock_timeout`, so a recompute waiting on a held
-/// block lock fails instead of waiting.
-fn with_lock_timeout(url: &str, ms: u32) -> String {
-    let sep = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{sep}options=-c%20lock_timeout%3D{ms}")
-}
-
-/// GEO-3591 review 2: a queued block whose recompute keeps failing does not
-/// fail unrelated edits with deletes. The edit's own block is rescored first;
-/// the failing block is tried best effort, counted, and after
-/// `LIVE_DRAIN_MAX_ATTEMPTS` failures left to the backfill, whose queue pass
-/// (`drain_pending_recomputes` with no cap) still recomputes it.
+/// GEO-3591 review 2 + Patrick's review: a queued block whose recompute keeps
+/// failing does not fail unrelated edits. The edit's own block is rescored
+/// first; the failing block is tried best effort, counted, and after
+/// `LIVE_DRAIN_MAX_ATTEMPTS` failures left to the backfill. The backfill's
+/// queue pass keeps trying it until `BACKFILL_DEAD_AFTER`, then marks it dead
+/// and stops (so `backfill_blocks` does not fail every hour); resetting the
+/// entry re-enqueues it. The failure is a trigger that rejects the block's
+/// applied-config update.
 #[tokio::test]
 async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
     let Some(url) = e2e_database_url() else {
@@ -3329,9 +3350,7 @@ async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
     };
     let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
-    let impatient = Storage::new(&with_lock_timeout(&url, 200))
-        .await
-        .expect("connect");
+    let pool = storage.pool();
     const SPACE: u128 = 0xE2E5_3596_0001;
     const STUCK_SPACE: u128 = 0xE2E5_3596_0002;
     const M1: u128 = 0xE2E5_3596_0011;
@@ -3342,8 +3361,16 @@ async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
     const R2: u128 = 0xE2E5_3596_0042;
     const A: u128 = 0xE2E5_3596_0031;
     const B: u128 = 0xE2E5_3596_0032;
+    use ranking_indexer::recompute::{
+        drain_pending_recomputes, DrainMode, BACKFILL_DEAD_AFTER, LIVE_DRAIN_MAX_ATTEMPTS,
+    };
+    // A run that failed half way leaves its trigger behind.
+    sqlx::query("DROP TRIGGER IF EXISTS e2e_fail_3596 ON ranks.ranking_block_config")
+        .execute(pool)
+        .await
+        .unwrap();
     fresh_dao_block(&storage, SPACE, &[M1, M2], BLOCK, &[R1, R2], None).await;
-    fresh_dao_block(&storage, STUCK_SPACE, &[], STUCK, &[], None).await;
+    fresh_dao_block(&storage, STUCK_SPACE, &[], STUCK, &[], Some("sum")).await;
     apply_in(
         &storage,
         M1,
@@ -3359,27 +3386,58 @@ async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
     )
     .await;
 
-    // STUCK is queued and its recompute fails (its lock is held, and the
-    // impatient connection gives up waiting).
-    sqlx::query("INSERT INTO ranks.pending_recomputes (block_id) VALUES ($1)")
-        .bind(u(STUCK))
-        .execute(storage.pool())
+    // STUCK's recompute fails: its applied-config update is rejected. (Its
+    // config is marked unapplied first, so every recompute tries to update it.)
+    sqlx::query(
+        "UPDATE ranks.ranking_block_config SET applied_max_rows = NULL, applied_scoring_mode = NULL \
+         WHERE block_id = $1",
+    )
+    .bind(u(STUCK))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE OR REPLACE FUNCTION ranks.e2e_fail_3596() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.block_id = '{}' THEN RAISE EXCEPTION 'e2e: stuck block'; END IF; RETURN NEW; END $$",
+        u(STUCK)
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("DROP TRIGGER IF EXISTS e2e_fail_3596 ON ranks.ranking_block_config")
+        .execute(pool)
         .await
         .unwrap();
-    let held = storage.lock_block_for_recompute(u(STUCK)).await.unwrap();
+    sqlx::query(
+        "CREATE TRIGGER e2e_fail_3596 BEFORE UPDATE ON ranks.ranking_block_config \
+         FOR EACH ROW EXECUTE FUNCTION ranks.e2e_fail_3596()",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE ranks.ranking_block_config SET updated_at = now() WHERE block_id = $1")
+        .bind(u(STUCK))
+        .execute(pool)
+        .await
+        .expect_err("the trigger rejects STUCK's config updates");
+    sqlx::query("INSERT INTO ranks.pending_recomputes (block_id) VALUES ($1)")
+        .bind(u(STUCK))
+        .execute(pool)
+        .await
+        .unwrap();
 
     // M1 clears their ballot: the edit succeeds and its own block is rescored.
     let clear = EditBuilder::new(gid(0x3596_0C1E))
         .delete_relation(gid(0x3596_1000))
         .delete_relation(gid(0x3596_1001))
         .build();
-    apply_detected_edit(&detect(&clear, u(M1), 20, 0), u(M1), &impatient)
+    apply_detected_edit(&detect(&clear, u(M1), 20, 0), u(M1), &storage)
         .await
         .expect("a failing queued block must not fail this edit");
     assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
     assert_eq!(queued(&storage, STUCK).await[0].1, 1, "one failed attempt");
 
-    // Unrelated edits with deletes keep trying STUCK until the cap...
+    // Unrelated edits keep trying STUCK until the cap...
     for n in 0..4u128 {
         let unrelated = EditBuilder::new(gid(0x3596_0E00 + n))
             .delete_relation(gid(0x3596_0F00 + n))
@@ -3387,31 +3445,108 @@ async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
         apply_detected_edit(
             &detect(&unrelated, u(M2), 30 + n as i64, 0),
             u(M2),
-            &impatient,
+            &storage,
         )
         .await
         .unwrap();
     }
     // ...then leave it alone.
-    let attempts = queued(&storage, STUCK).await[0].1;
-    assert_eq!(
-        attempts,
-        ranking_indexer::recompute::LIVE_DRAIN_MAX_ATTEMPTS
-    );
-    held.commit().await.unwrap();
+    assert_eq!(queued(&storage, STUCK).await[0].1, LIVE_DRAIN_MAX_ATTEMPTS);
 
-    // The backfill's queue pass takes it whatever its attempts.
-    let (recomputed, failed) = ranking_indexer::recompute::drain_pending_recomputes(
-        &storage,
-        BlockMeta::default(),
-        Utc::now(),
-        None,
-        &std::collections::HashSet::new(),
+    // The backfill's queue pass keeps trying it, until it is marked dead...
+    let none = std::collections::HashSet::new();
+    let mut runs = 0;
+    while !sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT bool_or(dead_at IS NOT NULL) FROM ranks.pending_recomputes WHERE block_id = $1",
     )
-    .await;
+    .bind(u(STUCK))
+    .fetch_one(pool)
+    .await
+    .unwrap()
+    .unwrap_or(false)
+    {
+        let (_, failed) =
+            drain_pending_recomputes(&storage, Utc::now(), DrainMode::Backfill, &none).await;
+        assert!(failed >= 1);
+        runs += 1;
+        assert!(runs <= BACKFILL_DEAD_AFTER, "never marked dead");
+    }
+    assert_eq!(queued(&storage, STUCK).await[0].1, BACKFILL_DEAD_AFTER);
+    // ...after which it is skipped: no failure, nothing recomputed.
+    let blocks = storage.pending_recompute_blocks(None).await.unwrap();
+    assert!(!blocks.contains(&u(STUCK)), "a dead entry is not drained");
+    assert!(storage.dead_pending_recompute_blocks().await.unwrap() >= 1);
+
+    // Fixed and reset, it is recomputed and leaves the queue.
+    sqlx::query("DROP TRIGGER e2e_fail_3596 ON ranks.ranking_block_config")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION ranks.e2e_fail_3596()")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE ranks.pending_recomputes SET dead_at = NULL, attempts = 0 WHERE block_id = $1",
+    )
+    .bind(u(STUCK))
+    .execute(pool)
+    .await
+    .unwrap();
+    let (recomputed, failed) =
+        drain_pending_recomputes(&storage, Utc::now(), DrainMode::Backfill, &none).await;
     assert_eq!(failed, 0);
     assert!(recomputed >= 1);
     assert!(queued(&storage, STUCK).await.is_empty());
+}
+
+/// Patrick's review: the drain only tries a queued block's lock. A block
+/// another recompute holds is skipped (still queued, no failure counted), so a
+/// live edit never waits behind it.
+#[tokio::test]
+async fn the_drain_skips_a_block_another_recompute_holds() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    const SPACE: u128 = 0xE2E5_359B_0001;
+    const BUSY_SPACE: u128 = 0xE2E5_359B_0002;
+    const M1: u128 = 0xE2E5_359B_0011;
+    const BLOCK: u128 = 0xE2E5_359B_0021;
+    const BUSY: u128 = 0xE2E5_359B_0022;
+    const RANK: u128 = 0xE2E5_359B_0041;
+    const A: u128 = 0xE2E5_359B_0031;
+    fresh_dao_block(&storage, SPACE, &[M1], BLOCK, &[RANK], None).await;
+    fresh_dao_block(&storage, BUSY_SPACE, &[], BUSY, &[], None).await;
+    sqlx::query("INSERT INTO ranks.pending_recomputes (block_id) VALUES ($1)")
+        .bind(u(BUSY))
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    let held = storage.lock_block_for_recompute(u(BUSY)).await.unwrap();
+
+    let edit = ballot_edit(RANK, BLOCK, 0x359B_1000, SPACE, &[A]);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        apply_detected_edit(&detect(&edit, u(M1), 10, 0), u(M1), &storage),
+    )
+    .await
+    .expect("the edit does not wait on a block it did not touch")
+    .unwrap();
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(A), 1)]);
+    assert_eq!(queued(&storage, BUSY).await.len(), 1, "still queued");
+    assert_eq!(
+        queued(&storage, BUSY).await[0].1,
+        0,
+        "a skip is not a failure"
+    );
+    held.commit().await.unwrap();
+    sqlx::query("DELETE FROM ranks.pending_recomputes WHERE block_id = $1")
+        .bind(u(BUSY))
+        .execute(storage.pool())
+        .await
+        .unwrap();
 }
 
 /// GEO-3591 review 2: a recompute clears only the queue entries it saw before
@@ -3529,15 +3664,15 @@ async fn a_rank_deleted_before_it_has_a_row_is_not_recovered() {
 
     let candidates = storage.find_unregistered_ranks().await.unwrap();
     assert!(
-        !candidates.contains(&u(SAME_EDIT)),
+        !candidates.contains(&(u(SAME_EDIT), u(M1))),
         "created and deleted in one edit"
     );
     assert!(
-        !candidates.contains(&u(UNREGISTERED)),
+        !candidates.contains(&(u(UNREGISTERED), u(M1))),
         "deleted while unregistered"
     );
     assert!(
-        candidates.contains(&u(OTHERS)),
+        candidates.contains(&(u(OTHERS), u(M2))),
         "a delete from another space is ignored"
     );
 }
@@ -3681,4 +3816,223 @@ async fn a_retried_move_still_rescores_the_old_block() {
     assert!(score_rows(&storage, OLD_BLOCK).await.is_empty());
     assert_eq!(score_rows(&storage, NEW_BLOCK).await, vec![(u(A), 1)]);
     assert!(queued(&storage, OLD_BLOCK).await.is_empty());
+}
+
+/// Patrick's review: the same Rank id registered from another space is that
+/// space's own ballot. It can't replace, delete or unlink the original's
+/// items, and the original's delete sticks: recovery works on (id, space)
+/// pairs and never over a tombstone.
+#[tokio::test]
+async fn a_rank_id_registered_from_another_space_is_a_separate_ballot() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_359C_0001;
+    const VICTIM: u128 = 0xE2E5_359C_0011;
+    const OTHER: u128 = 0xE2E5_359C_0012;
+    const BLOCK: u128 = 0xE2E5_359C_0021;
+    const R: u128 = 0xE2E5_359C_0041;
+    const A: u128 = 0xE2E5_359C_0031;
+    const B: u128 = 0xE2E5_359C_0032;
+    const C: u128 = 0xE2E5_359C_0033;
+    fresh_dao_block(&storage, SPACE, &[VICTIM, OTHER], BLOCK, &[R], None).await;
+    apply_in(
+        &storage,
+        VICTIM,
+        &ballot_edit(R, BLOCK, 0x359C_1000, SPACE, &[A, B]),
+        10,
+    )
+    .await;
+
+    // OTHER registers R in its own space, links it, votes [C], and deletes the
+    // victim's vote and link relations from there.
+    apply_in(
+        &storage,
+        OTHER,
+        &ballot_edit(R, BLOCK, 0x359C_2000, SPACE, &[C]),
+        11,
+    )
+    .await;
+    let attack = EditBuilder::new(gid(0x359C_0A77))
+        .delete_relation(gid(0x359C_1000))
+        .delete_relation(gid(0x359C_1001))
+        .delete_relation(gid(0x359C_10B0))
+        .build();
+    apply_in(&storage, OTHER, &attack, 12).await;
+
+    let items_of = |space: u128| async move {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT entity_id FROM ranks.ranking_items WHERE ranking_id = $1 AND rank_space_id = $2 \
+             ORDER BY entity_id",
+        )
+        .bind(u(R))
+        .bind(u(space))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        items_of(VICTIM).await,
+        vec![u(A), u(B)],
+        "the victim's items are untouched"
+    );
+    assert_eq!(items_of(OTHER).await, vec![u(C)], "OTHER's own ballot");
+    assert_eq!(
+        storage.block_id_for_ranking(u(R), u(VICTIM)).await.unwrap(),
+        Some(u(BLOCK))
+    );
+    // Two ballots, one per space (and one provenance relation for the id).
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(A), 1), (u(B), 1), (u(C), 1)]
+    );
+
+    // The victim deletes R. OTHER's ballot stays; the victim's is gone.
+    let delete = EditBuilder::new(gid(0x359C_0DE1))
+        .delete_entity(gid(R))
+        .build();
+    apply_in(&storage, VICTIM, &delete, 20).await;
+    assert!(items_of(VICTIM).await.is_empty());
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(C), 1)]);
+
+    // R is typed in both spaces in the graph. Recovery finds neither pair (the
+    // victim's is tombstoned, OTHER's is registered) and can't resurrect the
+    // victim's even when handed it directly.
+    for (rel, space) in [(0x359C_10A0u128, VICTIM), (0x359C_20A0, OTHER)] {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap())
+        .bind(u(R))
+        .bind(Uuid::parse_str(RANK_TYPE_ID).unwrap())
+        .bind(u(space))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let candidates = storage.find_unregistered_ranks().await.unwrap();
+    assert!(!candidates.iter().any(|(id, _)| *id == u(R)));
+    let config = storage
+        .get_rank_config_from_kg(u(R), u(VICTIM))
+        .await
+        .unwrap()
+        .expect("typed in the victim's space");
+    assert!(
+        !storage.recover_ranking(&config).await.unwrap(),
+        "recovery never registers over a tombstone"
+    );
+    let tombstoned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ranks.deleted_rankings WHERE id = $1 AND space_id = $2",
+    )
+    .bind(u(R))
+    .bind(u(VICTIM))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(tombstoned, 1, "and never clears it");
+    assert_eq!(
+        storage.block_id_for_ranking(u(R), u(VICTIM)).await.unwrap(),
+        None
+    );
+}
+
+/// Patrick's review: ballots cleared before the delete handling was deployed.
+/// A registered Rank whose items all lack a relation id and with no vote
+/// relation left in its space has its items removed and its block rescored;
+/// a Rank whose vote relations are still in the graph is left alone. A dry
+/// run only counts.
+#[tokio::test]
+async fn reconcile_removes_ballots_cleared_before_the_deploy() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_359D_0001;
+    const M1: u128 = 0xE2E5_359D_0011;
+    const M2: u128 = 0xE2E5_359D_0012;
+    const BLOCK: u128 = 0xE2E5_359D_0021;
+    const CLEARED: u128 = 0xE2E5_359D_0041;
+    const KEPT: u128 = 0xE2E5_359D_0042;
+    const A: u128 = 0xE2E5_359D_0031;
+    const B: u128 = 0xE2E5_359D_0032;
+    fresh_dao_block(&storage, SPACE, &[M1, M2], BLOCK, &[CLEARED, KEPT], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(CLEARED, BLOCK, 0x359D_1000, SPACE, &[A]),
+        10,
+    )
+    .await;
+    apply_in(
+        &storage,
+        M2,
+        &ballot_edit(KEPT, BLOCK, 0x359D_2000, SPACE, &[B]),
+        11,
+    )
+    .await;
+    // As written before 0125: no relation ids. KEPT's vote relation is still
+    // in the graph; CLEARED's was deleted before the new indexer ran.
+    sqlx::query("UPDATE ranks.ranking_items SET relation_id = NULL WHERE ranking_id = ANY($1)")
+        .bind(&[u(CLEARED), u(KEPT)][..])
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, \
+         to_space_id, space_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(u(0x359D_2000))
+    .bind(u(0x359D_2E00))
+    .bind(Uuid::parse_str(RANK_VOTES_RELATION_TYPE_ID).unwrap())
+    .bind(u(KEPT))
+    .bind(u(B))
+    .bind(u(SPACE))
+    .bind(u(M2))
+    .execute(pool)
+    .await
+    .unwrap();
+    let count_items = |rank: u128| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM ranks.ranking_items WHERE ranking_id = $1",
+        )
+        .bind(u(rank))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+
+    let (rankings, items, blocks) = storage.reconcile_cleared_ballots(true).await.unwrap();
+    assert!(
+        rankings >= 1 && items >= 1 && blocks >= 1,
+        "the dry run counts CLEARED"
+    );
+    assert_eq!(count_items(CLEARED).await, 1, "a dry run writes nothing");
+
+    storage.reconcile_cleared_ballots(false).await.unwrap();
+    assert_eq!(count_items(CLEARED).await, 0);
+    assert_eq!(
+        count_items(KEPT).await,
+        1,
+        "a ballot still in the graph is kept"
+    );
+    assert!(
+        !queued(&storage, BLOCK).await.is_empty(),
+        "its block is queued"
+    );
+    ranking_indexer::recompute::drain_pending_recomputes(
+        &storage,
+        Utc::now(),
+        ranking_indexer::recompute::DrainMode::Backfill,
+        &std::collections::HashSet::new(),
+    )
+    .await;
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
 }

@@ -1367,9 +1367,11 @@ export const rankingItems = ranks.table(
 		weight: doublePrecision(),
 		/** The RANK_VOTES relation the item came from, so deleting it removes the item (GEO-3591, 0125). */
 		relationId: uuid("relation_id"),
+		/** The space of the Rank the item belongs to: items are scoped by (ranking, rank space) (GEO-3591, 0125). */
+		rankSpaceId: uuid("rank_space_id").notNull(),
 	},
 	(table) => [
-		primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]}),
+		primaryKey({columns: [table.rankingId, table.rankSpaceId, table.entityId, table.spaceId]}),
 		index("ranking_items_relation_id_idx").on(table.relationId).where(sql`${table.relationId} IS NOT NULL`),
 	],
 )
@@ -1386,6 +1388,8 @@ export const rankingPendingRecomputes = ranks.table(
 		queuedAt: timestamp("queued_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 		/** Failed live recomputes; the consumer stops retrying after a few, the backfill does not. */
 		attempts: integer().notNull().default(0),
+		/** Set when the backfill gives up on the block; a dead entry is skipped until reset. */
+		deadAt: timestamp("dead_at", {withTimezone: true, mode: "date"}),
 	},
 	(table) => [index("pending_recomputes_block_id_idx").on(table.blockId)],
 )

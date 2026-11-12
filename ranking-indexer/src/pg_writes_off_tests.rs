@@ -76,6 +76,7 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         position: None,
         weight: None,
         relation_id: None,
+        rank_space_id: None,
     };
     let score = ScoreRow {
         entity_id: a,
@@ -105,7 +106,11 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         nothing(s.delete_ranking_items_by_relation(&[a], b).await),
         nothing(s.unlink_rankings_by_relation(&[a], b).await),
         nothing(s.delete_rankings(&[a], &[a], b).await),
-        s.note_pending_recompute_failure(a).await,
+        s.note_pending_recompute_failure(a, Some(1))
+            .await
+            .map(|dead| assert!(!dead)),
+        s.reconcile_cleared_ballots(false).await.map(|_| ()),
+        s.recover_ranking(&ranking).await.map(|ins| assert!(!ins)),
         s.fill_missing_relation_ids()
             .await
             .map(|n| assert_eq!(n, (0, 0))),
@@ -181,6 +186,8 @@ fn pg_writes_off_issues_no_statements_and_counts_skips() {
         "delete_rankings",
         "fill_relation_ids",
         "note_pending_recompute_failure",
+        "reconcile_cleared_ballots",
+        "recover_ranking",
         "replace_ranking_scores",
         "replace_rank_position_projection",
     ] {

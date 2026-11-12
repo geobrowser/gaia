@@ -467,6 +467,7 @@ mod tests {
             position: position.map(|s| s.to_string()),
             weight,
             relation_id: None,
+            rank_space_id: None,
         }
     }
 
@@ -561,6 +562,7 @@ mod tests {
                 position: Some("a0".into()),
                 weight: None,
                 relation_id: None,
+                rank_space_id: None,
             },
             RankingItem {
                 ranking_id: Uuid::from_u128(1),
@@ -569,6 +571,7 @@ mod tests {
                 position: Some("a1".into()),
                 weight: None,
                 relation_id: None,
+                rank_space_id: None,
             },
         ];
         let rows = aggregate(&[(&r, items)], NORM_LO, NORM_HI, None);
@@ -924,6 +927,7 @@ mod tests {
             position: Some(pos.into()),
             weight: None,
             relation_id: None,
+            rank_space_id: None,
         };
         let ballots = vec![
             (&r1, vec![under(7, "a0"), item(200, Some("a1"), None)]),
@@ -964,6 +968,7 @@ mod tests {
             position: Some("a0".into()),
             weight: None,
             relation_id: None,
+            rank_space_id: None,
         };
         let rows = aggregate_with(
             &[(&r1, vec![under(9)]), (&r2, vec![under(4)])],

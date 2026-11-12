@@ -581,13 +581,17 @@ export const readRankingRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator
 		pageSize,
 	)
 
-/** Every `ranks.ranking_items` row (keyset-paged on its primary key). */
+/**
+ * Every `ranks.ranking_items` row (keyset-paged on its primary key, which includes `rank_space_id` since 0125).
+ * The keyed record has no rank-space column yet: one Rank id registered from two spaces maps both ballots' items
+ * onto the same records (GEO-3591; see ranksKeyed.ts).
+ */
 export const readRankingItemRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<RankingItemRow> =>
 	pageByKey<RankingItemRow>(
 		db,
-		`t.ranking_id::text AS ranking_id, t.entity_id::text AS entity_id, t.space_id::text AS space_id,
-		 t.position AS position, t.weight AS weight`,
+		`t.ranking_id::text AS ranking_id, t.rank_space_id::text AS rank_space_id, t.entity_id::text AS entity_id,
+		 t.space_id::text AS space_id, t.position AS position, t.weight AS weight`,
 		"ranks.ranking_items",
-		["ranking_id", "entity_id", "space_id"],
+		["ranking_id", "rank_space_id", "entity_id", "space_id"],
 		pageSize,
 	)

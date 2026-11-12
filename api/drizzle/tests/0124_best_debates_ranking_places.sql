@@ -155,8 +155,9 @@ $$;
 CREATE OR REPLACE FUNCTION pg_temp.ballot(rk text, who text, blk bigint, items text[]) RETURNS void LANGUAGE sql AS $$
   INSERT INTO ranks.rankings (id, block_id, space_id, updated_at_block, update_index)
   VALUES (pg_temp.i(rk), pg_temp.i('BLK'), pg_temp.i(who), blk, 0);
-  INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position)
-  SELECT pg_temp.i(rk), pg_temp.i(x), pg_temp.i('S1'), 'a' || o FROM unnest(items) WITH ORDINALITY AS u(x, o);
+  INSERT INTO ranks.ranking_items (ranking_id, rank_space_id, entity_id, space_id, position)
+  SELECT pg_temp.i(rk), pg_temp.i(who), pg_temp.i(x), pg_temp.i('S1'), 'a' || o
+  FROM unnest(items) WITH ORDINALITY AS u(x, o);
 $$;
 CREATE OR REPLACE FUNCTION pg_temp.scored(k text, pos integer, space_k text DEFAULT 'S1') RETURNS void LANGUAGE sql AS $$
   INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position)

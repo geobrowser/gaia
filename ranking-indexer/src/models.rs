@@ -69,4 +69,10 @@ pub struct RankingItem {
     /// `DeleteRelation` of it removes the item (GEO-3591). `None` for an item
     /// written before migration 0125 whose relation could not be found.
     pub relation_id: Option<Uuid>,
+    /// The space of the Rank this item belongs to (`ranking_items.rank_space_id`,
+    /// GEO-3591): items are scoped by `(ranking_id, rank_space_id)`, the same
+    /// pair `ranks.rankings` is keyed on. `None` on an item detect() just read
+    /// (storage writes the edit's space); `Some` on every item read back.
+    #[sqlx(default)]
+    pub rank_space_id: Option<Uuid>,
 }

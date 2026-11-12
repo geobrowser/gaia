@@ -22,8 +22,12 @@ use crate::{publish, scoring};
 /// Block ids whose aggregate may have changed as a result of this edit:
 /// blocks whose own settings changed, blocks newly linked from a rank, and the
 /// (possibly previously-linked) block of any rank/item touched here.
+///
+/// `space_id` is the edit's space: a Rank's block is looked up for the Rank
+/// registered in that space, as `ranks.rankings` is keyed `(id, space_id)`.
 pub async fn affected_blocks(
     detected: &DetectedEdit,
+    space_id: Uuid,
     storage: &Storage,
 ) -> Result<HashSet<Uuid>, IndexerError> {
     let mut blocks: HashSet<Uuid> = HashSet::new();
@@ -45,7 +49,7 @@ pub async fn affected_blocks(
         ranking_ids.insert(it.ranking_id);
     }
     for ranking_id in ranking_ids {
-        if let Some(block_id) = storage.block_id_for_ranking(ranking_id).await? {
+        if let Some(block_id) = storage.block_id_for_ranking(ranking_id, space_id).await? {
             blocks.insert(block_id);
         }
     }
@@ -60,20 +64,27 @@ pub async fn affected_blocks(
 /// ballot counts, and is not published as an `Aggregated rankings` source. The
 /// caller passes rankings that are already deduped, so a cleared ranking still
 /// supersedes the same ranker's older submission to the block.
+///
+/// Items are matched on `(ranking id, rank space)`: the same Rank id
+/// registered from two spaces is two ballots, each with its own items.
 pub fn ballots_with_items(
     eligible: &[Ranking],
     items: Vec<RankingItem>,
 ) -> Vec<(&Ranking, Vec<RankingItem>)> {
-    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
+    let mut items_by_ranking: HashMap<(Uuid, Option<Uuid>), Vec<RankingItem>> = HashMap::new();
     for item in items {
         items_by_ranking
-            .entry(item.ranking_id)
+            .entry((item.ranking_id, item.rank_space_id))
             .or_default()
             .push(item);
     }
     eligible
         .iter()
-        .filter_map(|r| items_by_ranking.remove(&r.id).map(|items| (r, items)))
+        .filter_map(|r| {
+            items_by_ranking
+                .remove(&(r.id, Some(r.space_id)))
+                .map(|items| (r, items))
+        })
         .collect()
 }
 
@@ -98,7 +109,35 @@ pub async fn recompute_block(
     // One recompute of a block at a time (the consumer and the hourly
     // backfill can both reach it). Released when `lock` commits below, or is
     // dropped on any early return or error.
-    let mut lock = storage.lock_block_for_recompute(block_id).await?;
+    let lock = storage.lock_block_for_recompute(block_id).await?;
+    recompute_locked(block_id, meta, now, storage, lock).await
+}
+
+/// [`recompute_block`] if no other recompute holds the block, else nothing:
+/// `Ok(false)`, and the block's queue entries stay for a later run. The queue
+/// drain uses it, so a live edit never waits on a block it did not touch.
+pub async fn recompute_block_if_free(
+    block_id: Uuid,
+    meta: BlockMeta,
+    now: DateTime<Utc>,
+    storage: &Storage,
+) -> Result<bool, IndexerError> {
+    match storage.try_lock_block_for_recompute(block_id).await? {
+        Some(lock) => {
+            recompute_locked(block_id, meta, now, storage, lock).await?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+async fn recompute_locked(
+    block_id: Uuid,
+    meta: BlockMeta,
+    now: DateTime<Utc>,
+    storage: &Storage,
+    mut lock: sqlx::Transaction<'static, sqlx::Postgres>,
+) -> Result<(), IndexerError> {
     // Queue entries for this block visible before we read its inputs
     // (GEO-3591). Exactly these are cleared below with the commit; an entry
     // committed after this read stays queued for the next recompute.
@@ -145,7 +184,7 @@ pub async fn recompute_block(
 
     // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space),
     //    or per entity for an average-mode block.
-    let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();
+    let eligible_ids: Vec<(Uuid, Uuid)> = eligible.iter().map(|r| (r.id, r.space_id)).collect();
     let items = storage.get_items_for_rankings(&eligible_ids).await?;
     let ballots = ballots_with_items(&eligible, items);
     // Rolling blocks weight each ballot by recency, using the block's
@@ -169,7 +208,11 @@ pub async fn recompute_block(
     //    value on each reified entity) and Aggregated rankings provenance into
     //    the public graph, replacing the prior projection atomically.
     let projection = publish::build_projection(block_id, &scores);
-    let contributing: Vec<Uuid> = ballots.iter().map(|(r, _)| r.id).collect();
+    // One provenance relation per Rank id: the same id counted from two
+    // spaces would otherwise mint the same deterministic relation id twice.
+    let mut contributing: Vec<Uuid> = ballots.iter().map(|(r, _)| r.id).collect();
+    contributing.sort();
+    contributing.dedup();
     storage
         .replace_rank_position_projection(
             block_id,
@@ -278,7 +321,7 @@ pub async fn apply_detected_edit(
 
     // This edit's own blocks first, with errors propagating as for any edit.
     let now = Utc::now();
-    own.extend(affected_blocks(detected, storage).await?);
+    own.extend(affected_blocks(detected, space_id, storage).await?);
     for block_id in &own {
         recompute_block(*block_id, detected.meta, now, storage).await?;
     }
@@ -290,14 +333,7 @@ pub async fn apply_detected_edit(
     // a queue entry can come from any write that queues (a delete, or a rank
     // moving block), and a redelivered edit no longer sees what it queued
     // the first time.
-    drain_pending_recomputes(
-        storage,
-        detected.meta,
-        now,
-        Some(LIVE_DRAIN_MAX_ATTEMPTS),
-        &own,
-    )
-    .await;
+    drain_pending_recomputes(storage, now, DrainMode::Live, &own).await;
 
     Ok(())
 }
@@ -306,21 +342,49 @@ pub async fn apply_detected_edit(
 /// before leaving it to the hourly backfill.
 pub const LIVE_DRAIN_MAX_ATTEMPTS: i32 = 3;
 
+/// How many failed attempts in all (live and backfill) before the backfill
+/// marks a queue entry dead and stops retrying it. Re-enqueue with
+/// `UPDATE ranks.pending_recomputes SET dead_at = NULL, attempts = 0
+/// WHERE block_id = '<id>'` (migration 0125).
+pub const BACKFILL_DEAD_AFTER: i32 = 10;
+
+/// Who is draining the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainMode {
+    /// The live consumer, after an edit's own blocks: skips blocks that failed
+    /// [`LIVE_DRAIN_MAX_ATTEMPTS`] times, never marks one dead.
+    Live,
+    /// The hourly backfill: every live entry, and an entry that reaches
+    /// [`BACKFILL_DEAD_AFTER`] attempts is marked dead.
+    Backfill,
+}
+
 /// Recompute the blocks in `ranks.pending_recomputes` (GEO-3591), except
-/// `skip`. A failure is logged, counted in
-/// `ranking_indexer_pending_recompute_failures_total` and in the entry's
-/// `attempts`, and does not stop the others. `max_attempts` leaves out blocks
-/// that have already failed that often (the live consumer); `None` takes every
-/// queued block (the hourly backfill). Returns `(recomputed, failed)`.
+/// `skip` and dead entries, best effort:
+/// - a block another recompute holds is skipped and stays queued (the lock is
+///   only tried, so an edit never waits behind, say, the backfill);
+/// - a failure is logged, counted in
+///   `ranking_indexer_pending_recompute_failures_total` and in the entry's
+///   `attempts`, and does not stop the others; in [`DrainMode::Backfill`] an
+///   entry that reaches [`BACKFILL_DEAD_AFTER`] is marked dead and logged;
+/// - entities a recompute mints are stamped with the chain cursor
+///   ([`Storage::current_chain_meta`], as the backfill always did), not with
+///   any one edit's block, since the queued work is not that edit's.
+///
+/// Returns `(recomputed, failed)`; a skipped block is neither. The
+/// `ranking_indexer_pending_recompute_dead_blocks` gauge is refreshed.
 pub async fn drain_pending_recomputes(
     storage: &Storage,
-    meta: BlockMeta,
     now: DateTime<Utc>,
-    max_attempts: Option<i32>,
+    mode: DrainMode,
     skip: &HashSet<Uuid>,
 ) -> (usize, usize) {
-    let queued = match storage.pending_recompute_blocks(max_attempts).await {
-        Ok(queued) => queued,
+    let max_attempts = match mode {
+        DrainMode::Live => Some(LIVE_DRAIN_MAX_ATTEMPTS),
+        DrainMode::Backfill => None,
+    };
+    let queued: Vec<Uuid> = match storage.pending_recompute_blocks(max_attempts).await {
+        Ok(queued) => queued.into_iter().filter(|b| !skip.contains(b)).collect(),
         Err(e) => {
             tracing::warn!(error = %e, "could not read the pending recompute queue");
             crate::metrics::pending_recompute_failed();
@@ -328,22 +392,52 @@ pub async fn drain_pending_recomputes(
         }
     };
     let (mut recomputed, mut failed) = (0, 0);
-    for block_id in queued.into_iter().filter(|b| !skip.contains(b)) {
-        match recompute_block(block_id, meta, now, storage).await {
-            Ok(()) => recomputed += 1,
+    if !queued.is_empty() {
+        let meta = match storage.current_chain_meta().await {
+            Ok(meta) => meta,
             Err(e) => {
-                failed += 1;
+                tracing::warn!(error = %e, "could not read the chain cursor for a drain");
                 crate::metrics::pending_recompute_failed();
-                tracing::warn!(
-                    block_id = %block_id,
-                    error = %e,
-                    "queued block recompute failed; left queued"
-                );
-                if let Err(e) = storage.note_pending_recompute_failure(block_id).await {
-                    tracing::warn!(block_id = %block_id, error = %e, "could not count the failure");
+                return (0, 1);
+            }
+        };
+        for block_id in queued {
+            match recompute_block_if_free(block_id, meta, now, storage).await {
+                Ok(true) => recomputed += 1,
+                Ok(false) => {
+                    tracing::debug!(block_id = %block_id, "queued block is being recomputed elsewhere; left queued");
+                }
+                Err(e) => {
+                    failed += 1;
+                    crate::metrics::pending_recompute_failed();
+                    tracing::warn!(
+                        block_id = %block_id,
+                        error = %e,
+                        "queued block recompute failed; left queued"
+                    );
+                    let dead_after = (mode == DrainMode::Backfill).then_some(BACKFILL_DEAD_AFTER);
+                    match storage
+                        .note_pending_recompute_failure(block_id, dead_after)
+                        .await
+                    {
+                        Ok(true) => tracing::error!(
+                            block_id = %block_id,
+                            attempts = BACKFILL_DEAD_AFTER,
+                            "queued block recompute keeps failing; marked dead, no longer retried \
+                             (reset dead_at and attempts in ranks.pending_recomputes to retry)"
+                        ),
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::warn!(block_id = %block_id, error = %e, "could not count the failure")
+                        }
+                    }
                 }
             }
         }
+    }
+    match storage.dead_pending_recompute_blocks().await {
+        Ok(dead) => crate::metrics::pending_recompute_dead(dead),
+        Err(e) => tracing::warn!(error = %e, "could not count dead queue entries"),
     }
     (recomputed, failed)
 }
@@ -374,7 +468,25 @@ mod tests {
             position: Some("a0".into()),
             weight: None,
             relation_id: None,
+            rank_space_id: Some(Uuid::from_u128(900 + ranking)),
         }
+    }
+
+    #[test]
+    fn items_match_their_rankings_space_too() {
+        // Rank 1 registered from its own space (901) and, by someone else, from
+        // space 777: two ballots, each with only its own items.
+        let mut other = ranking(1);
+        other.space_id = Uuid::from_u128(777);
+        let eligible = vec![ranking(1), other];
+        let mut foreign = item(1, 200);
+        foreign.rank_space_id = Some(Uuid::from_u128(777));
+        let ballots = ballots_with_items(&eligible, vec![item(1, 100), foreign]);
+        assert_eq!(ballots.len(), 2);
+        assert_eq!(ballots[0].0.space_id, Uuid::from_u128(901));
+        assert_eq!(ballots[0].1.len(), 1);
+        assert_eq!(ballots[0].1[0].entity_id, Uuid::from_u128(100));
+        assert_eq!(ballots[1].1[0].entity_id, Uuid::from_u128(200));
     }
 
     #[test]

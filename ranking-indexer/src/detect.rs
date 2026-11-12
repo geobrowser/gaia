@@ -355,6 +355,7 @@ pub fn detect(
                         position: relation.position.as_ref().map(|p| p.to_string()),
                         weight,
                         relation_id: Some(id_to_uuid(&relation.id)),
+                        rank_space_id: None,
                     });
                 } else if type_id == ids.rank_block_relation {
                     out.block_links.push(BlockLink {
