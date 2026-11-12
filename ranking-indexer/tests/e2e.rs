@@ -1945,7 +1945,7 @@ async fn block_config_switches_scoring_and_recomputes_without_a_ballot_edit() {
     let b = avg_rows.iter().find(|r| r.0 == u(B)).unwrap();
     assert!((a.2 - 0.875).abs() < 1e-12, "A = (1.0 + 0.75) / 2");
     assert!(
-        (b.2 - 1.75 / 3.0).abs() < 1e-12,
+        (b.2 - 1.75 / 3.0).abs() < 1e-9,
         "B = (0.5 + 0.5 + 0.75) / 3"
     );
     assert_eq!((a.4, b.4), (1, 2), "ballot counts");

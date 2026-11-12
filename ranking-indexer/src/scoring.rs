@@ -156,6 +156,19 @@ pub const AVERAGE_PRIOR_POINTS: f64 = 0.75;
 /// How many phantom ballots the prior counts as.
 pub const AVERAGE_PRIOR_BALLOTS: f64 = 1.0;
 
+/// Average-mode scores are rounded to this many units per 1.0 before they are
+/// compared or stored. Points like `1 - 0.5 * 3/4` are mostly not exact in
+/// binary, so two equal averages can come out one ulp apart (0.675 against
+/// 0.6749999999999999) and the "more ballots" tie-break would never run. A
+/// nanoscore is far below any real difference between two debates' averages,
+/// and far above the float error.
+pub const AVERAGE_SCORE_UNITS: f64 = 1e9;
+
+/// The integer an average-mode score is ordered by, and (divided back) stored as.
+fn average_score_key(score: f64) -> i64 {
+    (score * AVERAGE_SCORE_UNITS).round() as i64
+}
+
 fn is_weighted(rank_type: Option<&str>) -> bool {
     matches!(rank_type, Some(t) if t.eq_ignore_ascii_case("WEIGHTED"))
 }
@@ -265,7 +278,9 @@ pub fn aggregate(
 ///   - `score = (Σ points + AVERAGE_PRIOR_POINTS) / (ballots + AVERAGE_PRIOR_BALLOTS)`.
 ///     On a Rolling block each ballot's points and its count are both scaled by
 ///     its recency, which reduces to the formula above with no decay;
-///   - ties go to the entity on more ballots, then the lower entity id.
+///   - ties go to the entity on more ballots, then the lower entity id. Scores
+///     are rounded to [`AVERAGE_SCORE_UNITS`] first, so averages that are equal
+///     but differ by float error tie (and are stored as the same value).
 pub fn aggregate_with(
     ballots: &[(&Ranking, Vec<RankingItem>)],
     lo: f64,
@@ -343,10 +358,12 @@ fn aggregate_average(
         }
     }
 
-    let mut rows: Vec<(Uuid, Uuid, f64, i32)> = acc
+    let mut rows: Vec<(Uuid, Uuid, i64, i32)> = acc
         .into_iter()
         .map(|(entity_id, a)| {
-            let score = (a.points + AVERAGE_PRIOR_POINTS) / (a.weight + AVERAGE_PRIOR_BALLOTS);
+            let score = average_score_key(
+                (a.points + AVERAGE_PRIOR_POINTS) / (a.weight + AVERAGE_PRIOR_BALLOTS),
+            );
             // Most ballots first, then the lowest space id.
             let space_id = a
                 .spaces
@@ -357,10 +374,10 @@ fn aggregate_average(
             (entity_id, space_id, score, a.ballots)
         })
         .collect();
-    // Descending score; then more ballots; then the lower entity id.
+    // Descending score (as an integer key, so equal averages compare equal);
+    // then more ballots; then the lower entity id.
     rows.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2)
-            .unwrap_or(Ordering::Equal)
+        b.2.cmp(&a.2)
             .then_with(|| b.3.cmp(&a.3))
             .then_with(|| a.0.cmp(&b.0))
     });
@@ -371,7 +388,9 @@ fn aggregate_average(
         .map(|(i, (entity_id, space_id, score, ballots))| ScoreRow {
             entity_id,
             space_id,
-            score,
+            // Stored as the rounded value it was ordered by, so two rows with
+            // the same stored score are the ones the tie-break ordered.
+            score: score as f64 / AVERAGE_SCORE_UNITS,
             position: (i as i32) + 1,
             ballots,
         })
@@ -818,9 +837,10 @@ mod tests {
         assert!((row(&sums, B).score - 1.0).abs() < 1e-12);
 
         let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
-        // A: (1.0 + 0.75) / 2 = 0.875. B: (0.5 + 0.5 + 0.75) / 3 = 0.5833…
+        // A: (1.0 + 0.75) / 2 = 0.875. B: (0.5 + 0.5 + 0.75) / 3 = 0.5833…,
+        // stored rounded to AVERAGE_SCORE_UNITS.
         assert!((row(&rows, A).score - 0.875).abs() < 1e-12);
-        assert!((row(&rows, B).score - 1.75 / 3.0).abs() < 1e-12);
+        assert!((row(&rows, B).score - 1.75 / 3.0).abs() < 1e-9);
         assert_eq!(row(&rows, A).ballots, 1);
         assert_eq!(row(&rows, B).ballots, 2);
         assert!(row(&rows, A).position < row(&rows, B).position);
@@ -978,6 +998,42 @@ mod tests {
     }
 
     #[test]
+    fn average_ties_that_differ_by_rounding_still_go_to_more_ballots() {
+        // X is 5th of 6 on one ballot: (0.6 + 0.75) / 2 = 0.675.
+        // Y is 4th of 5 and 8th of 11: (0.625 + 0.65 + 0.75) / 3 = 0.675,
+        // which raw f64 arithmetic makes 0.6749999999999999.
+        // They are equal, so Y (two ballots) leads, though X has the lower id.
+        const X: u128 = 100;
+        const Y: u128 = 200;
+        let filler =
+            |from: u128, n: usize| -> Vec<u128> { (0..n as u128).map(|i| from + i).collect() };
+        let mut x_ballot = filler(1_000, 4);
+        x_ballot.extend([X, 1_100]);
+        let mut y_short = filler(2_000, 3);
+        y_short.extend([Y, 2_100]);
+        let mut y_long = filler(3_000, 7);
+        y_long.push(Y);
+        y_long.extend(filler(3_100, 3));
+        assert_eq!((x_ballot.len(), y_short.len(), y_long.len()), (6, 5, 11));
+
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let r3 = ranking(3, "ORDINAL");
+        let ballots = vec![
+            (&r1, ordered(&x_ballot)),
+            (&r2, ordered(&y_short)),
+            (&r3, ordered(&y_long)),
+        ];
+        let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        let (x, y) = (row(&rows, X), row(&rows, Y));
+        assert_eq!((x.ballots, y.ballots), (1, 2));
+        // The stored scores are the same number, so they agree with the order.
+        assert_eq!(x.score, y.score);
+        assert!((x.score - 0.675).abs() < 1e-12);
+        assert!(y.position < x.position, "more ballots wins an equal score");
+    }
+
+    #[test]
     fn average_decays_points_and_count_together_on_a_rolling_block() {
         let hour = 3600;
         let now = at(48 * hour);
@@ -999,7 +1055,7 @@ mod tests {
         );
         // A: (1.0 + 0.25*0.5 + 0.75) / (1 + 0.25 + 1)
         let a = (1.0 + 0.125 + 0.75) / 2.25;
-        assert!((row(&rows, 100).score - a).abs() < 1e-12);
+        assert!((row(&rows, 100).score - a).abs() < 1e-9);
         // The count is of ballots, undecayed.
         assert_eq!(row(&rows, 100).ballots, 2);
         assert_eq!(rows[0].entity_id, Uuid::from_u128(100));
