@@ -123,19 +123,19 @@ export async function sampleTable(
 			table === "global_scores"
 				? await db.execute(
 						from === null
-							? sql`SELECT entity_id::text, score::text FROM global_scores ORDER BY entity_id LIMIT ${n}`
-							: sql`SELECT entity_id::text, score::text FROM global_scores WHERE entity_id >= ${from}::uuid ORDER BY entity_id LIMIT ${n}`,
+							? sql`SELECT g.entity_id::text, g.score::text FROM global_scores g ORDER BY g.entity_id LIMIT ${n}`
+							: sql`SELECT g.entity_id::text, g.score::text FROM global_scores g WHERE g.entity_id >= ${from}::uuid ORDER BY g.entity_id LIMIT ${n}`,
 					)
 				: table === "space_scores"
 					? await db.execute(
 							from === null
-								? sql`SELECT space_id::text, score::text FROM space_scores ORDER BY space_id LIMIT ${n}`
-								: sql`SELECT space_id::text, score::text FROM space_scores WHERE space_id >= ${from}::uuid ORDER BY space_id LIMIT ${n}`,
+								? sql`SELECT s.space_id::text, s.score::text FROM space_scores s ORDER BY s.space_id LIMIT ${n}`
+								: sql`SELECT s.space_id::text, s.score::text FROM space_scores s WHERE s.space_id >= ${from}::uuid ORDER BY s.space_id LIMIT ${n}`,
 						)
 					: await db.execute(
 							from === null
-								? sql`SELECT entity_id::text, space_id::text, score::text FROM local_scores ORDER BY entity_id, space_id LIMIT ${n}`
-								: sql`SELECT entity_id::text, space_id::text, score::text FROM local_scores WHERE entity_id >= ${from}::uuid ORDER BY entity_id, space_id LIMIT ${n}`,
+								? sql`SELECT l.entity_id::text, l.space_id::text, l.score::text FROM local_scores l ORDER BY l.entity_id, l.space_id LIMIT ${n}`
+								: sql`SELECT l.entity_id::text, l.space_id::text, l.score::text FROM local_scores l WHERE l.entity_id >= ${from}::uuid ORDER BY l.entity_id, l.space_id LIMIT ${n}`,
 						)
 		return rowsOf(result)
 			.map((r) => toSampledRow(table, r))

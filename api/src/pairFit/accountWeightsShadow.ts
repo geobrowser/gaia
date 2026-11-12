@@ -216,8 +216,8 @@ export async function sampleAccountIds(db: Database, pivot: string, limit: numbe
 	const read = async (from: string | null, n: number): Promise<string[]> => {
 		const result = await db.execute(
 			from === null
-				? sql`SELECT user_id::text AS user_id FROM public.account_weights ORDER BY user_id LIMIT ${n}`
-				: sql`SELECT user_id::text AS user_id FROM public.account_weights WHERE user_id >= ${from}::uuid ORDER BY user_id LIMIT ${n}`,
+				? sql`SELECT w.user_id::text AS user_id FROM public.account_weights w ORDER BY w.user_id LIMIT ${n}`
+				: sql`SELECT w.user_id::text AS user_id FROM public.account_weights w WHERE w.user_id >= ${from}::uuid ORDER BY w.user_id LIMIT ${n}`,
 		)
 		const rows = ((result as {rows?: Record<string, unknown>[]}).rows ?? []) as Record<string, unknown>[]
 		return rows.map((r) => String(r.user_id))

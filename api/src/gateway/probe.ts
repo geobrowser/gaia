@@ -42,8 +42,8 @@ export async function sampleRelationIds(
 	const read = async (from: string | null, n: number): Promise<string[]> => {
 		const result = await db.execute(
 			from === null
-				? sql`SELECT id::text FROM relations ORDER BY id LIMIT ${n}`
-				: sql`SELECT id::text FROM relations WHERE id >= ${from}::uuid ORDER BY id LIMIT ${n}`,
+				? sql`SELECT r.id::text FROM relations r ORDER BY r.id LIMIT ${n}`
+				: sql`SELECT r.id::text FROM relations r WHERE r.id >= ${from}::uuid ORDER BY r.id LIMIT ${n}`,
 		)
 		return (((result as {rows?: unknown}).rows as {id: unknown}[] | undefined) ?? []).flatMap((r) =>
 			typeof r.id === "string" ? [r.id] : [],
