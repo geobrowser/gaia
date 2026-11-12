@@ -260,6 +260,38 @@ $K rollout status deployment/geodb-feeder
 # verify: rerun with __DRY_RUN__ -> 1 (feeder may run): valuesToWrite 0.
 ```
 
+### 2b-quater. Relation-seed (records for relations that predate GEODB_RELATION_POSITIONS)
+
+With `GEODB_RELATION_POSITIONS` on, the feeder moves a relation's position with `set_position`, which names the relation's
+cell and its open statement id. It knows those only for relations it created itself (`known-relations.log`); a move of any
+older relation is dropped and counted as `relation-move-cell-unknown`. Job `geodb-relation-seed`
+(`geodb/k8s/v2/geodb-relation-seed-job.yaml`, `BACKFILL_MODE=relation-seed`, `geodb-feeder/src/relationSeed.ts`) writes
+those records. For each mapped Space it lists the entities with an outgoing relation in Postgres, reads each entity's card
+with claims from geo-db, and records a relation only when geo-db holds its statement open under the id the feeder derives
+from the gaia relation id (the facet claims on it are read too, because a move writes them again on the copy). It never
+replaces a record the feeder holds, and it writes nothing to geo-db: its only writes are `known-relations.log` (and
+`known-statements.log` for a statement geo-db holds that the journal lacked). Cursor: `/data/feeder/relation-seed/`.
+
+- `DRY_RUN=1` (required to be set, no default): reads, logs counts, writes no journal line and no cursor, needs no stopped
+  feeder. Final line `relation-seed done`: `relations`, `toSeed` (what a real run records), `alreadyRecorded`, `notOpen`
+  (geo-db does not hold the statement open: not applied yet, or absent), `withFacets`, `statementsMarked`, `facetsUnreadable`.
+- `DRY_RUN=0`: writes. Needs the feeder at 0 (it appends to the journal the feeder keeps in memory; start the feeder after).
+  Knobs: `BACKFILL_BATCH` (100 entities), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all).
+- Memory: every record is a line the feeder holds in a map for good. Count `toSeed` first and check the
+  feeder's memory limit against it before the real run (not measured here).
+- Idempotent: a rerun reports the seeded relations as `alreadyRecorded`.
+- It does not repair a position move the feeder already dropped: geo-db keeps the old position, and the card read does not
+  return positions, so this pass cannot tell which relations differ.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
+  geodb/k8s/v2/geodb-relation-seed-job.yaml | $K apply -f -
+$K logs -f job/geodb-relation-seed      # "relation-seed plan", then "relation-seed done"
+$K delete job geodb-relation-seed
+# real run: stop the feeder first (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder back to 1.
+```
+
 If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
 
 ### 2b-quater. Replaying one dropped edit (`geodb-replay-edit`)
