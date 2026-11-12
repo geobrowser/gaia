@@ -219,8 +219,6 @@ pub async fn apply_detected_edit(
     // edit's own and are recomputed below. A retry of this edit after a failed
     // recompute deletes nothing the second time; the queue still holds the
     // blocks, and the drain after the edit's own blocks picks them up.
-    let has_deletes =
-        !detected.deleted_entities.is_empty() || !detected.deleted_relations.is_empty();
     let mut own: HashSet<Uuid> = HashSet::new();
     if !detected.deleted_entities.is_empty() {
         own.extend(
@@ -287,17 +285,19 @@ pub async fn apply_detected_edit(
 
     // Then whatever an earlier failed run left queued, best effort: a block
     // that fails here must not fail an unrelated edit, and one that keeps
-    // failing is left to the hourly backfill after a few tries.
-    if has_deletes {
-        drain_pending_recomputes(
-            storage,
-            detected.meta,
-            now,
-            Some(LIVE_DRAIN_MAX_ATTEMPTS),
-            &own,
-        )
-        .await;
-    }
+    // failing is left to the hourly backfill after a few tries. This runs for
+    // every edit that reaches here (any rank-relevant op), not only deletes:
+    // a queue entry can come from any write that queues (a delete, or a rank
+    // moving block), and a redelivered edit no longer sees what it queued
+    // the first time.
+    drain_pending_recomputes(
+        storage,
+        detected.meta,
+        now,
+        Some(LIVE_DRAIN_MAX_ATTEMPTS),
+        &own,
+    )
+    .await;
 
     Ok(())
 }

@@ -51,6 +51,13 @@ fn e2e_database_url() -> Option<String> {
     }
 }
 
+/// One e2e test at a time. Every applied edit drains the shared
+/// `ranks.pending_recomputes` queue (GEO-3591), so a test running in parallel
+/// would recompute, or wait on, another test's queued blocks: that can hide a
+/// broken retry path (the other test rescores the block) or stall a test that
+/// holds a block's lock on purpose.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn gid(n: u128) -> [u8; 16] {
     *Uuid::from_u128(n).as_bytes()
 }
@@ -78,6 +85,7 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -322,6 +330,7 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -503,6 +512,7 @@ async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -691,6 +701,7 @@ async fn rolling_block_keeps_scoring_a_submission_long_after_its_frequency() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -872,6 +883,7 @@ async fn prefix_null_from_space_projection_self_heals_on_recompute() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -1089,6 +1101,7 @@ async fn membership_events_integrate_and_drop_rankings() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -1340,6 +1353,7 @@ async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -1536,6 +1550,7 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -1733,6 +1748,7 @@ async fn block_config_switches_scoring_and_recomputes_without_a_ballot_edit() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -1993,6 +2009,7 @@ async fn a_2000_row_block_is_capped_and_published() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -2154,6 +2171,7 @@ async fn recompute_waits_for_the_blocks_lock() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let block = Uuid::new_v4();
     let other_block = Uuid::new_v4();
@@ -2203,6 +2221,7 @@ async fn deleted_rank_votes_leave_the_ballot_and_a_cleared_ranker_is_no_ballot()
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -2534,6 +2553,7 @@ async fn sdk_shaped_update_rank_clears_and_reranks() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
@@ -2911,6 +2931,7 @@ async fn rank_edits_from_another_space_change_nothing() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
     const SPACE: u128 = 0xE2E5_3593_0001;
@@ -3030,6 +3051,7 @@ async fn deleted_rank_stays_deleted_and_a_cleared_rank_supersedes_an_older_one()
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
     const SPACE: u128 = 0xE2E5_3594_0001;
@@ -3210,6 +3232,7 @@ async fn a_retried_clear_still_rescores_the_block() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     const SPACE: u128 = 0xE2E5_3595_0001;
     const M1: u128 = 0xE2E5_3595_0011;
@@ -3304,6 +3327,7 @@ async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let impatient = Storage::new(&with_lock_timeout(&url, 200))
         .await
@@ -3398,6 +3422,7 @@ async fn a_recompute_clears_only_the_queue_entries_it_saw() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let block = Uuid::new_v4();
     let insert = || async {
@@ -3445,6 +3470,7 @@ async fn a_rank_deleted_before_it_has_a_row_is_not_recovered() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
     const SPACE: u128 = 0xE2E5_3597_0001;
@@ -3523,6 +3549,7 @@ async fn a_rank_moved_to_another_block_leaves_the_old_one() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     const SPACE: u128 = 0xE2E5_3598_0001;
     const SPACE2: u128 = 0xE2E5_3598_0002;
@@ -3567,6 +3594,7 @@ async fn an_edits_own_deletes_are_rescored_even_when_the_queue_gave_up() {
     let Some(url) = e2e_database_url() else {
         return;
     };
+    let _serial = SERIAL.lock().await;
     let storage = Storage::new(&url).await.expect("connect");
     const SPACE: u128 = 0xE2E5_3599_0001;
     const M1: u128 = 0xE2E5_3599_0011;
@@ -3591,4 +3619,66 @@ async fn an_edits_own_deletes_are_rescored_even_when_the_queue_gave_up() {
         .build();
     apply_in(&storage, M1, &clear, 20).await;
     assert!(score_rows(&storage, BLOCK).await.is_empty());
+}
+
+/// GEO-3591 review 3: a move-only edit (a new RANK_BLOCK link) whose recompute
+/// of the old block fails is redelivered; the redelivery sees no move, but the
+/// old block queued the first time is still rescored.
+#[tokio::test]
+async fn a_retried_move_still_rescores_the_old_block() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    const SPACE: u128 = 0xE2E5_359A_0001;
+    const SPACE2: u128 = 0xE2E5_359A_0002;
+    const M1: u128 = 0xE2E5_359A_0011;
+    const OLD_BLOCK: u128 = 0xE2E5_359A_0021;
+    const NEW_BLOCK: u128 = 0xE2E5_359A_0022;
+    const RANK: u128 = 0xE2E5_359A_0041;
+    const A: u128 = 0xE2E5_359A_0031;
+    fresh_dao_block(&storage, SPACE, &[M1], OLD_BLOCK, &[RANK], None).await;
+    fresh_dao_block(&storage, SPACE2, &[M1], NEW_BLOCK, &[], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(RANK, OLD_BLOCK, 0x359A_1000, SPACE, &[A]),
+        10,
+    )
+    .await;
+    assert_eq!(score_rows(&storage, OLD_BLOCK).await, vec![(u(A), 1)]);
+
+    let relink = EditBuilder::new(gid(0x359A_0E11))
+        .create_relation(|b| {
+            b.id(gid(0x359A_10B1))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(NEW_BLOCK))
+        })
+        .build();
+    let detected = detect(&relink, u(M1), 11, 0);
+
+    // First delivery: the link moves and the old block is queued, but its
+    // recompute cannot get the lock and the attempt is abandoned.
+    let held = storage
+        .lock_block_for_recompute(u(OLD_BLOCK))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        apply_detected_edit(&detected, u(M1), &storage),
+    )
+    .await;
+    assert!(first.is_err(), "the old block's recompute was blocked");
+    held.commit().await.unwrap();
+    assert_eq!(score_rows(&storage, OLD_BLOCK).await, vec![(u(A), 1)]);
+
+    // Redelivery: no move is seen any more, the queue still rescores it.
+    apply_detected_edit(&detected, u(M1), &storage)
+        .await
+        .unwrap();
+    assert!(score_rows(&storage, OLD_BLOCK).await.is_empty());
+    assert_eq!(score_rows(&storage, NEW_BLOCK).await, vec![(u(A), 1)]);
+    assert!(queued(&storage, OLD_BLOCK).await.is_empty());
 }
