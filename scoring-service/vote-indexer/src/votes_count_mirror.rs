@@ -120,16 +120,22 @@ pub fn update_row(c: &Count) -> Option<DerivedRow> {
     })
 }
 
-/// Sends `counts` as puts: for each count its row of 26 and then its row of 33, in one call.
-/// Never fails.
+/// Sends `counts` as puts: for each count its row of 26 and then its row of 33, in one call. A
+/// count's rows are one unit, so no request, budget stop or refused request splits the pair
+/// (geo-db commits a request as one frame; the poller reads 33, so a 26 row without its 33 row
+/// would go unseen until that object's next put). Never fails.
 pub async fn mirror(mirror: &DerivedMirror, counts: &[Count]) {
-    let mut puts: Vec<DerivedRow> = Vec::with_capacity(counts.len() * 2);
-    for c in counts {
-        puts.push(row(c));
-        puts.extend(update_row(c));
-    }
-    if !puts.is_empty() {
-        mirror.put(TABLE, &puts).await;
+    let units: Vec<Vec<DerivedRow>> = counts
+        .iter()
+        .map(|c| {
+            let mut unit = vec![row(c)];
+            unit.extend(update_row(c));
+            unit
+        })
+        .collect();
+    let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
+    if !refs.is_empty() {
+        mirror.put_units(TABLE, &refs).await;
     }
 }
 
