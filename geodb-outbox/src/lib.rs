@@ -33,6 +33,14 @@
 //! (`geodb_outbox_mirror_backlog_dropped_total`). A unit that can never be sent (bad key, bad
 //! type, payload too long) is skipped, never kept.
 //!
+//! Head expiry: the unit at the head blocks the ones behind it, so a unit geo-db keeps refusing
+//! (a per-unit `Refused` answer, not a down pipe) must not sit there until overflow evicts it.
+//! The head is dropped, counted in `geodb_outbox_mirror_backlog_expired_total`, after
+//! [`EXPIRE_ATTEMPTS_DEFAULT`] refused attempts or [`EXPIRE_SECS_DEFAULT`] seconds since its first
+//! refusal (`GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS`, `GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_SECS`).
+//! Transport failures (closed pipe, timeout, cooling down) never expire a unit, so an outage still
+//! keeps everything up to the bound. The units behind the expired one keep their order.
+//!
 //! The delivery side reads the same work class through [`reader::OutboxReader`], over the same
 //! pipe client, behind its own flag `GEODB_OUTBOX_SHADOW_READ` (also off by default).
 
@@ -65,6 +73,44 @@ pub const BACKLOG_MAX_DEFAULT: usize = 3000;
 
 /// How often a non-empty backlog is retried when no new unit arrives.
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Refused attempts after which the head is dropped (about 30 s of 1 s retries).
+pub const EXPIRE_ATTEMPTS_DEFAULT: u32 = 30;
+
+/// Seconds after a unit's first refusal after which it is dropped, even with attempts left (a
+/// busy stream retries the head on every arrival, so attempts alone can be quick).
+pub const EXPIRE_SECS_DEFAULT: u64 = 120;
+
+/// When the head of the backlog is dropped for being refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Expiry {
+    pub attempts: u32,
+    pub age: Duration,
+}
+
+impl Default for Expiry {
+    fn default() -> Self {
+        Expiry {
+            attempts: EXPIRE_ATTEMPTS_DEFAULT,
+            age: Duration::from_secs(EXPIRE_SECS_DEFAULT),
+        }
+    }
+}
+
+/// The expiry from the environment: each knob a positive integer, else its default.
+pub fn expiry_from_vars(get: impl Fn(&str) -> Option<String>) -> Expiry {
+    let num = |k: &str| {
+        get(k)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|n| *n > 0)
+    };
+    let d = Expiry::default();
+    Expiry {
+        attempts: num("GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS")
+            .map_or(d.attempts, |n| n.min(u64::from(u32::MAX)) as u32),
+        age: num("GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_SECS").map_or(d.age, Duration::from_secs),
+    }
+}
 
 /// The work class's event-type byte for an outbox `event_type`, stable by this table (geo-db's
 /// `work_expire` keeps by a bitmask over types below 32). `None` for a type the table lacks.
@@ -445,17 +491,18 @@ pub struct OutboxMirror {
 impl OutboxMirror {
     /// Starts the background task on the current tokio runtime. Panics outside one.
     pub fn new(cfg: Config) -> Self {
-        Self::with_backlog(cfg, None)
+        Self::with_backlog(cfg, None, Expiry::default())
     }
 
     /// As [`OutboxMirror::new`], keeping up to `backlog` failed units for retry (`None` or
     /// `Some(0)`: a failed unit is dropped, as before).
-    pub fn with_backlog(cfg: Config, backlog: Option<usize>) -> Self {
+    pub fn with_backlog(cfg: Config, backlog: Option<usize>, expiry: Expiry) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE_MAX);
         tokio::spawn(run(
             Worker::new(cfg),
             rx,
             backlog.unwrap_or(0),
+            expiry,
             RETRY_INTERVAL,
         ));
         Self { tx }
@@ -465,7 +512,8 @@ impl OutboxMirror {
     /// `GEODB_OUTBOX_MIRROR_BACKLOG` (off by default).
     pub fn from_env() -> Option<Self> {
         let backlog = backlog_from_vars(|k| std::env::var(k).ok());
-        Config::from_env().map(|cfg| Self::with_backlog(cfg, backlog))
+        let expiry = expiry_from_vars(|k| std::env::var(k).ok());
+        Config::from_env().map(|cfg| Self::with_backlog(cfg, backlog, expiry))
     }
 
     /// Queues `unit` for the pipe. Never waits and never fails the caller: a full queue drops the
@@ -536,9 +584,30 @@ fn count_failure(unit: &Unit, e: &MirrorError) {
 struct Backlog {
     max: usize,
     units: VecDeque<(Unit, bool)>,
+    expiry: Expiry,
+    /// Refused attempts of the current head, and when the first one was. Only the head is ever
+    /// attempted, so this is the whole per-unit state; it resets whenever the head changes.
+    head_refused: u32,
+    head_since: Option<Instant>,
 }
 
 impl Backlog {
+    fn new(max: usize, expiry: Expiry) -> Self {
+        Backlog {
+            max,
+            units: VecDeque::new(),
+            expiry,
+            head_refused: 0,
+            head_since: None,
+        }
+    }
+
+    fn pop_head(&mut self) -> Option<(Unit, bool)> {
+        self.head_refused = 0;
+        self.head_since = None;
+        self.units.pop_front()
+    }
+
     fn gauge(&self) {
         metrics::gauge!("geodb_outbox_mirror_backlog").set(self.units.len() as f64);
     }
@@ -546,7 +615,7 @@ impl Backlog {
     /// Keeps `unit` behind the older ones; at the bound the oldest is dropped, counted.
     fn push(&mut self, unit: Unit, failed: bool) {
         if self.units.len() >= self.max
-            && let Some((old, _)) = self.units.pop_front()
+            && let Some((old, _)) = self.pop_head()
         {
             metrics::counter!("geodb_outbox_mirror_backlog_dropped_total").increment(1);
             warn!(
@@ -568,7 +637,7 @@ impl Backlog {
                     if *failed {
                         metrics::counter!("geodb_outbox_mirror_retried_total").increment(1);
                     }
-                    self.units.pop_front();
+                    self.pop_head();
                 }
                 Err(e) => {
                     // Counted once a unit, on its first failure, so a long outage is not
@@ -576,6 +645,28 @@ impl Backlog {
                     if !*failed {
                         *failed = true;
                         count_failure(unit, &e);
+                    }
+                    if matches!(e, MirrorError::Refused(_)) {
+                        self.head_refused += 1;
+                        let since = *self.head_since.get_or_insert_with(Instant::now);
+                        if self.head_refused >= self.expiry.attempts
+                            || since.elapsed() >= self.expiry.age
+                        {
+                            let attempts = self.head_refused;
+                            if let Some((old, _)) = self.pop_head() {
+                                metrics::counter!("geodb_outbox_mirror_backlog_expired_total")
+                                    .increment(1);
+                                warn!(
+                                    event = "geodb_outbox.backlog_expired",
+                                    ledger_key = %old.ledger_key_hex,
+                                    attempts,
+                                    error = %e,
+                                    "unit refused until its expiry; dropped from the backlog"
+                                );
+                            }
+                            // The next unit is a fresh head: try it in this pass.
+                            continue;
+                        }
                     }
                     break;
                 }
@@ -589,6 +680,7 @@ async fn run<E: Enter>(
     mut w: E,
     mut rx: mpsc::Receiver<Unit>,
     backlog_max: usize,
+    expiry: Expiry,
     retry: Duration,
 ) {
     if backlog_max == 0 {
@@ -600,10 +692,7 @@ async fn run<E: Enter>(
         }
         return;
     }
-    let mut backlog = Backlog {
-        max: backlog_max,
-        units: VecDeque::new(),
-    };
+    let mut backlog = Backlog::new(backlog_max, expiry);
     loop {
         let next = if backlog.units.is_empty() {
             match rx.recv().await {
@@ -816,7 +905,7 @@ mod tests {
         let mut w = worker("sleep 30", Duration::from_secs(60));
         w.cfg.timeout = Duration::from_millis(50);
         let (tx, rx) = mpsc::channel(QUEUE_MAX);
-        let task = tokio::spawn(run(w, rx, 0, RETRY_INTERVAL));
+        let task = tokio::spawn(run(w, rx, 0, Expiry::default(), RETRY_INTERVAL));
         let m = OutboxMirror { tx };
         let started = Instant::now();
         for _ in 0..QUEUE_MAX * 2 + 10 {
@@ -832,6 +921,8 @@ mod tests {
         calls: usize,
         held: std::collections::HashSet<String>,
         entered: Vec<String>,
+        /// Keys geo-db answers `Refused` to, however often they are tried.
+        refuse: std::collections::HashSet<String>,
     }
 
     impl Fake {
@@ -841,6 +932,7 @@ mod tests {
                 calls: 0,
                 held: Default::default(),
                 entered: vec![],
+                refuse: Default::default(),
             }
         }
     }
@@ -848,6 +940,9 @@ mod tests {
     impl Enter for Fake {
         async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
             self.calls += 1;
+            if self.refuse.contains(&unit.ledger_key_hex) {
+                return Err(MirrorError::Refused("no".into()));
+            }
             if self.calls <= self.fail {
                 return Err(MirrorError::Closed);
             }
@@ -867,10 +962,7 @@ mod tests {
     }
 
     fn backlog(max: usize) -> Backlog {
-        Backlog {
-            max,
-            units: VecDeque::new(),
-        }
+        Backlog::new(max, Expiry::default())
     }
 
     #[test]
@@ -993,6 +1085,7 @@ mod tests {
             Shared(w, seen.clone()),
             rx,
             10,
+            Expiry::default(),
             Duration::from_millis(10),
         ));
         tx.send(unit_n(1)).await.unwrap();
@@ -1008,5 +1101,102 @@ mod tests {
         task.await.unwrap();
         let want: Vec<String> = (1..3).map(|n| unit_n(n).ledger_key_hex).collect();
         assert_eq!(*seen.lock().unwrap(), want);
+    }
+
+    fn expiring(max: usize, attempts: u32, age: Duration) -> Backlog {
+        Backlog::new(max, Expiry { attempts, age })
+    }
+
+    #[tokio::test]
+    async fn a_refused_head_expires_after_n_attempts_and_the_rest_keep_their_order() {
+        let mut w = Fake::new(0);
+        w.refuse.insert(unit_n(0).ledger_key_hex);
+        let mut b = expiring(100, 3, Duration::from_secs(3600));
+        for n in 0..4 {
+            b.push(unit_n(n), false);
+        }
+        // Passes 1 and 2: unit 0 is refused and blocks 1..3.
+        b.drain(&mut w).await;
+        b.drain(&mut w).await;
+        assert_eq!(b.units.len(), 4);
+        assert!(w.entered.is_empty());
+        // Pass 3 is the third refusal: 0 expires and the same pass enters 1..3 in order.
+        b.drain(&mut w).await;
+        assert!(b.units.is_empty());
+        let want: Vec<String> = (1..4).map(|n| unit_n(n).ledger_key_hex).collect();
+        assert_eq!(w.entered, want);
+        assert_eq!((b.head_refused, b.head_since), (0, None));
+    }
+
+    #[tokio::test]
+    async fn a_refused_head_expires_by_age() {
+        let mut w = Fake::new(0);
+        w.refuse.insert(unit_n(0).ledger_key_hex);
+        // Attempts are out of reach; the age is already spent at the first refusal.
+        let mut b = expiring(100, 1_000, Duration::ZERO);
+        b.push(unit_n(0), false);
+        b.push(unit_n(1), false);
+        b.drain(&mut w).await;
+        assert!(b.units.is_empty());
+        assert_eq!(w.entered, vec![unit_n(1).ledger_key_hex]);
+    }
+
+    #[tokio::test]
+    async fn transport_failures_never_expire_a_unit() {
+        let mut w = Fake::new(usize::MAX);
+        let mut b = expiring(100, 1, Duration::ZERO);
+        b.push(unit_n(0), false);
+        for _ in 0..5 {
+            b.drain(&mut w).await;
+        }
+        assert_eq!(b.units.len(), 1);
+        assert_eq!(b.units[0].0, unit_n(0));
+        w.fail = 0;
+        b.drain(&mut w).await;
+        assert_eq!(w.entered, vec![unit_n(0).ledger_key_hex]);
+    }
+
+    #[tokio::test]
+    async fn an_expired_head_does_not_carry_its_count_to_the_next_unit() {
+        let mut w = Fake::new(0);
+        w.refuse.insert(unit_n(0).ledger_key_hex);
+        w.refuse.insert(unit_n(1).ledger_key_hex);
+        let mut b = expiring(100, 2, Duration::from_secs(3600));
+        b.push(unit_n(0), false);
+        b.push(unit_n(1), false);
+        b.push(unit_n(2), false);
+        b.drain(&mut w).await;
+        assert_eq!(b.units.len(), 3);
+        // Second refusal expires 0; 1 starts at zero and is refused once, so it stays.
+        b.drain(&mut w).await;
+        assert_eq!(b.units.len(), 2);
+        assert_eq!(b.units[0].0, unit_n(1));
+        assert_eq!(b.head_refused, 1);
+        b.drain(&mut w).await;
+        assert!(b.units.is_empty());
+        assert_eq!(w.entered, vec![unit_n(2).ledger_key_hex]);
+    }
+
+    #[test]
+    fn expiry_is_configurable_with_defaults_for_bad_values() {
+        assert_eq!(expiry_from_vars(|_| None), Expiry::default());
+        let set = |k: &str| match k {
+            "GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS" => Some("5".to_string()),
+            "GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_SECS" => Some("45".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            expiry_from_vars(set),
+            Expiry {
+                attempts: 5,
+                age: Duration::from_secs(45)
+            }
+        );
+        let bad = |k: &str| match k {
+            "GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS" => Some("0".to_string()),
+            "GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_SECS" => Some("soon".to_string()),
+            _ => None,
+        };
+        assert_eq!(expiry_from_vars(bad), Expiry::default());
     }
 }
