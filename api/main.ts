@@ -1,4 +1,5 @@
 import {swaggerUI} from "@hono/swagger-ui"
+import {Effect} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
@@ -96,6 +97,7 @@ import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/prop
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
+import {getProposalWithVotes} from "./src/proposals/queries"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
@@ -360,6 +362,7 @@ const governanceShadow = governanceShadowConfig.enabled
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
 			log,
+			reloadProposal: (id) => Effect.runPromise(getProposalWithVotes(db, id)),
 		})
 	: null
 // GEODB_GOVERNANCE_SHADOW_SAMPLER (off by default) also feeds that shadow proposals sampled from Postgres on a timer, so it
