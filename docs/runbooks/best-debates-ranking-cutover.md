@@ -24,10 +24,16 @@ says who.
 ## Before you start
 
 - GEO-3685 has created the Best debates block in the Debates space (`9284477c8fe746368698994e2e517b32`) and added the
-  rankers as members or editors. You need its block id: `SELECT id, name FROM ranks.ranking_blocks WHERE space_id =
-  '9284477c-8fe7-4636-8698-994e2e517b32';`
+  rankers as members or editors. Its block id is `1221b258-ec20-4608-b0c3-3d00d6df2c21` (created 12 Nov 2026); check
+  with `SELECT id, name FROM ranks.ranking_blocks WHERE space_id = '9284477c-8fe7-4636-8698-994e2e517b32';`
 - GEO-3676 (per-block row cap, average mode) is deployed, so `ranks.ranking_scores` holds the whole ranking for that
   block, keyed by entity.
+- The block's config row is inserted **and applied**. #1496 ships `ranks.ranking_block_config` empty and the INSERT is
+  a manual step; if it was missed, the block keeps 200 rows and sum scoring, and nothing else in this list would show
+  it. This must return `2000 | average` before step 1:
+  `SELECT applied_max_rows, applied_scoring_mode FROM ranks.ranking_block_config WHERE block_id = '<BLOCK_ID>';`
+  If it returns no row, or `applied_*` is still empty or old, insert or fix the row (the INSERT is in 0123's header)
+  and let the next recompute of the block apply it.
 - gaia#1496 (GEO-3676, migration 0123) is merged; this migration is 0124 and must apply after it.
 - gaia#1483 (GEO-3631, a +10,000 tier for Debates-space agendas) stays closed and does not merge: it re-creates
   `entity_trending_terms` and `refresh_agenda_listings` from 0122's bodies, which would undo all of this. The 0124 SQL
