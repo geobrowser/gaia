@@ -494,9 +494,10 @@ spec:
             - name: GEODB_PROPOSAL_VERSIONS
               value: "1"
             # Also write each version's proposer and owning Space (references) for the notification-indexer twin to compare.
-            # OFF. Turn on only after the proposal-versions backfill Job has been rerun with the same value on (RUNBOOK §2c-octies).
+            # On since 2026-11-12, after the proposal-versions backfill Job reran with the same value on (RUNBOOK §2c-octies).
+            # Write-side only. Rollback: "0".
             - name: GEODB_PROPOSAL_VERSION_PROPOSER_SPACE
-              value: "0"
+              value: "1"
             # Keyed proposal status facts (executed_at from PROPOSAL_EXECUTED on space.governance, unexecutable_at from the
             # backfill only, into the governance system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-novies.
             # OFF until the proposal-status backfill Job (geodb-proposal-status-backfill-job.yaml) has run with the feeder at 0.
@@ -507,17 +508,18 @@ spec:
             # OFF until the ranks backfill Job (geodb-ranks-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_RANKS
               value: "1"
-            # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
-            # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
-            # relation would fail. Turn on with the image bump that brings it.
+            # Relation positions (`.position` on a relation's add). On since 2026-11-12: the geodb image (67b6974a5e)
+            # carries a geodb-client with ISS-587-318, and the relation-seed Job wrote the existing positions with the
+            # feeder at 0. Write-side only. Rollback: "0".
             - name: GEODB_RELATION_POSITIONS
-              value: "0"
+              value: "1"
             # Relation facets: to-space, from-space, the two version pins and verified, written as claims on the
             # relation's statement in the same Edit (`.statement` subject, geo-db docs/api/10 section 5.5). Off: up to
             # five more adds per relation, and the api's GEODB_RELATION_FACETS_SHADOW has nothing to compare until a
-            # backfill writes them. The geodb-client the init container copies (28d9d7501f) already accepts the wire.
+            # backfill writes them. The geodb-client the init container copies already accepts the wire. On since
+            # 2026-11-12 for new relations (write-side only; the shadow stays off). Rollback: "0".
             - name: GEODB_RELATION_FACETS
-              value: "0"
+              value: "1"
             # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES
@@ -548,7 +550,7 @@ spec:
             # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
             # after a backfill (RUNBOOK §2b): give the heap room below the limit.
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=1536"
+              value: "--max-old-space-size=3584"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -598,7 +600,7 @@ spec:
               memory: "256Mi"
               cpu: "100m"
             limits:
-              memory: "2Gi"
+              memory: "4Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
