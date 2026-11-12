@@ -115,7 +115,7 @@ impl Config {
                 .collect(),
             collection,
             timeout: Duration::from_secs(2),
-            cooldown: Duration::from_secs(10),
+            cooldown: Duration::from_secs(2),
         })
     }
 }
