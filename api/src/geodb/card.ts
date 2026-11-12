@@ -55,7 +55,7 @@ const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
  * The id geo-db holds for a gaia id. Conforming UUIDv4s pass through; any other legacy id is remapped
  * deterministically, exactly as the shadow loader remaps it (emit/lib.mjs conformingId).
  */
-export function conformingId(kind: "entity" | "space", legacyId: string): string {
+export function conformingId(kind: "entity" | "space" | "statement", legacyId: string): string {
 	const id = compact(legacyId)
 	if (UUID_V4.test(id)) return id
 	const bytes = Buffer.from(
@@ -163,6 +163,13 @@ export type GeoCardRow = {
 	space?: string
 	/** The entity owning the row; present only on a batch read of several entities' cards (`readCards`). */
 	entity?: string
+	/** The row's statement id (32 hex digits, its Space dropped); present only on a read that asked for claims. */
+	statement?: string
+	/**
+	 * The claim this row carries (a statement with several claims is several rows); null where it has none; absent
+	 * unless the read asked for claims.
+	 */
+	claim?: {prop: string; raw: string} | null
 }
 
 export type CardOutputOptions = {
@@ -170,6 +177,8 @@ export type CardOutputOptions = {
 	names?: boolean
 	/** The read asked `.args.claims = true`: two claim columns come before the names. */
 	claims?: boolean
+	/** Also keep each row's statement and claim (`GeoCardRow.statement` / `claim`); needs `claims`. */
+	claimCells?: boolean
 	/** The read named several Spaces: the statement cell is `<space>:<statement>`, and each row carries its `space`. */
 	spaces?: boolean
 }
@@ -205,6 +214,12 @@ export function rowsFromGeoDbOutput(
 				const space = /^([0-9a-f]{32}):/.exec(cells[2] ?? "")?.[1]
 				if (!space) throw new Error(`a multi-space row has no space prefix: ${(cells[2] ?? "").slice(0, 40)}`)
 				row.space = space
+			}
+			if (options.claims && options.claimCells) {
+				row.statement = /([0-9a-f]{32})$/.exec(cells[2] ?? "")?.[1] ?? ""
+				// geodb-client prints `-` in both claim cells of a statement with no claim.
+				const claimProp = cells[4] ?? "-"
+				row.claim = claimProp === "-" ? null : {prop: claimProp, raw: unescapeText(cells[5] ?? "")}
 			}
 			if (options.names && cells.length >= nameAt + 3) {
 				row.propName = nameCell(cells[nameAt] ?? "-")
@@ -381,6 +396,36 @@ export const MEMBERSHIP_PROPERTIES: ReadonlySet<string> = new Set([
  */
 export const CREATED_AT_PROPERTY = "74d9c34835444345969a3c9d70362ea5"
 export const UPDATED_AT_PROPERTY = "c5f5b46a774442acb138c3cba948acec"
+/**
+ * The properties a feeder writes a relation's facets under, as claims on the relation's statement (docs/api/10 section
+ * 5.5). Fixed by name in geodb-feeder (`RELATION_FACET_PROPERTY`, translate.ts); a test on each side pins them to the
+ * other. The to-space, from-space and the two version pins are text claims of the id in 32 lowercase hex digits;
+ * `verified` is a boolean claim written only where true.
+ */
+export const RELATION_FACET_PROPERTIES = {
+	toSpace: "2a324bcf175f40f598e0022a89c08de0",
+	fromSpace: "ffda43ded53b47b5ae35b9177d9371d2",
+	toVersion: "5ade81839b2f481fbbd8a69f7294529b",
+	fromVersion: "b44e0bce9de247b7bc55103a56b60109",
+	verified: "b815142b724d42d8b25a32626db3bf8f",
+} as const
+
+export type RelationFacet = keyof typeof RELATION_FACET_PROPERTIES
+
+/** The facet claims geo-db holds on one relation statement, by facet; a facet with no claim is absent. */
+export function relationFacetsOf(rows: GeoCardRow[], statementId: string): Partial<Record<RelationFacet, string>> {
+	const byProperty = new Map<string, RelationFacet>(
+		(Object.entries(RELATION_FACET_PROPERTIES) as [RelationFacet, string][]).map(([facet, prop]) => [prop, facet]),
+	)
+	const out: Partial<Record<RelationFacet, string>> = {}
+	for (const row of rows) {
+		if (row.statement !== statementId || !row.claim) continue
+		const facet = byProperty.get(row.claim.prop)
+		if (facet) out[facet] = row.claim.raw
+	}
+	return out
+}
+
 export const ENTITY_TIME_PROPERTIES: ReadonlySet<string> = new Set([CREATED_AT_PROPERTY, UPDATED_AT_PROPERTY])
 
 const INSTANT_RAW = /^instant:(-?\d+)\.(\d{9})$/

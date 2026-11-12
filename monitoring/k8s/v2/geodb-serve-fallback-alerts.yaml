@@ -1,0 +1,118 @@
+# Alerts for the geo-db serve paths (default off). A serve switch that is on but keeps falling back
+# answers from Postgres silently, so each path counts its fallbacks and these rules watch the ratio.
+# Counters are registered at zero (or exported only once a switch is on), so every rule stays silent
+# while the switches are unset: the ratio has no samples, and the floor needs real traffic.
+# Metric names are read from each PR's code; see the table in the PR that added this file.
+#
+#   GeoDbApiServeFallbackHigh            gaia_api_geodb_serve_fallback_total (#1534), per family
+#   GeoDbRankedReadsServeFallbackHigh    gaia_api_ranked_read_serve_fallback_total (#1530), per read
+#   GeoDbSearchIndexerServeFallbackHigh  search_indexer_geodb_serve_fallback_total (#1535), per read
+#   GeoDbDeliveryWorkerLeaseLost         delivery_worker_geodb_acks_total{result="lease_lost"} (#1533)
+#
+# Not covered: gaia_scoring_scores_serve_fallback_total (#1526). The scoring CronJob has no scrape
+# endpoint and logs the counter, so Prometheus never sees it; it needs a log-based rule.
+#
+# Each ratio alert fires above 10% of answers falling back over 15m, while there were at least 20
+# answers (served plus fallback) in that window. Tests: monitoring/k8s/v2/tests/run.sh.
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-serve-fallback-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-serve-fallback
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.serve-fallback
+      rules:
+        - alert: GeoDbApiServeFallbackHigh
+          expr: |
+            sum by (family) (increase(gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+              / (
+                sum by (family) (increase(gaia_api_geodb_serve_total{namespace="gaia", job="api"}[15m]))
+                + sum by (family) (increase(gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+              ) > 0.1
+            and
+            (
+              sum by (family) (increase(gaia_api_geodb_serve_total{namespace="gaia", job="api"}[15m]))
+              + sum by (family) (increase(gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+            ) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: More than 10% of geo-db {{ $labels.family }} reads are falling back to Postgres
+            description: >-
+              The family's serve switch is on but Postgres is answering instead. Break it down with
+              sum by (read, reason) (increase(gaia_api_geodb_serve_fallback_total{family="{{ $labels.family }}"}[15m])):
+              shadow_off, no_comparison, stale and mismatch mean the shadow gate is not holding;
+              timeout and error mean geo-db is slow or down. RUNBOOK section 13.
+
+        - alert: GeoDbRankedReadsServeFallbackHigh
+          expr: |
+            sum by (read) (increase(gaia_api_ranked_read_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+              / (
+                sum by (read) (increase(gaia_api_ranked_read_serve_total{namespace="gaia", job="api", source="geodb"}[15m]))
+                + sum by (read) (increase(gaia_api_ranked_read_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+              ) > 0.1
+            and
+            (
+              sum by (read) (increase(gaia_api_ranked_read_serve_total{namespace="gaia", job="api", source="geodb"}[15m]))
+              + sum by (read) (increase(gaia_api_ranked_read_serve_fallback_total{namespace="gaia", job="api"}[15m]))
+            ) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: More than 10% of geo-db ranked {{ $labels.read }} reads are falling back to Postgres
+            description: >-
+              The read is listed in GEODB_RANKED_READS_SERVE but Postgres is answering. Break it down with
+              sum by (reason) (increase(gaia_api_ranked_read_serve_fallback_total{read="{{ $labels.read }}"}[15m])).
+              RUNBOOK section 13.
+
+        - alert: GeoDbSearchIndexerServeFallbackHigh
+          expr: |
+            sum by (read) (increase(search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer"}[15m]))
+              / (
+                sum by (read) (increase(search_indexer_geodb_serve_served_total{namespace="gaia", job="search-indexer"}[15m]))
+                + sum by (read) (increase(search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer"}[15m]))
+              ) > 0.1
+            and
+            (
+              sum by (read) (increase(search_indexer_geodb_serve_served_total{namespace="gaia", job="search-indexer"}[15m]))
+              + sum by (read) (increase(search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer"}[15m]))
+            ) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            service: search-indexer
+            namespace: gaia
+          annotations:
+            summary: More than 10% of the search-indexer's geo-db {{ $labels.read }} reads are falling back to Postgres
+            description: >-
+              The read's serve switch is on but Postgres is answering. Break it down with
+              sum by (reason) (increase(search_indexer_geodb_serve_fallback_total{read="{{ $labels.read }}"}[15m])).
+              RUNBOOK section 13.
+
+        - alert: GeoDbDeliveryWorkerLeaseLost
+          # lease_lost: the worker's claim expired before it acked, so another worker may deliver the same
+          # unit. The counter is registered at zero, so increase() has a baseline from the first scrape.
+          expr: |
+            sum(increase(delivery_worker_geodb_acks_total{namespace="gaia", job="delivery-worker", result="lease_lost"}[15m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: delivery-worker
+            namespace: gaia
+          annotations:
+            summary: The delivery-worker is losing its geo-db work leases
+            description: >-
+              Acks are coming back lease_lost, so claims outlive their lease before delivery finishes
+              (a slow channel send, or a lease shorter than the delivery time). Compare against
+              delivery_worker_geodb_claimed_total and the result="error" acks. RUNBOOK section 13.
