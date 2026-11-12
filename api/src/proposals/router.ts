@@ -11,6 +11,7 @@ import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import type {FastPathFacts} from "./fastPathFact"
 import type {QueriesShadow} from "./governance/queriesShadow"
 import type {GovernanceShadow} from "./governance/shadow"
 import {
@@ -367,6 +368,7 @@ export function createProposalsRouter(
 	runtime: AppRuntime,
 	governanceShadow?: GovernanceShadow | null,
 	queriesShadow?: QueriesShadow | null,
+	fastPathFacts?: FastPathFacts | null,
 ) {
 	const router = new Hono<AppEnv>()
 
@@ -432,7 +434,10 @@ export function createProposalsRouter(
 					)
 				}
 
-				const proposal = yield* getProposalWithVotes(db, proposalId)
+				const stored = yield* getProposalWithVotes(db, proposalId)
+				// Flag-off (PROPOSAL_EXECUTED_AT_FROM_GEODB): fills a missing executedAt from geo-db's fast-path fact.
+				const proposal =
+					stored && fastPathFacts ? (yield* Effect.promise(() => fastPathFacts.apply([stored])))[0] : stored
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -627,7 +632,7 @@ export function createProposalsRouter(
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
 				const normalizedVoterId = voterId ? normalizeUuid(voterId) : undefined
-				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
+				const {proposals: storedProposals, nextCursor} = yield* listProposalsInSpace(db, {
 					spaceId,
 					limit,
 					cursor,
@@ -639,6 +644,9 @@ export function createProposalsRouter(
 					voterId: normalizedVoterId,
 				})
 
+				const proposals = fastPathFacts
+					? yield* Effect.promise(() => fastPathFacts.apply(storedProposals))
+					: storedProposals
 				const nowSeconds = getCurrentTimeSeconds()
 				governanceShadow?.list(proposals, nowSeconds)
 				queriesShadow?.list(proposals, {actionTypes, excludeActionTypes})
