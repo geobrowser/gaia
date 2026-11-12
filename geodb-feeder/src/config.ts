@@ -51,7 +51,10 @@ export type Config = {
 	spaceAddresses: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
-	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
+	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it. It also
+	 * writes a position change (`updateRelation`) as a `set_position`, a verb the client's ZON edit reads only from geo-db
+	 * 12707558ee (ISS-587-318 "A move"); on an older image each move is refused and dead-lettered, so roll the image first.
+	 * It also keeps `known-relations.log` on the state volume (each relation's cell and open statement id).
 	 */
 	relationPositions: boolean
 	/**

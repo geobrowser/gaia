@@ -3,6 +3,7 @@ import {conformingId, nonceOf} from "../ids.js"
 import {genesisLanguageId as languageIdOf} from "../languages.js"
 import {
 	type GrcOp,
+	type RelationRecord,
 	type TranslateContext,
 	RELATION_FACET_PROPERTY,
 	floatToDecimal,
@@ -282,6 +283,108 @@ describe("translateOps", () => {
 			const r = translateOps([create, upd({toSpace: id(41)})], context().ctx, both)
 			expect(r.intents.at(-1)).toEqual(set("relationToSpace", hex(41)))
 			expect(r.intents.some((i) => i.includes(".add") && i.includes(`.statement = "${sid}"`))).toBe(true)
+		})
+	})
+
+	describe("relation position moves", () => {
+		const sid = conformingId("statement", hex(50))
+		const from = conformingId("entity", hex(1))
+		const typ = conformingId("entity", hex(8))
+		const create: GrcOp = {type: "createRelation", id: id(50), from: id(1), to: id(7), relationType: id(8), position: "a0", toSpace: id(40)}
+		const upd = (extra: Record<string, unknown> = {}): GrcOp => ({type: "updateRelation", id: id(50), unset: [], ...extra})
+		const claimOn = (stmt: string, name: string, value: string) =>
+			`.{ .add = .{ .id = "${conformingId("relation-facet", `${stmt}${name}`)}", .statement = "${stmt}", .property = "${conformingId("reserved-property", name === "toSpace" ? "relationToSpace" : name)}", .value = .{ .text = "${value}" } } }`
+		const withRecords = () => {
+			const c = context()
+			const records = new Map<string, RelationRecord>()
+			c.ctx.relation = (s) => records.get(s)
+			c.ctx.markRelation = (s, r) => void records.set(s, r)
+			return {...c, records}
+		}
+		const both = {positions: true, facets: true}
+		const moveOf = (current: string, position: string) => {
+			const replacement = conformingId("relation-position", `${current}${position}`)
+			return {
+				replacement,
+				text: `.{ .set_position = .{ .entity = "${from}", .property = "${typ}", .id = "${current}", .replacement = "${replacement}"${position ? `, .position = "${position}"` : ""} } }`,
+			}
+		}
+
+		it("createRelation records the relation's cell and facets", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			expect(c.records.get(sid)).toEqual({from, prop: typ, current: sid, facets: {toSpace: hex(40)}})
+			// positions off: nothing is recorded
+			const off = withRecords()
+			translateOps([create], off.ctx, {facets: true})
+			expect(off.records.size).toBe(0)
+		})
+
+		it("a move of an earlier relation is a set_position on its cell, naming the open statement", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			// a later message: the relation is no longer pending in this call
+			const m = moveOf(sid, "b1")
+			const r = translateOps([upd({position: "b1"})], c.ctx, both)
+			expect(r.intents).toEqual([m.text, claimOn(m.replacement, "toSpace", hex(40))])
+			expect(r.stats).toMatchObject({"relation-position-moved": 1, "relation-move-claims-carried": 1, updateRelation: 1})
+			expect(r.stats["relation-position-update-dropped"]).toBeUndefined()
+			expect(c.records.get(sid)?.current).toBe(m.replacement)
+		})
+
+		it("a second move, a facet change and a delete all name the statement the last move opened", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const first = moveOf(sid, "b1")
+			translateOps([upd({position: "b1"})], c.ctx, both)
+			const second = moveOf(first.replacement, "c2")
+			const r = translateOps([upd({position: "c2", toSpace: id(41)})], c.ctx, both)
+			expect(r.intents[0]).toBe(second.text)
+			expect(r.intents.at(-1)).toBe(
+				`.{ .set = .{ .statement = "${second.replacement}", .property = "${conformingId("reserved-property", "relationToSpace")}", .value = .{ .text = "${hex(41)}" } } }`,
+			)
+			// the held facet follows the change, so a third move carries the new value
+			expect(c.records.get(sid)?.facets).toEqual({toSpace: hex(41)})
+			const del = translateOps([{type: "deleteRelation", id: id(50)}], c.ctx, both)
+			expect(del.intents).toEqual([`.{ .set_active = .{ .statement = "${second.replacement}", .active = false } }`])
+			// moving back to a position an earlier statement held is a new id, since the open statement differs
+			expect(moveOf(second.replacement, "b1").replacement).not.toBe(first.replacement)
+		})
+
+		it("an unset position clears it", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const m = moveOf(sid, "")
+			const r = translateOps([upd({unset: ["position"]})], c.ctx, both)
+			expect(r.intents[0]).toBe(m.text)
+		})
+
+		it("a move in the edit that creates the relation is written on its add", () => {
+			const c = withRecords()
+			const r = translateOps([create, upd({position: "b1"})], c.ctx, both)
+			expect(r.intents[1]).toBe(
+				`.{ .add = .{ .id = "${sid}", .entity = "${from}", .property = "${typ}", .value = .{ .reference = "${conformingId("entity", hex(7))}" }, .position = "b1" } }`,
+			)
+			expect(r.intents.some((i) => i.includes("set_position"))).toBe(false)
+			expect(r.stats["relation-position-moved-in-edit"]).toBe(1)
+			const cleared = translateOps([create, upd({unset: ["position"]})], withRecords().ctx, both)
+			expect(cleared.intents[1]).not.toContain(".position")
+		})
+
+		it("a relation with no record is dropped and counted, as is a bad position or the flag off", () => {
+			const known = withRecords()
+			known.statements.add(sid)
+			const unknown = translateOps([upd({position: "b1"})], known.ctx, both)
+			expect(unknown.intents).toEqual([])
+			expect(unknown.stats).toMatchObject({"relation-position-update-dropped": 1, "relation-move-cell-unknown": 1})
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const bad = translateOps([upd({position: "\u0007"})], c.ctx, both)
+			expect(bad.intents).toEqual([])
+			expect(bad.stats).toMatchObject({"relation-position-update-dropped": 1, "relation-position-update-malformed": 1})
+			const off = translateOps([upd({position: "b1"})], c.ctx, {facets: true})
+			expect(off.intents).toEqual([])
+			expect(off.stats["relation-position-update-dropped"]).toBe(1)
 		})
 	})
 
