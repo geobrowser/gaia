@@ -2168,7 +2168,7 @@ Turn it on after the indexer's mirror has been running, as a separate change.
 ### Claiming deliveries from the work class (delivery-worker, `DELIVERY_WORKER_CLAIM_SOURCE=geodb`)
 
 Off by default. When it is `geodb` the worker claims, delivers and settles units over the held `work pipe`
-and never claims from Postgres (plan 10.16, GAP-15; plan 22 section 28 for the two homes below).
+and never claims from Postgres (plan 10.16, GAP-15; plan 22 section 30 for the two homes below).
 
 - **Webhook url and secret** come from the mounted `app-webhooks` Secret (`APP_WEBHOOKS_FILE`, live since
   2026-11-06) and nowhere else: a unit carries only the webhook id. The worker refuses to start in this mode
