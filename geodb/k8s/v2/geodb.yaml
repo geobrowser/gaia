@@ -548,9 +548,11 @@ spec:
                   name: api-secrets
                   key: DATABASE_SSL_CA
             # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
-            # after a backfill (RUNBOOK §2b): give the heap room below the limit.
+            # after a backfill (RUNBOOK §2b): give the heap room below the limit. The relation seed adds a
+            # known-relations record per relation (~1M on testnet); the seed Job loading the same journals
+            # needed more than a 2 GiB heap and ran at ~3 GiB RSS, so the feeder gets the seed Job's sizing.
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=3584"
+              value: "--max-old-space-size=6144"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -597,10 +599,10 @@ spec:
           # the series vanish. /health/readiness is there for humans and for the alert on the feeder's series.
           resources:
             requests:
-              memory: "256Mi"
+              memory: "3Gi"
               cpu: "100m"
             limits:
-              memory: "4Gi"
+              memory: "7Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
