@@ -37,9 +37,12 @@
 import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "graphql"
 
 import {
+	compactSpaceId,
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
+	type EdgeFacets,
+	facetDiff,
 	type GeoCardRow,
 	isEmptyDiff,
 	type RelationFacet,
@@ -419,21 +422,6 @@ type Item =
 			edges: {typeId: string; toEntityId: string}[]
 	  }
 
-/** The relation's own statement id in geo-db and what Postgres answered for its facets (a facet not selected is absent). */
-type EdgeFacets = {
-	statementId: string | null
-	toSpace?: string | null
-	verified?: boolean | null
-	entity?: string | null
-}
-
-/** A Space id as geo-db holds it: 32 lowercase hex digits. Null for anything else. */
-const compactSpaceId = (v: unknown): string | null => {
-	if (typeof v !== "string") return null
-	const compact = v.replaceAll("-", "").toLowerCase()
-	return /^[0-9a-f]{32}$/.test(compact) ? compact : null
-}
-
 /** The relation's own entity as geo-db holds it (a conformed entity id), null for anything that is not an id. */
 const entityFacet = (v: unknown): string | null =>
 	typeof v === "string" && isValidUuid(v) ? conformingId("entity", normalizeUuid(v)) : null
@@ -538,27 +526,6 @@ function readClaimsOnce(deps: EntityShadowDeps, reads: CardReads, entityId: stri
 		reads.set(key, read)
 	}
 	return read
-}
-
-/**
- * The relation's facets against the claims geo-db holds on its statement. A facet at its default (no to-space, not
- * verified) is no claim. Null when they agree, else what differs.
- */
-export function facetDiff(
-	expected: EdgeFacets,
-	held: Partial<Record<RelationFacet, string>>,
-): Record<string, unknown> | null {
-	const diff: Record<string, unknown> = {}
-	if (expected.toSpace !== undefined && (expected.toSpace ?? undefined) !== held.toSpace)
-		diff.toSpace = {postgres: expected.toSpace, geoDb: held.toSpace ?? null}
-	if (expected.entity !== undefined && (expected.entity ?? undefined) !== held.entity)
-		diff.entity = {postgres: expected.entity, geoDb: held.entity ?? null}
-	if (expected.verified !== undefined) {
-		const geoDb = held.verified === "true"
-		if ((expected.verified === true) !== geoDb || (held.verified !== undefined && held.verified !== "true"))
-			diff.verified = {postgres: expected.verified, geoDb: held.verified ?? null}
-	}
-	return Object.keys(diff).length > 0 ? diff : null
 }
 
 async function judgeSlice(

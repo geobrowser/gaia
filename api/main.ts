@@ -1,4 +1,5 @@
 import {swaggerUI} from "@hono/swagger-ui"
+import {Effect} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
@@ -63,12 +64,19 @@ import {
 	readProposalDiffShadowConfig,
 } from "./src/geodb/proposalDiffShadow"
 import {
+	createAppliedBlockFreshness,
+	createRankedReadsServe,
+	readPgHeadBlock,
+	readRankedReadsServeConfig,
+} from "./src/geodb/rankedReadsServe"
+import {
 	createBudgetedPostgresRankedReadsSource,
 	createRankedReadsShadow,
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
 import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
+import {createReplayPairsRouter} from "./src/geodb/replayPairs"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -92,10 +100,13 @@ import {createUserVotesShadow, readUserVotesShadowConfig} from "./src/pairFit/us
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
+import {createFastPathFacts} from "./src/proposals/fastPathFact"
 import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
+import {getProposalWithVotes} from "./src/proposals/queries"
+import {isFastPathFactReadEnabled} from "./src/proposals/status"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
@@ -283,6 +294,11 @@ const sharedGeoDb =
 if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
+	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
+	if (process.env.GEODB_REPLAY_PAIRS === "on") {
+		app.route("/geodb", createReplayPairsRouter(db))
+		log.info("GeoDB replay pairs route enabled")
+	}
 }
 
 const entityVersionsShadowConfig = readEntityVersionsShadowConfig(process.env)
@@ -360,6 +376,7 @@ const governanceShadow = governanceShadowConfig.enabled
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
 			log,
+			reloadProposal: (id) => Effect.runPromise(getProposalWithVotes(db, id)),
 		})
 	: null
 // GEODB_GOVERNANCE_SHADOW_SAMPLER (off by default) also feeds that shadow proposals sampled from Postgres on a timer, so it
@@ -379,7 +396,12 @@ const queriesShadow = queriesShadowConfig.enabled
 			log,
 		})
 	: null
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow))
+// PROPOSAL_EXECUTED_AT_FROM_GEODB (off by default) fills a Fast proposal's missing executedAt from geo-db's fast-path
+// execution fact (collection 31). Postgres' value always wins and a failed read keeps it.
+const fastPathFacts = isFastPathFactReadEnabled()
+	? createFastPathFacts(createDerivedReader(geoDbCardConfig), {warn: (message, fields) => log.warn(message, fields)})
+	: null
+app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow, fastPathFacts))
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
@@ -515,6 +537,22 @@ if (bestOrderShadowConfig.enabled) {
 		log,
 	}).start()
 }
+// GEODB_RANKED_READS_SERVE (off by default) lists the ranked reads (typeCounts, bestOrder, entityColumns, trending, feeds) that may answer
+// from geo-db's twin, falling back to Postgres on error, timeout or a geo-db read more than GEODB_RANKED_READS_SERVE_MAX_LAG_BLOCKS behind
+// (gaia_api_ranked_read_serve_total, gaia_api_ranked_read_serve_fallback_total). Nothing is listed unless the flag is set.
+const rankedReadsServeConfig = readRankedReadsServeConfig(process.env)
+createRankedReadsServe({
+	config: rankedReadsServeConfig,
+	freshness:
+		rankedReadsServeConfig.reads.size > 0
+			? createAppliedBlockFreshness({
+					reader: createDerivedReader(geoDbCardConfig),
+					pgHead: () => readPgHeadBlock(db),
+					cacheMs: rankedReadsServeConfig.cacheMs,
+				})
+			: undefined,
+	log,
+})
 // GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
 // timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.
 const keyedRecordsShadowConfig = readKeyedRecordsShadowConfig(process.env)

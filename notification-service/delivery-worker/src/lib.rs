@@ -5,6 +5,7 @@
 
 pub mod deliver;
 pub mod error;
+pub mod geodb_claim;
 pub mod health;
 pub mod metrics;
 pub mod shadow;

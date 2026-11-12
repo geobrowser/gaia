@@ -13,7 +13,8 @@
 //! the rows with `computed_at` at or after [`SWEEP_LOOKBACK`] ago (longer than the sweep's
 //! period, so a recompute between two sweeps is caught by the next), and after the refit it puts
 //! the whole table. A delete goes for each identity the table held before the run and no longer
-//! has. Last write wins, so a row sent twice is harmless.
+//! has; `not_interested_sync` mirrors its own recompute the same way, because a delete it makes
+//! is invisible to the next sweep's prior. Last write wins, so a row sent twice is harmless.
 //!
 //! These rows are one person's private profile, and geo-db does not yet restrict who may read a
 //! derived collection (V5). So the mirror needs both `GEODB_DERIVED_MIRROR` and
@@ -21,6 +22,9 @@
 //! restricted-read grant exists. It never fails the job (see `geodb_cursor::derived`).
 
 use std::collections::HashSet;
+
+use sqlx::PgPool;
+use tracing::{info, warn};
 
 use chrono::{DateTime, Duration, Utc};
 use geodb_cursor::derived::{DerivedMirror, DerivedRow};
@@ -141,6 +145,42 @@ pub async fn mirror(m: &DerivedMirror, rows: &[Signal], prior: &[Ident], after: 
     }
 }
 
+/// The identities `user_topic_signals` holds now, or `None` when there is no mirror or the read
+/// failed (the mirror is then skipped; it never stops the job). Call it BEFORE the run that may
+/// delete rows: a delete is only ever sent for an identity seen here.
+pub async fn read_idents(pool: &PgPool, mirror: Option<&DerivedMirror>) -> Option<Vec<Ident>> {
+    mirror?;
+    match sqlx::query_as::<_, Ident>(IDENT_SQL).fetch_all(pool).await {
+        Ok(rows) => Some(rows),
+        Err(e) => {
+            warn!(error = %e, "user topic signals mirror skipped: identity read failed");
+            None
+        }
+    }
+}
+
+/// Reads the rows computed at or after `since` and the identities after the run, and sends the plan.
+pub async fn mirror_since(pool: &PgPool, m: &DerivedMirror, prior: &[Ident], since: DateTime<Utc>) {
+    let rows = sqlx::query_as::<_, Signal>(SELECT_SQL)
+        .bind(since)
+        .fetch_all(pool)
+        .await;
+    let after = sqlx::query_as::<_, Ident>(IDENT_SQL).fetch_all(pool).await;
+    match (rows, after) {
+        (Ok(rows), Ok(after)) => {
+            mirror(m, &rows, prior, &after).await;
+            info!(
+                rows = rows.len(),
+                prior = prior.len(),
+                "user topic signals mirrored to geo-db"
+            );
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            warn!(error = %e, "user topic signals mirror skipped: read failed")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +265,22 @@ mod tests {
         let (puts, deletes) = plan(&[sig(1, 2, "mystery", 1.0)], &[id(1, 2, "mystery")], &[]);
         assert!(puts.is_empty());
         assert!(deletes.is_empty());
+    }
+
+    #[test]
+    fn a_delete_made_between_two_sweeps_is_sent_only_by_the_run_that_made_it() {
+        // not_interested_sync's recompute drops user 1's topic-3 row (an undone mark).
+        let before = [id(1, 2, "vote"), id(1, 3, "not_interested")];
+        let after = [id(1, 2, "vote")];
+        // The next sweep reads its prior AFTER that delete, so it never sees the row: no delete.
+        let (_, swept) = plan(&[], &after, &after);
+        assert!(swept.is_empty());
+        // The recompute's own run reads its prior before it, and sends the delete.
+        let (_, synced) = plan(&[], &before, &after);
+        assert_eq!(
+            synced,
+            vec![key(&u(1), &u(3), kind_tag("not_interested").unwrap())]
+        );
     }
 
     #[test]

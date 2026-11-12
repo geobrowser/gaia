@@ -3,7 +3,7 @@
  * the shadow is mounted (`activateGovernanceMetrics`), so a flag-off deploy exports nothing; once active every series
  * exists at zero.
  */
-export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
+export const RESULTS = ["match", "mismatch", "mismatch_healed", "unsupported", "failed"] as const
 export const UNSUPPORTED_REASONS = [
 	"system_space_missing",
 	"too_many_voters",
@@ -43,7 +43,7 @@ export const recordGovernanceUncompared = (surface: Surface, input: UncomparedIn
 export function renderGovernanceMetrics(): string {
 	if (!active) return ""
 	const lines = [
-		"# HELP gaia_api_governance_shadow_total Proposal status computed from geo-db records against the status Postgres served, by surface and result: match, mismatch, unsupported (geo-db cannot answer) or failed (geo-db read failed).",
+		"# HELP gaia_api_governance_shadow_total Proposal status computed from geo-db records against the status Postgres served, by surface and result: match, mismatch (still there after a re-read), mismatch_healed (gone on the re-read, so a read-skew artifact), unsupported (geo-db cannot answer) or failed (geo-db read failed).",
 		"# TYPE gaia_api_governance_shadow_total counter",
 	]
 	for (const s of SURFACES)
