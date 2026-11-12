@@ -17,7 +17,7 @@ use crate::error::IndexerError;
 use crate::metrics::PgWriteSite;
 use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
-use crate::scoring::ScoreRow;
+use crate::scoring::{BlockScoring, ScoreRow, ScoringMode};
 
 /// Resolve one submission-window bound from separately queried legacy/datetime
 /// columns: the datetime property (GEO-2253) wins per-bound; the legacy date
@@ -131,19 +131,20 @@ impl Storage {
         .await?;
         let mut out = Vec::with_capacity(blocks.len());
         for block in blocks {
-            let rows = sqlx::query_as::<_, (Uuid, Uuid, f64, i32)>(
-                "SELECT entity_id, space_id, score, position FROM ranks.ranking_scores \
+            let rows = sqlx::query_as::<_, (Uuid, Uuid, f64, i32, i32)>(
+                "SELECT entity_id, space_id, score, position, ballots FROM ranks.ranking_scores \
                  WHERE block_id = $1",
             )
             .bind(block)
             .fetch_all(&self.pool)
             .await?
             .into_iter()
-            .map(|(entity_id, space_id, score, position)| ScoreRow {
+            .map(|(entity_id, space_id, score, position, ballots)| ScoreRow {
                 entity_id,
                 space_id,
                 score,
                 position,
+                ballots,
             })
             .collect();
             out.push((block, rows));
@@ -553,6 +554,81 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// A block's scoring shape from `ranks.ranking_block_config` (GEO-3676):
+    /// its row cap and scoring mode. No row means the default every block had
+    /// before: `MAX_PROJECTION_ROWS` rows, summed.
+    pub async fn block_scoring(&self, block_id: Uuid) -> Result<BlockScoring, IndexerError> {
+        let row: Option<(i32, String)> = sqlx::query_as(
+            "SELECT max_rows, scoring_mode FROM ranks.ranking_block_config WHERE block_id = $1",
+        )
+        .bind(block_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((max_rows, mode)) = row else {
+            return Ok(BlockScoring::default());
+        };
+        // The table's CHECKs make both of these impossible. If one slips past
+        // anyway, score the block the default way and say so: an error here would
+        // be retried forever and stall the consumer on this block's edits.
+        match (ScoringMode::parse(&mode), usize::try_from(max_rows)) {
+            (Some(mode), Ok(max_rows)) if max_rows > 0 => Ok(BlockScoring { max_rows, mode }),
+            _ => {
+                tracing::warn!(
+                    block_id = %block_id,
+                    max_rows,
+                    scoring_mode = %mode,
+                    "ranks.ranking_block_config row is invalid; scoring the block with the default"
+                );
+                Ok(BlockScoring::default())
+            }
+        }
+    }
+
+    /// Record that a recompute applied `config` to `block_id`, so
+    /// [`Self::find_pending_block_configs`] stops returning it. Writes the
+    /// values the recompute actually used, not the row's current ones: a config
+    /// edited mid-recompute stays pending. A block with no config row is a
+    /// no-op. Skipped with the scores themselves when Postgres writes are off.
+    pub async fn mark_block_scoring_applied(
+        &self,
+        block_id: Uuid,
+        config: BlockScoring,
+    ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::ReplaceRankingScores) {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE ranks.ranking_block_config \
+             SET applied_max_rows = $2, applied_scoring_mode = $3, applied_at = now() \
+             WHERE block_id = $1 \
+               AND (applied_max_rows IS DISTINCT FROM $2 OR applied_scoring_mode IS DISTINCT FROM $3)",
+        )
+        .bind(block_id)
+        .bind(i32::try_from(config.max_rows).unwrap_or(i32::MAX))
+        .bind(config.mode.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Registered blocks whose `ranks.ranking_block_config` row was added or
+    /// changed since a recompute last applied it (GEO-3676). Nothing else
+    /// would recompute them: a config row is not an edit, so the consumer never
+    /// sees it, and the block may get no new ballot for days. Used by
+    /// `bin/backfill_blocks.rs` (hourly), which recomputes each one.
+    pub async fn find_pending_block_configs(&self) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT c.block_id FROM ranks.ranking_block_config c \
+             WHERE (c.applied_max_rows IS DISTINCT FROM c.max_rows \
+                    OR c.applied_scoring_mode IS DISTINCT FROM c.scoring_mode) \
+               AND EXISTS (SELECT 1 FROM ranks.ranking_blocks b WHERE b.id = c.block_id) \
+             ORDER BY c.block_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Entities typed `Rank` in the indexed public graph that never made it
     /// into `ranks.rankings` — the identical split-edit gap as
     /// `find_unregistered_ranking_blocks`, but for Rank submissions.
@@ -890,14 +966,15 @@ impl Storage {
             .await?;
         for r in rows {
             sqlx::query(
-                "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position) \
-                 VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position, ballots) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(block_id)
             .bind(r.entity_id)
             .bind(r.space_id)
             .bind(r.score)
             .bind(r.position)
+            .bind(r.ballots)
             .execute(&mut *tx)
             .await?;
         }

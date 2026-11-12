@@ -22,6 +22,11 @@
 //! Idempotent — safe to re-run; blocks/ranks with nothing stale are never
 //! touched.
 //!
+//! Also recomputes every block whose `ranks.ranking_block_config` row (row cap,
+//! scoring mode — GEO-3676) was added or changed since a recompute last applied
+//! it. A config row is not an edit, so nothing else notices it; the hourly run
+//! picks it up, and running this by hand applies it at once.
+//!
 //! Exits non-zero if anything failed to recover, so a scheduled run (see
 //! `k8s/*/backfill-cronjob.yaml`) surfaces failures as a failed Job instead
 //! of a silently-green one.
@@ -66,10 +71,12 @@ async fn main() -> Result<(), IndexerError> {
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
     let stale_blocks = storage.find_stale_ranking_type_blocks().await?;
     let rank_candidates = storage.find_unregistered_ranks().await?;
+    let pending_configs = storage.find_pending_block_configs().await?;
     info!(
         blocks = block_candidates.len(),
         stale_blocks = stale_blocks.len(),
         ranks = rank_candidates.len(),
+        pending_configs = pending_configs.len(),
         dry_run,
         "found unregistered/stale blocks and unregistered ranks"
     );
@@ -95,6 +102,9 @@ async fn main() -> Result<(), IndexerError> {
         for id in &rank_candidates {
             info!(rank_id = %id, "would recover rank");
         }
+        for id in &pending_configs {
+            info!(block_id = %id, "would recompute (block config changed)");
+        }
         for id in &all_blocks {
             info!(block_id = %id, "would recompute (--recompute-all)");
         }
@@ -104,6 +114,7 @@ async fn main() -> Result<(), IndexerError> {
     if block_candidates.is_empty()
         && stale_blocks.is_empty()
         && rank_candidates.is_empty()
+        && pending_configs.is_empty()
         && all_blocks.is_empty()
     {
         return Ok(());
@@ -234,6 +245,22 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // Blocks whose scoring config was added or changed (GEO-3676). A block
+    // recomputed above already applied its current config.
+    let mut applied_configs = 0;
+    for block_id in pending_configs {
+        if !handled_blocks.insert(block_id) {
+            continue;
+        }
+        if let Err(e) = recompute_block(block_id, meta, now, &storage).await {
+            error!(block_id = %block_id, error = %e, "recompute failed for a changed block config");
+            failed += 1;
+        } else {
+            info!(block_id = %block_id, "recomputed block for its changed config");
+            applied_configs += 1;
+        }
+    }
+
     // Full recompute last, so anything recovered above is included rather than
     // recomputed twice. Blocks already handled above are skipped for the same
     // reason — recompute_block is idempotent, but doing it twice doubles the
@@ -264,6 +291,7 @@ async fn main() -> Result<(), IndexerError> {
         resynced_stale_blocks,
         recovered_ranks,
         still_unregistered_ranks,
+        applied_configs,
         recomputed_all,
         failed,
         "backfill complete"

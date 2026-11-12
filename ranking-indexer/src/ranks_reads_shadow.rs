@@ -362,6 +362,7 @@ mod tests {
             space_id: u(9),
             score,
             position,
+            ballots: 1,
         }
     }
 
