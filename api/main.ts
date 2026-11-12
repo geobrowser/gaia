@@ -301,9 +301,17 @@ if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
 	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
+	// Gated by GAIA_INTERNAL_TOKEN (x-internal-token, 401 otherwise); not mounted without a long enough token.
 	if (process.env.GEODB_REPLAY_PAIRS === "on") {
-		app.route("/geodb", createReplayPairsRouter(db))
-		log.info("GeoDB replay pairs route enabled")
+		const replayToken = process.env.GAIA_INTERNAL_TOKEN?.trim()
+		if (replayToken && replayToken.length >= MIN_INTERNAL_TOKEN_LENGTH) {
+			app.route("/geodb", createReplayPairsRouter(db, replayToken))
+			log.info("GeoDB replay pairs route enabled")
+		} else {
+			log.error(
+				"GEODB_REPLAY_PAIRS=on but GAIA_INTERNAL_TOKEN is unset or too short; replay pairs route not mounted",
+			)
+		}
 	}
 }
 

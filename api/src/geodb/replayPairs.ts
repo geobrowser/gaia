@@ -6,12 +6,16 @@
  * top (each Space's highest `local_scores`), recent (latest `entities.updated_at`) and random (a `values` TABLESAMPLE).
  * Every pair has at least one value in its Space. The answer is cached for `cacheMs`, so a caller cannot make the
  * sampling queries run more than once a minute whatever it sends.
+ *
+ * PRIVATE: every request must carry the shared GAIA_INTERNAL_TOKEN in `x-internal-token` (the /internal/* pattern),
+ * else 401, and main.ts mounts the route only when that token is set and long enough.
  */
 
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Hono} from "hono"
 
+import {INTERNAL_TOKEN_HEADER, internalTokenMatches} from "../forYou/router"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 
 type Database = NodePgDatabase<Record<string, unknown>>
@@ -45,6 +49,11 @@ export function parseReplayPairsRequest(body: unknown): ReplayPairsRequest | nul
 		perSpace: clamp(b.perSpace, 50, MAX_PER_SPACE),
 		limit: clamp(b.limit, 1500, MAX_POOL),
 	}
+}
+
+/** The cache key: the request with its Spaces sorted and deduped, so the order a caller lists them in is irrelevant. */
+export function replayPairsCacheKey(req: ReplayPairsRequest): string {
+	return JSON.stringify({spaces: [...new Set(req.spaces)].sort(), perSpace: req.perSpace, limit: req.limit})
 }
 
 const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
@@ -90,6 +99,7 @@ export async function readReplayPairs(db: Database, req: ReplayPairsRequest): Pr
 
 export function createReplayPairsRouter(
 	db: Database,
+	token: string,
 	options: {cacheMs?: number; now?: () => number; read?: typeof readReplayPairs} = {},
 ) {
 	const cacheMs = options.cacheMs ?? 60_000
@@ -97,10 +107,16 @@ export function createReplayPairsRouter(
 	const read = options.read ?? readReplayPairs
 	const cache = new Map<string, {at: number; value: Promise<ReplayPairs>}>()
 	const router = new Hono()
+	router.use("*", async (c, next) => {
+		if (!internalTokenMatches(token, c.req.header(INTERNAL_TOKEN_HEADER))) {
+			return c.json({error: "unauthorized"}, 401, {"cache-control": "no-store"})
+		}
+		await next()
+	})
 	router.post("/replay-pairs", async (c) => {
 		const req = parseReplayPairsRequest(await c.req.json().catch(() => null))
 		if (!req) return c.json({error: "Invalid parameter", message: "body must be {spaces: uuid[]}"}, 400)
-		const key = JSON.stringify(req)
+		const key = replayPairsCacheKey(req)
 		const hit = cache.get(key)
 		if (hit && now() - hit.at < cacheMs) {
 			try {
