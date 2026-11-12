@@ -1035,7 +1035,7 @@ write into geo-db's derived class (last-write-wins, no history) after their Post
 source of truth: a geo-db error is counted (`geodb_derived_mirror_errors_total{table}`) and logged, never returned, a
 call is bounded by `GEODB_DERIVED_BUDGET_MS` (default 5000; rows past it are counted in
 `geodb_derived_mirror_dropped_total` and left for the next write of the key), and after a failure the pipe is not
-respawned for 10 s.
+respawned for 2 s.
 
 | writer | tables mirrored (collection) |
 | -- | -- |
