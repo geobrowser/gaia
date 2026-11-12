@@ -1,0 +1,166 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  # Switches unset: counters registered at zero (or nothing exported at all). Nothing may fire.
+  - name: silent while the switches are unset
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_ranked_read_serve_total{namespace="gaia", job="api", read="feeds", source="geodb"}'
+        values: '0x60'
+      - series: 'gaia_api_ranked_read_serve_fallback_total{namespace="gaia", job="api", read="feeds", reason="error"}'
+        values: '0x60'
+      - series: 'search_indexer_geodb_serve_served_total{namespace="gaia", job="search-indexer", read="applied_block"}'
+        values: '0x60'
+      - series: 'search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer", read="applied_block", reason="error"}'
+        values: '0x60'
+      - series: 'delivery_worker_geodb_claimed_total{namespace="gaia", job="delivery-worker"}'
+        values: '0x60'
+      - series: 'delivery_worker_geodb_acks_total{namespace="gaia", job="delivery-worker", result="lease_lost"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbApiServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbRankedReadsServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbSearchIndexerServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbDeliveryWorkerLeaseLost, exp_alerts: []}
+      - {eval_time: 59m, alertname: GeoDbDeliveryWorkerLeaseLost, exp_alerts: []}
+
+  - name: silent when no series exist at all
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="gaia", job="api"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbApiServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbRankedReadsServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbSearchIndexerServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbDeliveryWorkerLeaseLost, exp_alerts: []}
+
+  # versions falls back 3 of every 10 answers (7 served + 3 fallback per minute); governance is healthy.
+  - name: api family over the threshold fires for that family only
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_serve_total{namespace="gaia", job="api", family="versions", read="relation_lookup"}'
+        values: '0+7x60'
+      - series: 'gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api", family="versions", read="relation_lookup", reason="mismatch"}'
+        values: '0+3x60'
+      - series: 'gaia_api_geodb_serve_total{namespace="gaia", job="api", family="governance", read="status"}'
+        values: '0+10x60'
+      - series: 'gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api", family="governance", read="status", reason="timeout"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GeoDbApiServeFallbackHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+              family: versions
+            exp_annotations:
+              summary: More than 10% of geo-db versions reads are falling back to Postgres
+              description: >-
+                The family's serve switch is on but Postgres is answering instead. Break it down with
+                sum by (read, reason) (increase(gaia_api_geodb_serve_fallback_total{family="versions"}[15m])):
+                shadow_off, no_comparison, stale and mismatch mean the shadow gate is not holding;
+                timeout and error mean geo-db is slow or down. RUNBOOK section 13.
+
+  - name: api ratio under the threshold stays silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_serve_total{namespace="gaia", job="api", family="versions", read="relation_lookup"}'
+        values: '0+19x60'
+      - series: 'gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api", family="versions", read="relation_lookup", reason="mismatch"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbApiServeFallbackHigh, exp_alerts: []}
+
+  - name: api fallback ratio of 100% under the traffic floor stays silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_serve_total{namespace="gaia", job="api", family="versions", read="relation_lookup"}'
+        values: '0x60'
+      # 4 fallbacks in the window, below the floor of 20 answers.
+      - series: 'gaia_api_geodb_serve_fallback_total{namespace="gaia", job="api", family="versions", read="relation_lookup", reason="timeout"}'
+        values: '0x20 1 1 1 1 4x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbApiServeFallbackHigh, exp_alerts: []}
+
+  - name: ranked reads count only geodb-sourced answers as served
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_ranked_read_serve_total{namespace="gaia", job="api", read="feeds", source="geodb"}'
+        values: '0+4x60'
+      # Postgres answers are not geo-db serves; they must not dilute the ratio.
+      - series: 'gaia_api_ranked_read_serve_total{namespace="gaia", job="api", read="feeds", source="postgres"}'
+        values: '0+100x60'
+      - series: 'gaia_api_ranked_read_serve_fallback_total{namespace="gaia", job="api", read="feeds", reason="error"}'
+        values: '0+2x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GeoDbRankedReadsServeFallbackHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+              read: feeds
+            exp_annotations:
+              summary: More than 10% of geo-db ranked feeds reads are falling back to Postgres
+              description: >-
+                The read is listed in GEODB_RANKED_READS_SERVE but Postgres is answering. Break it down with
+                sum by (reason) (increase(gaia_api_ranked_read_serve_fallback_total{read="feeds"}[15m])).
+                RUNBOOK section 13.
+
+  - name: search-indexer fallback fires per read
+    interval: 1m
+    input_series:
+      - series: 'search_indexer_geodb_serve_served_total{namespace="gaia", job="search-indexer", read="entities_for_spaces"}'
+        values: '0+1x60'
+      - series: 'search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer", read="entities_for_spaces", reason="too_large"}'
+        values: '0+1x60'
+      - series: 'search_indexer_geodb_serve_served_total{namespace="gaia", job="search-indexer", read="applied_block"}'
+        values: '0+30x60'
+      - series: 'search_indexer_geodb_serve_fallback_total{namespace="gaia", job="search-indexer", read="applied_block", reason="stale"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GeoDbSearchIndexerServeFallbackHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: search-indexer
+              namespace: gaia
+              read: entities_for_spaces
+            exp_annotations:
+              summary: More than 10% of the search-indexer's geo-db entities_for_spaces reads are falling back to Postgres
+              description: >-
+                The read's serve switch is on but Postgres is answering. Break it down with
+                sum by (reason) (increase(search_indexer_geodb_serve_fallback_total{read="entities_for_spaces"}[15m])).
+                RUNBOOK section 13.
+
+  - name: delivery-worker lease_lost fires, ok and error acks do not
+    interval: 1m
+    input_series:
+      - series: 'delivery_worker_geodb_acks_total{namespace="gaia", job="delivery-worker", result="ok"}'
+        values: '0+10x60'
+      - series: 'delivery_worker_geodb_acks_total{namespace="gaia", job="delivery-worker", result="error"}'
+        values: '0+1x60'
+      # Registered at zero, then two leases lost from minute 20.
+      - series: 'delivery_worker_geodb_acks_total{namespace="gaia", job="delivery-worker", result="lease_lost"}'
+        values: '0x20 1 1 1 1 1 1 1 1 1 1 2x30'
+    alert_rule_test:
+      - {eval_time: 15m, alertname: GeoDbDeliveryWorkerLeaseLost, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbDeliveryWorkerLeaseLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: delivery-worker
+              namespace: gaia
+            exp_annotations:
+              summary: The delivery-worker is losing its geo-db work leases
+              description: >-
+                Acks are coming back lease_lost, so claims outlive their lease before delivery finishes
+                (a slow channel send, or a lease shorter than the delivery time). Compare against
+                delivery_worker_geodb_claimed_total and the result="error" acks. RUNBOOK section 13.
