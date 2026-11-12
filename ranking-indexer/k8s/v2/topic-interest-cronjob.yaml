@@ -171,9 +171,9 @@ spec:
                   value: "0"
                 - name: RUST_LOG
                   value: "topic_interest=info,ranking_indexer=info,geodb_cursor=info"
-                # Shadow of the Rust twin of the interest compute: read-only, counts only. Off.
+                # Shadow of the Rust twin of the interest compute: read-only, counts only. On ("0" is the rollback).
                 - name: USER_INTEREST_RUST_SHADOW
-                  value: "0"
+                  value: "1"
               resources:
                 requests:
                   memory: "64Mi"
