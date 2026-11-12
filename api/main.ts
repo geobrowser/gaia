@@ -100,11 +100,13 @@ import {createUserVotesShadow, readUserVotesShadowConfig} from "./src/pairFit/us
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
+import {createFastPathFacts} from "./src/proposals/fastPathFact"
 import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
 import {getProposalWithVotes} from "./src/proposals/queries"
+import {isFastPathFactReadEnabled} from "./src/proposals/status"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
@@ -394,7 +396,12 @@ const queriesShadow = queriesShadowConfig.enabled
 			log,
 		})
 	: null
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow))
+// PROPOSAL_EXECUTED_AT_FROM_GEODB (off by default) fills a Fast proposal's missing executedAt from geo-db's fast-path
+// execution fact (collection 31). Postgres' value always wins and a failed read keeps it.
+const fastPathFacts = isFastPathFactReadEnabled()
+	? createFastPathFacts(createDerivedReader(geoDbCardConfig), {warn: (message, fields) => log.warn(message, fields)})
+	: null
+app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow, fastPathFacts))
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
