@@ -110,7 +110,7 @@ pub fn by_group(rows: Vec<DerivedRow>) -> BTreeMap<u128, Vec<DerivedRow>> {
     m
 }
 
-fn same_score(a: f64, b: f64) -> bool {
+pub fn same_score(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
@@ -213,8 +213,19 @@ impl ScanPipe {
 
     /// Scans one user's group: the rows and whether the page was cut.
     pub fn scan(&mut self, collection: u32, group: u128) -> Result<(Vec<Held>, bool), String> {
+        self.scan_pages(collection, group, 1)
+    }
+
+    /// As [`scan`](Self::scan), following up to `pages` pages of [`SCAN_ROWS`] rows; the flag is
+    /// true when the group held more than that.
+    pub fn scan_pages(
+        &mut self,
+        collection: u32,
+        group: u128,
+        pages: usize,
+    ) -> Result<(Vec<Held>, bool), String> {
         let body = self.request(&format!(
-            "scan\t{collection}\t0x{group:032x}\t{SCAN_ROWS}\t1"
+            "scan\t{collection}\t0x{group:032x}\t{SCAN_ROWS}\t{pages}"
         ))?;
         parse_scan(&body)
     }
