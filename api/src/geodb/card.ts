@@ -38,6 +38,8 @@ export type RelationRow = {
 	type_id: string
 	to_entity_id: string
 	to_space_id: string | null
+	/** The relation's statement id and the facets PostGraphile answered for it (`GEODB_RELATION_FACETS_SHADOW`); absent when not selected. */
+	facets?: EdgeFacets
 }
 
 export type CardDiff = {
@@ -424,6 +426,35 @@ export function relationFacetsOf(rows: GeoCardRow[], statementId: string): Parti
 		if (facet) out[facet] = row.claim.raw
 	}
 	return out
+}
+
+/** The relation's own statement id in geo-db and what Postgres answered for its facets (a facet not selected is absent). */
+export type EdgeFacets = {statementId: string | null; toSpace?: string | null; verified?: boolean | null}
+
+/** A Space id as geo-db holds it: 32 lowercase hex digits. Null for anything else. */
+export const compactSpaceId = (v: unknown): string | null => {
+	if (typeof v !== "string") return null
+	const compact = v.replaceAll("-", "").toLowerCase()
+	return /^[0-9a-f]{32}$/.test(compact) ? compact : null
+}
+
+/**
+ * The relation's facets against the claims geo-db holds on its statement. A facet at its default (no to-space, not
+ * verified) is no claim. Null when they agree, else what differs.
+ */
+export function facetDiff(
+	expected: EdgeFacets,
+	held: Partial<Record<RelationFacet, string>>,
+): Record<string, unknown> | null {
+	const diff: Record<string, unknown> = {}
+	if (expected.toSpace !== undefined && (expected.toSpace ?? undefined) !== held.toSpace)
+		diff.toSpace = {postgres: expected.toSpace, geoDb: held.toSpace ?? null}
+	if (expected.verified !== undefined) {
+		const geoDb = held.verified === "true"
+		if ((expected.verified === true) !== geoDb || (held.verified !== undefined && held.verified !== "true"))
+			diff.verified = {postgres: expected.verified, geoDb: held.verified ?? null}
+	}
+	return Object.keys(diff).length > 0 ? diff : null
 }
 
 export const ENTITY_TIME_PROPERTIES: ReadonlySet<string> = new Set([CREATED_AT_PROPERTY, UPDATED_AT_PROPERTY])

@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {RELATION_FACET_PROPERTIES, relationFacetsOf, rowsFromGeoDbOutput} from "../../geodb/card"
+import {facetDiff, RELATION_FACET_PROPERTIES, relationFacetsOf, rowsFromGeoDbOutput} from "../../geodb/card"
 import {cardDocument, GeoDbError} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
 import {createGateway} from "../gateway"
@@ -12,7 +12,7 @@ import {
 	recordGatewayUnsupportedShape,
 	renderGatewayMetrics,
 } from "../metrics"
-import {analyzePointRead, createPointReadShadows, facetDiff, MAX_BATCH_IDS} from "../pointReadShadows"
+import {analyzePointRead, createPointReadShadows, MAX_BATCH_IDS} from "../pointReadShadows"
 
 const SPACE = "11111111-1111-4111-8111-111111111111"
 const GEO_SPACE = "22222222222242228222222222222222"
