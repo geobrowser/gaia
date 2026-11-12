@@ -42,10 +42,12 @@ import {
 	diffCards,
 	type GeoCardRow,
 	isEmptyDiff,
+	type RelationFacet,
+	relationFacetsOf,
 	statementsFromPostgres,
 } from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
-import {askGeoDb} from "../geodb/service"
+import {askGeoDb, askGeoDbRelationClaims} from "../geodb/service"
 import {defaultLimitForDepth} from "../kg/paginationCapPlugin"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {
@@ -176,13 +178,17 @@ export type RelationPlan = {
 	typeId: IdPath | null
 	toEntityId: IdPath | null
 	entityIdKey: string | null
+	/** The response keys of `toSpaceId` / `verified`, where selected. */
+	facetKeys: Partial<Record<(typeof RELATION_FACET_FIELDS)[number], string>>
 	/** The relation's own entity, when it is selected as a card. */
 	entity: {key: string; card: EntityCardPlan} | null
 	uncompared: UncomparedReason[]
 }
 
 const RELATION_COLUMNS = ["id", "spaceId", "entityId", "fromEntityId", "toEntityId", "typeId"] as const
-const RELATION_IGNORED = ["toSpaceId", "position", "verified", "__typename"] as const
+const RELATION_IGNORED = ["position", "__typename"] as const
+/** Selected beside the columns: compared to geo-db's facet claims when the facets shadow is on, else ignored. */
+const RELATION_FACET_FIELDS = ["toSpaceId", "verified"] as const
 const RELATION_OBJECTS = {type: "typeId", toEntity: "toEntityId", fromEntity: "fromEntityId"} as const
 
 function planRelation(
@@ -195,12 +201,16 @@ function planRelation(
 	const paths: Partial<Record<"fromEntityId" | "typeId" | "toEntityId", IdPath>> = {}
 	let entity: RelationPlan["entity"] = null
 	const seen = new Set<string>()
+	const facetKeys: RelationPlan["facetKeys"] = {}
 	for (const field of inlineFields(set, fragments)) {
 		const key = keyOf(field)
 		if (seen.has(key)) return refuse("selection")
 		seen.add(key)
 		const name = field.name.value
-		if ((RELATION_COLUMNS as readonly string[]).includes(name)) {
+		if ((RELATION_FACET_FIELDS as readonly string[]).includes(name)) {
+			if (!isPlain(field)) return refuse(field.selectionSet ? "selection" : "args")
+			facetKeys[name as (typeof RELATION_FACET_FIELDS)[number]] ??= key
+		} else if ((RELATION_COLUMNS as readonly string[]).includes(name)) {
 			if (!isPlain(field)) return refuse(field.selectionSet ? "selection" : "args")
 			columns[name as (typeof RELATION_COLUMNS)[number]] ??= key
 		} else if ((RELATION_IGNORED as readonly string[]).includes(name)) {
@@ -239,6 +249,7 @@ function planRelation(
 		typeId: direct("typeId"),
 		toEntityId: direct("toEntityId"),
 		entityIdKey: columns.entityId ?? null,
+		facetKeys,
 		entity,
 		uncompared: [...uncompared],
 	}
@@ -388,7 +399,15 @@ export function analyzePointRead(
 
 type Item =
 	| {kind: "card"; entityId: string; plan: EntityCardPlan; card: NonNullable<ReturnType<typeof cardFromEntity>>}
-	| {kind: "edge"; fromEntityId: string; spaceId: string; typeId: string; toEntityId: string}
+	| {
+			kind: "edge"
+			fromEntityId: string
+			spaceId: string
+			typeId: string
+			toEntityId: string
+			/** What Postgres holds for the relation's facets, where the answer selected them. */
+			facets: EdgeFacets | null
+	  }
 	/** Every relation of `typeIds` from one entity in one space, as Postgres answered them. */
 	| {
 			kind: "slice"
@@ -397,6 +416,16 @@ type Item =
 			typeIds: string[]
 			edges: {typeId: string; toEntityId: string}[]
 	  }
+
+/** The relation's own statement id in geo-db and what Postgres answered for its facets (a facet not selected is absent). */
+type EdgeFacets = {statementId: string | null; toSpace?: string | null; verified?: boolean | null}
+
+/** A Space id as geo-db holds it: 32 lowercase hex digits. Null for anything else. */
+const compactSpaceId = (v: unknown): string | null => {
+	if (typeof v !== "string") return null
+	const compact = v.replaceAll("-", "").toLowerCase()
+	return /^[0-9a-f]{32}$/.test(compact) ? compact : null
+}
 
 const pathValue = (node: Record<string, unknown>, path: IdPath | null): string | null => {
 	if (!path) return null
@@ -424,7 +453,28 @@ function itemsOfRelation(raw: unknown, plan: RelationPlan): {items: Item[]; trun
 		const typeId = column("typeId")
 		const toEntityId = column("toEntityId")
 		if (!spaceId || !fromEntityId || !typeId || !toEntityId) return null
-		items.push({kind: "edge", fromEntityId, spaceId, typeId, toEntityId})
+		const idValue = plan.idKey ? node[plan.idKey] : null
+		const facets: EdgeFacets | null =
+			plan.facetKeys.toSpaceId !== undefined || plan.facetKeys.verified !== undefined
+				? {
+						statementId:
+							typeof idValue === "string" && isValidUuid(idValue)
+								? conformingId("statement", normalizeUuid(idValue))
+								: null,
+						...(plan.facetKeys.toSpaceId !== undefined
+							? {toSpace: compactSpaceId(node[plan.facetKeys.toSpaceId])}
+							: {}),
+						...(plan.facetKeys.verified !== undefined
+							? {
+									verified:
+										typeof node[plan.facetKeys.verified] === "boolean"
+											? (node[plan.facetKeys.verified] as boolean)
+											: null,
+								}
+							: {}),
+					}
+				: null
+		items.push({kind: "edge", fromEntityId, spaceId, typeId, toEntityId, facets})
 	}
 	if (plan.entity) {
 		const entity = node[plan.entity.key]
@@ -461,6 +511,36 @@ function readOnce(deps: EntityShadowDeps, reads: CardReads, entityId: string, sp
 		reads.set(key, read)
 	}
 	return read
+}
+
+/** One operation's relation-claims reads, by entity and space, beside the card reads. */
+function readClaimsOnce(deps: EntityShadowDeps, reads: CardReads, entityId: string, spaceId: string) {
+	const key = `claims\t${entityId}\t${spaceId}`
+	let read = reads.get(key)
+	if (!read) {
+		read = askGeoDbRelationClaims(deps, conformingId("entity", entityId), spaceId)
+		reads.set(key, read)
+	}
+	return read
+}
+
+/**
+ * The relation's facets against the claims geo-db holds on its statement. A facet at its default (no to-space, not
+ * verified) is no claim. Null when they agree, else what differs.
+ */
+export function facetDiff(
+	expected: EdgeFacets,
+	held: Partial<Record<RelationFacet, string>>,
+): Record<string, unknown> | null {
+	const diff: Record<string, unknown> = {}
+	if (expected.toSpace !== undefined && (expected.toSpace ?? undefined) !== held.toSpace)
+		diff.toSpace = {postgres: expected.toSpace, geoDb: held.toSpace ?? null}
+	if (expected.verified !== undefined) {
+		const geoDb = held.verified === "true"
+		if ((expected.verified === true) !== geoDb || (held.verified !== undefined && held.verified !== "true"))
+			diff.verified = {postgres: expected.verified, geoDb: held.verified ?? null}
+	}
+	return Object.keys(diff).length > 0 ? diff : null
 }
 
 async function judgeSlice(
@@ -521,6 +601,27 @@ async function judge(deps: EntityShadowDeps, item: Item, label: string, reads: C
 		const type = conformingId("entity", item.typeId)
 		const to = conformingId("entity", item.toEntityId)
 		const found = rows.some((row) => row.prop === type && row.raw === to)
+		if (found && deps.relationFacets === true && item.facets) {
+			const facets = item.facets
+			if (facets.statementId === null) return {result: "match", uncompared: ["relation_facets"]}
+			if (!deps.geoDb.readRelationClaims) return {result: "match", uncompared: ["relation_facets"]}
+			const claimRows = await readClaimsOnce(deps, reads, item.fromEntityId, item.spaceId)
+			const diff = facetDiff(facets, relationFacetsOf(claimRows, facets.statementId))
+			return diff
+				? {
+						result: "mismatch",
+						uncompared: [],
+						detail: {
+							facets: {
+								fromEntityId: item.fromEntityId,
+								spaceId: item.spaceId,
+								statementId: facets.statementId,
+								diff,
+							},
+						},
+					}
+				: {result: "match", uncompared: []}
+		}
 		return found
 			? {result: "match", uncompared: []}
 			: {
@@ -551,6 +652,7 @@ async function judge(deps: EntityShadowDeps, item: Item, label: string, reads: C
 function collectItems(
 	plan: PointPlan,
 	body: unknown,
+	facets = false,
 ): {items: Item[]; truncated: boolean; uncompared?: UncomparedReason[]} | null {
 	const root = asRecord(body)
 	if (!root || root.errors !== undefined) return null
@@ -583,7 +685,14 @@ function collectItems(
 			// Each row must have been read as an edge, else the slice is not what Postgres holds.
 			if (edges.length !== answer.length) return null
 			const sliceItem: Item = {kind: "slice", ...slice, edges}
-			return {items: [sliceItem, ...spread(cards, MAX_BATCH_IDS)], truncated, uncompared: []}
+			// The slice settles the edges; their facets (selected, and the shadow on) are checked row by row.
+			const faceted = facets
+				? spread(
+						rows.flat().filter((item) => item.kind === "edge" && item.facets !== null),
+						MAX_BATCH_IDS,
+					)
+				: []
+			return {items: [sliceItem, ...faceted, ...spread(cards, MAX_BATCH_IDS)], truncated, uncompared: []}
 		}
 		const sampled = spread(rows, MAX_BATCH_IDS)
 		const uncompared: UncomparedReason[] = []
@@ -656,7 +765,7 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			} catch {
 				return
 			}
-			const collected = collectItems(plan, body)
+			const collected = collectItems(plan, body, deps.relationFacets === true)
 			if (!collected) {
 				deps.log.info(`${label} skipped: PostGraphile answer not comparable`, {})
 				return

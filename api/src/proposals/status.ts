@@ -104,6 +104,59 @@ export function computeProposalStatus(
 }
 
 /**
+ * Environment switch for reading the fast-path execution fact out of geo-db (collection 31, the
+ * "proposal_fast_executions" derived collection). Off unless the value is exactly "true", so a
+ * deploy of this code changes nothing until it is turned on.
+ */
+export const FASTPATH_EXECUTED_AT_FACT_ENV = "PROPOSAL_EXECUTED_AT_FROM_GEODB"
+
+/** True when the fast-path fact reader is switched on. Defaults off. */
+export function isFastPathFactReadEnabled(env: Record<string, string | undefined> = process.env): boolean {
+	return env[FASTPATH_EXECUTED_AT_FACT_ENV] === "true"
+}
+
+/** A decoded value of geo-db's collection 31: the version that reached the threshold and the vote time. */
+export interface FastPathExecutionFact {
+	version: number
+	seconds: bigint
+}
+
+/** Bytes of one collection-31 value: `u32` version then `i64` seconds, both little-endian. */
+export const FASTPATH_FACT_BYTES = 12
+
+/** Decodes a collection-31 value, or null for a value of another length. */
+export function decodeFastPathExecutionFact(value: Uint8Array): FastPathExecutionFact | null {
+	if (value.byteLength !== FASTPATH_FACT_BYTES) return null
+	const view = new DataView(value.buffer, value.byteOffset, value.byteLength)
+	return {version: view.getUint32(0, true), seconds: view.getBigInt64(4, true)}
+}
+
+/**
+ * The Fast-path threshold rule geo-db's vote fold applies: `yes >= max(flat, 1)`. It is the same
+ * rule as `yes > effectiveThreshold(flat)` in `computeVoteBasedStatus` and the Fast arm of
+ * `sqlIsExecutable` (`yes_count > CASE WHEN flat = 0 THEN 0 ELSE flat - 1 END`). The equivalence
+ * test in `__tests__/fastPathExecutedAt.test.ts` holds the three together.
+ */
+export function foldReachesFastThreshold(yesCount: bigint, flatSupportThreshold: bigint): boolean {
+	return yesCount >= (flatSupportThreshold > 1n ? flatSupportThreshold : 1n)
+}
+
+/**
+ * `executedAt` with the geo-db fact as a fallback. Returns the stored value when there is one (the
+ * indexer's inference stays authoritative, and sticky), and otherwise the fact's time when the
+ * reader is enabled and a fact exists. With the switch off this is the identity.
+ */
+export function resolveExecutedAt(
+	executedAt: bigint | null,
+	fact: FastPathExecutionFact | null,
+	enabled: boolean = isFastPathFactReadEnabled(),
+): bigint | null {
+	if (executedAt !== null) return executedAt
+	if (!enabled || fact === null) return null
+	return fact.seconds
+}
+
+/**
  * True once the contract's execution window has closed: it mirrors
  * `canExecuteProposal`'s `block.timestamp > executeBy`. A null or zero
  * `executeBy` means the window has not been set yet (V2 leaves it at zero
