@@ -402,7 +402,43 @@ spec:
             # changes the response). Executed and closed bases are unsupported{as_of}. OFF until turned on: "on" enables it;
             # 1 in 10 requests, at most 30 a minute, 2 at once.
             - name: GEODB_PROPOSAL_DIFF_SHADOW
-              value: "0"
+              value: "on"
+            - name: GEODB_PROPOSAL_DIFF_SHADOW_SAMPLE_EVERY
+              value: "20"
+            - name: GEODB_PROPOSAL_DIFF_SHADOW_MAX_PER_MINUTE
+              value: "10"
+            - name: GEODB_PROPOSAL_DIFF_SHADOW_MAX_IN_FLIGHT
+              value: "2"
+            # Entity-at-version, entity-diff and relation-lookup twins (request-driven, fire-and-forget, counts only). Per pod:
+            # 1 request in 20, at most 10 a minute each (relation lookup 3 a minute: one sample reads up to 64 relation ids,
+            # 4 at a time), 2 at once. With the versions shadow (30 a minute) and the two feed-config tables below that is
+            # under 2 samples a second per pod, inside the 3 a second budget of GATEWAY_SHADOW_READS_PER_SECOND.
+            - name: GEODB_ENTITY_AT_VERSION_SHADOW
+              value: "on"
+            - name: GEODB_ENTITY_AT_VERSION_SHADOW_SAMPLE_EVERY
+              value: "20"
+            - name: GEODB_ENTITY_AT_VERSION_SHADOW_MAX_PER_MINUTE
+              value: "10"
+            - name: GEODB_ENTITY_AT_VERSION_SHADOW_MAX_IN_FLIGHT
+              value: "2"
+            - name: GEODB_ENTITY_DIFF_SHADOW
+              value: "on"
+            - name: GEODB_ENTITY_DIFF_SHADOW_SAMPLE_EVERY
+              value: "20"
+            - name: GEODB_ENTITY_DIFF_SHADOW_MAX_PER_MINUTE
+              value: "10"
+            - name: GEODB_ENTITY_DIFF_SHADOW_MAX_IN_FLIGHT
+              value: "2"
+            - name: GEODB_RELATION_LOOKUP_SHADOW
+              value: "on"
+            - name: GEODB_RELATION_LOOKUP_SHADOW_SAMPLE_EVERY
+              value: "20"
+            - name: GEODB_RELATION_LOOKUP_SHADOW_MAX_PER_MINUTE
+              value: "3"
+            - name: GEODB_RELATION_LOOKUP_SHADOW_MAX_IN_FLIGHT
+              value: "2"
+            - name: GEODB_RELATION_LOOKUP_SHADOW_CONCURRENCY
+              value: "4"
             # A nested property, Type or relation-target name that geo-db prints as none because it is named in a Space
             # outside the read is settled from its Name in every Space (one batch read of at most 64 ids, under the
             # every-Space budget). A name no Space holds stays uncompared, never a mismatch. Shadow only (gaia#1257).
@@ -488,9 +524,9 @@ spec:
             - name: GEODB_ENTITY_TYPE_WEIGHTS_SHADOW
               value: "1"
             - name: GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW
-              value: "0"
+              value: "1"
             - name: GEODB_ENTITY_FEED_BLOCKLIST_SHADOW
-              value: "0"
+              value: "1"
             # The For you config revision twin: a digest over the For you / interest / entity-ranking config records in geo-db's
             # config Space, compared with Postgres' feed_config_revision by whether each moved since the last pass (_INTERVAL_MS,
             # default 30 s): gaia_api_config_revision_shadow_total{result}. ON (backfills ran 2026-11-06); background only, the version string stays on
