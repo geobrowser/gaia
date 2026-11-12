@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 import {Series} from "../metrics.js"
-import {type Pools, checkTarget, loadPools, mappedSpaces, parseRate, pick, replayOne, zipfBySpace} from "../replay.js"
+import {type Pools, checkTarget, loadPools, loadPoolsFromApi, mappedSpaces, parsePairSource, parseRate, pick, replayOne, zipfBySpace} from "../replay.js"
 
 const S1 = "41e851610e13a19441c4d980f2f2ce6b"
 const S2 = "a19c345ab9866679b001d7d2138d88a1"
@@ -131,5 +131,67 @@ describe("replayOne", () => {
 				throw new Error("ECONNREFUSED")
 			}),
 		).toBe("error")
+	})
+})
+
+describe("api pair source", () => {
+	const target = checkTarget("http://api:3000")
+	const E2 = "b".repeat(32)
+	const reply = (body: unknown, status = 200) => async () => ({status, text: async () => JSON.stringify(body)})
+
+	it("defaults to postgres and refuses an unknown source", () => {
+		expect(parsePairSource(undefined)).toBe("postgres")
+		expect(parsePairSource("")).toBe("postgres")
+		expect(parsePairSource("API")).toBe("api")
+		expect(() => parsePairSource("geodb")).toThrow()
+	})
+
+	it("posts the mapped Spaces to Service api and builds the same pools", async () => {
+		const calls: {url: string; method?: string; body?: string}[] = []
+		const pools = await loadPoolsFromApi(
+			async (url, init) => {
+				calls.push({url, method: init.method, body: init.body})
+				return {
+					status: 200,
+					text: async () =>
+						JSON.stringify({
+							top: [
+								{entity: E1, space: S1, score: "0.2"},
+								{entity: E2, space: S1, score: "0.9"},
+								{entity: E2, space: S2, score: "1"},
+							],
+							recent: [{entity: E1, space: S1}],
+							random: [{entity: E2, space: S2}],
+						}),
+				}
+			},
+			target,
+			[S1],
+		)
+		expect(calls).toEqual([{url: "http://api:3000/geodb/replay-pairs", method: "POST", body: JSON.stringify({spaces: [S1], perSpace: 50, limit: 1500})}])
+		// S2 is not a requested Space, so its row is dropped; within S1 the higher score ranks first.
+		expect(pools.top).toEqual([
+			{entity: E2, space: S1, weight: 1},
+			{entity: E1, space: S1, weight: 0.5},
+		])
+		expect(pools.recent).toEqual([{entity: E1, space: S1, weight: 1}])
+		expect(pools.random).toEqual([])
+	})
+
+	it("drops malformed rows, and throws on a non-2xx or a malformed answer", async () => {
+		const bad = {top: [{entity: "x", space: S1, score: "1"}, {entity: E1, space: S1, score: "nope"}], recent: [{entity: E1}], random: []}
+		expect(await loadPoolsFromApi(reply(bad), target, [S1])).toEqual({top: [], recent: [], random: []})
+		await expect(loadPoolsFromApi(reply({}, 503), target, [S1])).rejects.toThrow("503")
+		await expect(loadPoolsFromApi(reply({top: []}), target, [S1])).rejects.toThrow("recent")
+	})
+
+	it("asks nothing when no Space is mapped", async () => {
+		let called = false
+		const pools = await loadPoolsFromApi(async () => {
+			called = true
+			return {status: 200, text: async () => "{}"}
+		}, target, [])
+		expect(pools).toEqual({top: [], recent: [], random: []})
+		expect(called).toBe(false)
 	})
 })

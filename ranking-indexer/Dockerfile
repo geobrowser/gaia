@@ -53,5 +53,6 @@ COPY --from=builder /app/ranking-indexer/target/release/stance_map_shadow /usr/l
 COPY --from=builder /app/ranking-indexer/target/release/feed_signals_sync /usr/local/bin/feed_signals_sync
 COPY --from=builder /app/ranking-indexer/target/release/agenda_listings_refresh /usr/local/bin/agenda_listings_refresh
 COPY --from=builder /app/ranking-indexer/target/release/private_mirror_snapshot /usr/local/bin/private_mirror_snapshot
+COPY --from=builder /app/ranking-indexer/target/release/user_topic_signals_reconcile /usr/local/bin/user_topic_signals_reconcile
 
 CMD ["ranking-indexer"]

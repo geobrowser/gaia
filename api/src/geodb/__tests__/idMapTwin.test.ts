@@ -95,7 +95,7 @@ describe("withIdMapTwin", () => {
 			enabled: true,
 			sample: 0.05,
 			timeoutMs: 2000,
-			cooldownMs: 30_000,
+			cooldownMs: 5_000,
 		})
 		expect(
 			readIdMapTwinConfig({
