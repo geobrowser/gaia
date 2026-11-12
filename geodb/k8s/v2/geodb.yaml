@@ -180,7 +180,9 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:67b6974a5e
+          # By digest: tag 67b6974a5e was rebuilt in place on 11-12 (#1550, the scores-collection 33 grant) and serve
+          # uses IfNotPresent, so a node that cached the old build kept running it. The digest is the rebuilt image.
+          image: registry.digitalocean.com/geo/geodb@sha256:7b069b6f8d9c680e0c4e45e8d576dfb78def4bac8495da7b108d2923e0e09c4a
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
