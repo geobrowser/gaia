@@ -9,6 +9,8 @@
 #                             GEODB_OUTBOX_MIRROR_BACKLOG on; the series does not exist before)
 #   GeoDbOutboxMirrorBacklogDropped
 #                             geodb_outbox_mirror_backlog_dropped_total or _expired_total rose in the last 15m
+#   GeoDbVotesCountMirrorLag  vote-indexer's votes_count mirror (collections 26 and 33) more than 10m
+#                             behind the newest source row for 15m (vote_indexer_votes_count_mirror_lag_seconds)
 #
 #   GeoDbWorkRowsHigh         geodb_work_rows above 80% of geodb_work_rows_max for 15m (serve >= geo-db
 #                             5fbf4ad5ee; printed only while the work class is on)
@@ -133,3 +135,24 @@ spec:
               a unit geo-db kept refusing was expired from the head (backlog_expired; needs gaia#1507).
               Postgres delivery is unaffected. Check which counter rose, then replay the window with
               outbox-replay once serve is healthy (RUNBOOK section 11).
+
+        - alert: GeoDbVotesCountMirrorLag
+          # The gauge is the newest votes_count updated_at the mirror was asked to send minus the newest
+          # whose rows (26 and its 33 pair) geo-db acknowledged, set after every mirror call. It is 0
+          # while the mirror is off, and holds its last value through a quiet spell, so a stall that
+          # starts with no vote after it shows as the next vote's lag, not as a rising line.
+          expr: |
+            max(vote_indexer_votes_count_mirror_lag_seconds{namespace="gaia"}) > 600
+          for: 15m
+          labels:
+            severity: warning
+            service: vote-indexer
+            namespace: gaia
+          annotations:
+            summary: The vote-indexer's votes_count geo-db mirror is more than 10 minutes behind
+            description: >-
+              geo-db's collections 26 (votes_count) and 33 (votes_count_updates) trail Postgres, so the
+              notification poller and any vote-tally read from geo-db are stale. Postgres is unaffected.
+              Check vote_indexer_votes_count_mirror_rows_total{collection} is rising, and
+              geodb_derived_mirror_errors_total / _unacknowledged_total / _dropped_total{table="votes_count"}
+              for why. A vote-indexer restart re-copies the whole table (the start-up snapshot).

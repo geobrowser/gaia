@@ -24,7 +24,98 @@
 //! call is dropped and counted.
 
 use geodb_cursor::derived::{DerivedMirror, DerivedRow};
+use std::sync::atomic::{AtomicI64, Ordering};
 use uuid::Uuid;
+
+/// Rows geo-db acknowledged, by collection (label `collection` = 26 or 33).
+pub const ROWS_PUT: &str = "vote_indexer_votes_count_mirror_rows_total";
+/// The newest `updated_at` (microseconds) of a count the mirror was asked to send.
+pub const SOURCE_NEWEST_US: &str = "vote_indexer_votes_count_mirror_source_newest_updated_us";
+/// The newest `updated_at` (microseconds) of a count whose rows geo-db fully acknowledged.
+pub const LAST_APPLIED_US: &str = "vote_indexer_votes_count_mirror_last_applied_updated_us";
+/// Seconds the mirror is behind the source: the source's newest `updated_at` minus the last applied.
+pub const LAG_SECONDS: &str = "vote_indexer_votes_count_mirror_lag_seconds";
+
+static SOURCE_NEWEST: AtomicI64 = AtomicI64::new(0);
+static LAST_APPLIED: AtomicI64 = AtomicI64::new(0);
+
+/// Seconds `applied_us` is behind `newest_us`; 0 when nothing was offered yet or the mirror is level
+/// or ahead (a snapshot can apply an older row after a newer live one).
+pub fn lag_seconds(newest_us: i64, applied_us: i64) -> f64 {
+    if newest_us <= 0 {
+        return 0.0;
+    }
+    (newest_us.saturating_sub(applied_us.max(0)).max(0)) as f64 / 1_000_000.0
+}
+
+/// How many rows of each collection the first `acked` rows of `units` hold, and the newest update
+/// time of the units entirely inside `acked`. `units` is each count's collections and its time, in
+/// send order (a unit is acknowledged as far as the node got, in order).
+pub fn account(units: &[(Vec<u32>, i64)], acked: usize) -> (u64, u64, Option<i64>) {
+    let (mut n26, mut n33, mut applied) = (0u64, 0u64, None::<i64>);
+    let mut left = acked;
+    for (cols, us) in units {
+        let take = left.min(cols.len());
+        for c in &cols[..take] {
+            match *c {
+                COLLECTION => n26 += 1,
+                UPDATES_COLLECTION => n33 += 1,
+                _ => {}
+            }
+        }
+        left -= take;
+        if take == cols.len() {
+            applied = Some(applied.map_or(*us, |a| a.max(*us)));
+        } else {
+            break;
+        }
+    }
+    (n26, n33, applied)
+}
+
+fn record(units: &[(Vec<u32>, i64)], acked: usize) {
+    let (n26, n33, applied) = account(units, acked);
+    metrics::counter!(ROWS_PUT, "collection" => "26").increment(n26);
+    metrics::counter!(ROWS_PUT, "collection" => "33").increment(n33);
+    if let Some(newest) = units.iter().map(|u| u.1).max() {
+        SOURCE_NEWEST.fetch_max(newest, Ordering::Relaxed);
+    }
+    if let Some(a) = applied {
+        LAST_APPLIED.fetch_max(a, Ordering::Relaxed);
+    }
+    let (newest, applied) = (
+        SOURCE_NEWEST.load(Ordering::Relaxed),
+        LAST_APPLIED.load(Ordering::Relaxed),
+    );
+    metrics::gauge!(SOURCE_NEWEST_US).set(newest as f64);
+    metrics::gauge!(LAST_APPLIED_US).set(applied as f64);
+    metrics::gauge!(LAG_SECONDS).set(lag_seconds(newest, applied));
+}
+
+/// Describes the mirror's metrics and registers them at zero.
+pub fn register_metrics() {
+    metrics::describe_counter!(
+        ROWS_PUT,
+        "Rows of votes_count (collection 26) and votes_count_updates (33) geo-db acknowledged"
+    );
+    metrics::describe_gauge!(
+        SOURCE_NEWEST_US,
+        "Newest votes_count updated_at, in microseconds, the geo-db mirror was asked to send"
+    );
+    metrics::describe_gauge!(
+        LAST_APPLIED_US,
+        "Newest votes_count updated_at, in microseconds, whose rows geo-db fully acknowledged"
+    );
+    metrics::describe_gauge!(
+        LAG_SECONDS,
+        "Seconds the votes_count geo-db mirror is behind the newest source row"
+    );
+    metrics::counter!(ROWS_PUT, "collection" => "26").absolute(0);
+    metrics::counter!(ROWS_PUT, "collection" => "33").absolute(0);
+    metrics::gauge!(SOURCE_NEWEST_US).set(0.0);
+    metrics::gauge!(LAST_APPLIED_US).set(0.0);
+    metrics::gauge!(LAG_SECONDS).set(0.0);
+}
 
 /// `votes_count` in geo-db's collection registry.
 pub const COLLECTION: u32 = 26;
@@ -135,7 +226,13 @@ pub async fn mirror(mirror: &DerivedMirror, counts: &[Count]) {
         .collect();
     let refs: Vec<&[DerivedRow]> = units.iter().map(|u| u.as_slice()).collect();
     if !refs.is_empty() {
-        mirror.put_units(TABLE, &refs).await;
+        let acked = mirror.put_units(TABLE, &refs).await;
+        let shape: Vec<(Vec<u32>, i64)> = units
+            .iter()
+            .zip(counts)
+            .map(|(u, c)| (u.iter().map(|r| r.collection).collect(), c.updated_us))
+            .collect();
+        record(&shape, acked);
     }
 }
 
@@ -269,6 +366,54 @@ mod tests {
         assert_eq!(lines, expect);
         assert!(lines[0].starts_with("put\t26\t"));
         assert!(lines[1].starts_with("put\t33\t1\t"));
+    }
+
+    #[test]
+    fn lag_is_the_gap_in_seconds_and_never_negative() {
+        assert_eq!(lag_seconds(0, 0), 0.0);
+        assert_eq!(lag_seconds(10_000_000, 4_000_000), 6.0);
+        assert_eq!(lag_seconds(10_000_000, 10_000_000), 0.0);
+        assert_eq!(lag_seconds(10_000_000, 12_000_000), 0.0);
+        // Nothing applied yet: the whole age of the newest row.
+        assert_eq!(lag_seconds(1_500_000, 0), 1.5);
+    }
+
+    #[test]
+    fn account_counts_rows_by_collection_and_the_newest_whole_unit() {
+        let pair = |us| (vec![26, 33], us);
+        let units = vec![pair(100), pair(300), (vec![26], 200), pair(400)];
+        // Everything acknowledged.
+        assert_eq!(account(&units, 7), (4, 3, Some(400)));
+        // Stops after the first pair and half the second: only the first unit counts as applied.
+        assert_eq!(account(&units, 3), (2, 1, Some(100)));
+        // Nothing acknowledged.
+        assert_eq!(account(&units, 0), (0, 0, None));
+        // A count with no collection 33 row is a unit of one.
+        assert_eq!(account(&units, 5), (3, 2, Some(300)));
+        assert_eq!(account(&units, 6), (4, 2, Some(300)));
+    }
+
+    #[test]
+    fn metrics_render_rows_and_lag() {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            register_metrics();
+            SOURCE_NEWEST.store(0, Ordering::Relaxed);
+            LAST_APPLIED.store(0, Ordering::Relaxed);
+            // Unit 2 is cut: applied stays at the first pair's time, newest is the second's.
+            record(&[(vec![26, 33], 2_000_000), (vec![26, 33], 9_000_000)], 3);
+        });
+        let out = handle.render();
+        for line in [
+            "vote_indexer_votes_count_mirror_rows_total{collection=\"26\"} 2",
+            "vote_indexer_votes_count_mirror_rows_total{collection=\"33\"} 1",
+            "vote_indexer_votes_count_mirror_last_applied_updated_us 2000000",
+            "vote_indexer_votes_count_mirror_lag_seconds 7",
+        ] {
+            assert!(out.contains(line), "missing `{line}` in:\n{out}");
+        }
     }
 
     #[test]
