@@ -31,8 +31,8 @@ pub async fn affected_blocks(
     for b in &detected.blocks {
         blocks.insert(b.id);
     }
-    for (_ranking_id, block_id) in &detected.block_links {
-        blocks.insert(*block_id);
+    for link in &detected.block_links {
+        blocks.insert(link.block_id);
     }
 
     // Rankings/items touched here may already be linked to a block from a prior
@@ -51,6 +51,30 @@ pub async fn affected_blocks(
     }
 
     Ok(blocks)
+}
+
+/// Pair each eligible ranking with its items, in `eligible`'s order.
+///
+/// A ranking with no items is not a ballot (GEO-3591): a ranker who cleared
+/// their ranking contributes nothing, is not counted in an average-mode block's
+/// ballot counts, and is not published as an `Aggregated rankings` source. The
+/// caller passes rankings that are already deduped, so a cleared ranking still
+/// supersedes the same ranker's older submission to the block.
+pub fn ballots_with_items(
+    eligible: &[Ranking],
+    items: Vec<RankingItem>,
+) -> Vec<(&Ranking, Vec<RankingItem>)> {
+    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
+    for item in items {
+        items_by_ranking
+            .entry(item.ranking_id)
+            .or_default()
+            .push(item);
+    }
+    eligible
+        .iter()
+        .filter_map(|r| items_by_ranking.remove(&r.id).map(|items| (r, items)))
+        .collect()
 }
 
 /// Recompute a single block's aggregate end to end.
@@ -114,17 +138,7 @@ pub async fn recompute_block(
     //    or per entity for an average-mode block.
     let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();
     let items = storage.get_items_for_rankings(&eligible_ids).await?;
-    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
-    for item in items {
-        items_by_ranking
-            .entry(item.ranking_id)
-            .or_default()
-            .push(item);
-    }
-    let ballots: Vec<(&Ranking, Vec<RankingItem>)> = eligible
-        .iter()
-        .map(|r| (r, items_by_ranking.remove(&r.id).unwrap_or_default()))
-        .collect();
+    let ballots = ballots_with_items(&eligible, items);
     // Rolling blocks weight each ballot by recency, using the block's
     // `submission_frequency` as the half-life; static blocks score every eligible
     // ballot at full weight.
@@ -184,6 +198,35 @@ pub async fn apply_detected_edit(
         return Ok(());
     }
 
+    // Deletes first (GEO-3591), so a create of the same id later in the edit
+    // wins, and `ranks.update`'s delete-every-old-vote + create-every-new-vote
+    // ends with exactly the new ballot whatever order its ops came in. Each
+    // returns the blocks it can have changed; a rank unlinked or deleted here
+    // is no longer found from its id, so its old block is collected now.
+    let mut deleted_from: HashSet<Uuid> = HashSet::new();
+    if !detected.deleted_entities.is_empty() {
+        deleted_from.extend(
+            storage
+                .delete_rankings(&detected.deleted_entities, space_id)
+                .await?,
+        );
+    }
+    if !detected.deleted_relations.is_empty() {
+        deleted_from.extend(
+            storage
+                .unlink_rankings_by_relation(&detected.deleted_relations)
+                .await?,
+        );
+        for ranking_id in storage
+            .delete_ranking_items_by_relation(&detected.deleted_relations)
+            .await?
+        {
+            if let Some(block_id) = storage.block_id_for_ranking(ranking_id).await? {
+                deleted_from.insert(block_id);
+            }
+        }
+    }
+
     for block in &detected.blocks {
         storage.upsert_ranking_block(block).await?;
     }
@@ -203,18 +246,94 @@ pub async fn apply_detected_edit(
         storage.replace_ranking_items(*ranking_id, items).await?;
     }
 
-    for (ranking_id, block_id) in &detected.block_links {
+    for link in &detected.block_links {
         // The RANK_BLOCK relation is authored in the ranking's space, so the
         // edit's `space_id` is the rank row's space.
         storage
-            .set_ranking_block(*ranking_id, *block_id, space_id)
+            .set_ranking_block(link.ranking_id, link.block_id, link.relation_id, space_id)
             .await?;
     }
 
     let now = Utc::now();
-    for block_id in affected_blocks(detected, storage).await? {
+    let mut blocks = affected_blocks(detected, storage).await?;
+    blocks.extend(deleted_from);
+    for block_id in blocks {
         recompute_block(block_id, detected.meta, now, storage).await?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ranking(id: u128) -> Ranking {
+        Ranking {
+            id: Uuid::from_u128(id),
+            block_id: Some(Uuid::from_u128(1)),
+            space_id: Uuid::from_u128(900 + id),
+            author_address: None,
+            rank_type: Some("ORDINAL".to_string()),
+            submitted_at: None,
+            updated_at_block: 0,
+            update_index: 0,
+        }
+    }
+
+    fn item(ranking: u128, entity: u128) -> RankingItem {
+        RankingItem {
+            ranking_id: Uuid::from_u128(ranking),
+            entity_id: Uuid::from_u128(entity),
+            space_id: Uuid::from_u128(500),
+            position: Some("a0".into()),
+            weight: None,
+            relation_id: None,
+        }
+    }
+
+    #[test]
+    fn a_ranking_with_no_items_is_not_a_ballot() {
+        // Ranking 2 was cleared: every vote deleted, none created.
+        let eligible = vec![ranking(1), ranking(2), ranking(3)];
+        let items = vec![item(1, 100), item(3, 100), item(3, 101)];
+        let ballots = ballots_with_items(&eligible, items);
+        let ids: Vec<Uuid> = ballots.iter().map(|(r, _)| r.id).collect();
+        assert_eq!(ids, vec![Uuid::from_u128(1), Uuid::from_u128(3)]);
+        assert_eq!(ballots[1].1.len(), 2);
+    }
+
+    #[test]
+    fn a_cleared_ballot_does_not_count_in_an_average_block() {
+        use crate::scoring::{aggregate_with, BlockScoring, ScoringMode, NORM_HI, NORM_LO};
+        let eligible = vec![ranking(1), ranking(2)];
+        let config = BlockScoring {
+            mode: ScoringMode::Average,
+            ..BlockScoring::default()
+        };
+        let with = |items| {
+            aggregate_with(
+                &ballots_with_items(&eligible, items),
+                NORM_LO,
+                NORM_HI,
+                None,
+                config,
+            )
+        };
+        // Both rankers placed entity 100 first: two ballots.
+        let both = with(vec![item(1, 100), item(2, 100)]);
+        assert_eq!(both[0].ballots, 2);
+        // Ranker 2 cleared theirs: one ballot, the same score as if ranker 2
+        // had never submitted.
+        let cleared = with(vec![item(1, 100)]);
+        let never = aggregate_with(
+            &ballots_with_items(&eligible[..1], vec![item(1, 100)]),
+            NORM_LO,
+            NORM_HI,
+            None,
+            config,
+        );
+        assert_eq!(cleared[0].ballots, 1);
+        assert_eq!(cleared, never);
+    }
 }

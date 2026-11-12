@@ -27,6 +27,10 @@
 //! it. A config row is not an edit, so nothing else notices it; the hourly run
 //! picks it up, and running this by hand applies it at once.
 //!
+//! Also fills the vote and block-link relation ids (`ranking_items.relation_id`,
+//! `rankings.block_relation_id`, migration 0125) on rows written without them,
+//! so the live consumer can honour a later delete of those relations (GEO-3591).
+//!
 //! Exits non-zero if anything failed to recover, so a scheduled run (see
 //! `k8s/*/backfill-cronjob.yaml`) surfaces failures as a failed Job instead
 //! of a silently-green one.
@@ -111,12 +115,32 @@ async fn main() -> Result<(), IndexerError> {
         return Ok(());
     }
 
+    // Relation ids the live consumer needs to honour deleted votes and block
+    // links (GEO-3591), for rows written without them: by an indexer that
+    // predates migration 0125, or by the rank recovery below (filled on the
+    // next run). Writes nothing once every row that can be matched has one.
+    let fill_failed = match storage.fill_missing_relation_ids().await {
+        Ok((items, rankings)) => {
+            if items > 0 || rankings > 0 {
+                info!(items, rankings, "filled missing rank relation ids");
+            }
+            false
+        }
+        Err(e) => {
+            error!(error = %e, "failed to fill missing rank relation ids");
+            true
+        }
+    };
+
     if block_candidates.is_empty()
         && stale_blocks.is_empty()
         && rank_candidates.is_empty()
         && pending_configs.is_empty()
         && all_blocks.is_empty()
     {
+        if fill_failed {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -128,7 +152,7 @@ async fn main() -> Result<(), IndexerError> {
     let mut resynced_stale_blocks = 0;
     let mut recovered_ranks = 0;
     let mut still_unregistered_ranks = 0;
-    let mut failed = 0;
+    let mut failed = usize::from(fill_failed);
     // Blocks recomputed by the recovery/resync passes below, so the optional
     // full recompute at the end does not redo them.
     let mut handled_blocks: HashSet<uuid::Uuid> = HashSet::new();

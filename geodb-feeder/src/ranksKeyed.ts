@@ -31,6 +31,10 @@
  * - A RANK_BLOCK link writes the ranking record's block column even when the ranking was created in another edit;
  *   Postgres' `UPDATE` is a no-op until the ranking row exists, so geo-db can hold a block link Postgres lacks.
  * - Items without `to_space` are skipped, as detect.rs does.
+ * - Deletes are not ported (GEO-3591). detect.rs now records DeleteRelation/DeleteEntity ids, and storage.rs
+ *   removes the items whose vote relation was deleted, unlinks a rank whose RANK_BLOCK relation was deleted and
+ *   drops a deleted Rank, so a ranker can clear their ballot with an edit of deletes only. Here such an edit
+ *   writes nothing, and the cleared ranking keeps its items at their last generation.
  */
 import {relationEntityId} from "@geoprotocol/grc-20"
 import {parseHermesEdit} from "./hermes.js"

@@ -2190,3 +2190,570 @@ async fn recompute_waits_for_the_blocks_lock() {
     .expect("recompute runs once the lock is released")
     .unwrap();
 }
+
+/// GEO-3591: an edit that deletes a Rank's vote relations removes those items,
+/// so a ranker can clear their ballot (`ranks.update` with no votes is an edit
+/// of deletes only), drop one item, or re-submit with deletes and creates in
+/// either order. Also a deleted RANK_BLOCK link, and items written before
+/// migration 0125 (no relation id) once the backfill fills it in.
+///
+/// Average mode, so the test also shows a cleared ranker is not a ballot.
+#[tokio::test]
+async fn deleted_rank_votes_leave_the_ballot_and_a_cleared_ranker_is_no_ballot() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const SPACE: u128 = 0xE2E5_3591_0001;
+    const MEMBERS: [u128; 3] = [0xE2E5_3591_0011, 0xE2E5_3591_0012, 0xE2E5_3591_0013];
+    const BLOCK: u128 = 0xE2E5_3591_0021;
+    const RANKS: [u128; 3] = [0xE2E5_3591_0041, 0xE2E5_3591_0042, 0xE2E5_3591_0043];
+    const A: u128 = 0xE2E5_3591_0031;
+    const B: u128 = 0xE2E5_3591_0032;
+    const C: u128 = 0xE2E5_3591_0033;
+    // Relation ids: 0x3591_0r0v for rank r's vote v; 0x3591_0r50 its block link.
+    let vote_rel = |r: usize, v: u128| 0x3591_0000 + ((r as u128 + 1) << 8) + v;
+    let link_rel = |r: usize| 0x3591_0000 + ((r as u128 + 1) << 8) + 0x50;
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    let rank_ids: Vec<Uuid> = RANKS.iter().map(|r| u(*r)).collect();
+    for sql in [
+        "DELETE FROM relations WHERE from_entity_id = ANY($1)",
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
+        "DELETE FROM ranks.rankings WHERE id = ANY($1)",
+    ] {
+        sqlx::query(sql)
+            .bind(&rank_ids[..])
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_scores WHERE block_id = $1",
+        "DELETE FROM ranks.ranking_blocks WHERE id = $1",
+        "DELETE FROM ranks.ranking_block_config WHERE block_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(BLOCK)).execute(pool).await.unwrap();
+    }
+
+    // --- a DAO average-mode block with three members -------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3591')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    for m in MEMBERS {
+        sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+            .bind(u(m))
+            .bind(u(SPACE))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO ranks.ranking_block_config (block_id, max_rows, scoring_mode) \
+         VALUES ($1, 2000, 'average')",
+    )
+    .bind(u(BLOCK))
+    .execute(pool)
+    .await
+    .unwrap();
+    let block_edit = EditBuilder::new(gid(0x3591_0001))
+        .create_relation(|r| {
+            r.id(gid(0x3591_0100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Clearable (e2e)", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    const POSITIONS: [&str; 3] = ["a0", "a1", "a2"];
+    // Ops for rank `r`'s votes `(relation id, entity)`, in order.
+    let votes = |mut edit: EditBuilder<'static>, r: usize, votes: &[(u128, u128)]| {
+        for (i, (rel, entity)) in votes.iter().enumerate() {
+            let position = POSITIONS[i];
+            edit = edit.create_relation(|b| {
+                b.id(gid(*rel))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(RANKS[r]))
+                    .to(gid(*entity))
+                    .to_space(gid(SPACE))
+                    .position(position)
+            });
+        }
+        edit
+    };
+    let deletes = |mut edit: EditBuilder<'static>, rels: &[u128]| {
+        for rel in rels {
+            edit = edit.delete_relation(gid(*rel));
+        }
+        edit
+    };
+    let apply = |r: usize, edit: grc_20::Edit<'static>, block_number: i64| {
+        let storage = &storage;
+        async move {
+            let member = u(MEMBERS[r]);
+            apply_detected_edit(&detect(&edit, member, block_number, 0), member, storage)
+                .await
+                .unwrap();
+        }
+    };
+
+    // --- three ballots ---------------------------------------------------------
+    let ballots: [&[u128]; 3] = [&[A, B, C], &[A, B], &[C, A]];
+    for (r, entities) in ballots.iter().enumerate() {
+        let edit = EditBuilder::new(gid(RANKS[r] ^ 0xED17))
+            .create_relation(|b| {
+                b.id(gid(0x3591_0000 + ((r as u128 + 1) << 8) + 0x40))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(RANKS[r]))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_entity(gid(RANKS[r]), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            .create_relation(|b| {
+                b.id(gid(link_rel(r)))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(RANKS[r]))
+                    .to(gid(BLOCK))
+            });
+        let vs: Vec<(u128, u128)> = entities
+            .iter()
+            .enumerate()
+            .map(|(v, e)| (vote_rel(r, v as u128), *e))
+            .collect();
+        apply(r, votes(edit, r, &vs).build(), 10 + r as i64).await;
+    }
+
+    // entity -> ballots, and how many rankings the projection credits.
+    let state = || async {
+        let rows: Vec<(Uuid, i32)> = sqlx::query_as(
+            "SELECT entity_id, ballots FROM ranks.ranking_scores WHERE block_id = $1 \
+             ORDER BY entity_id",
+        )
+        .bind(u(BLOCK))
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let aggregated = Uuid::parse_str(AGGREGATED_RANKINGS_RELATION_TYPE_ID).unwrap();
+        let prov: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM relations WHERE from_entity_id = $1 AND type_id = $2",
+        )
+        .bind(u(BLOCK))
+        .bind(aggregated)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (rows, prov)
+    };
+    let items_of = |r: usize| async move {
+        sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+            "SELECT entity_id, relation_id FROM ranks.ranking_items WHERE ranking_id = $1 \
+             ORDER BY entity_id",
+        )
+        .bind(u(RANKS[r]))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+
+    assert_eq!(
+        state().await,
+        (vec![(u(A), 3), (u(B), 2), (u(C), 2)], 3),
+        "three ballots"
+    );
+    assert_eq!(
+        items_of(0).await,
+        vec![
+            (u(A), Some(u(vote_rel(0, 0)))),
+            (u(B), Some(u(vote_rel(0, 1)))),
+            (u(C), Some(u(vote_rel(0, 2)))),
+        ],
+        "items keep their vote relation ids"
+    );
+    let block_rel: Option<Uuid> =
+        sqlx::query_scalar("SELECT block_relation_id FROM ranks.rankings WHERE id = $1")
+            .bind(u(RANKS[0]))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(block_rel, Some(u(link_rel(0))));
+
+    // --- ranker 1 clears their ranking: deletes only (votes + vote entities) ---
+    let mut clear = EditBuilder::new(gid(0x3591_0C1E));
+    for v in 0..3 {
+        clear = clear
+            .delete_relation(gid(vote_rel(0, v)))
+            .delete_entity(gid(0x3591_0E00 + v));
+    }
+    apply(0, clear.build(), 20).await;
+    assert!(
+        items_of(0).await.is_empty(),
+        "the cleared ballot has no items"
+    );
+    assert_eq!(
+        state().await,
+        (vec![(u(A), 2), (u(B), 1), (u(C), 1)], 2),
+        "a cleared ranker is not a ballot and is not credited as a source"
+    );
+
+    // --- ranker 2 removes one item (B): a partial delete -----------------------
+    apply(
+        1,
+        deletes(EditBuilder::new(gid(0x3591_0D01)), &[vote_rel(1, 1)]).build(),
+        21,
+    )
+    .await;
+    assert_eq!(items_of(1).await, vec![(u(A), Some(u(vote_rel(1, 0))))]);
+    assert_eq!(
+        state().await,
+        (vec![(u(A), 2), (u(C), 1)], 2),
+        "B was only on the cleared ballot and the removed item"
+    );
+
+    // --- re-submissions: deletes + creates in one edit, both orders ------------
+    // Ranker 3, creates first: [C, A] -> [B, C].
+    let resubmit = votes(
+        EditBuilder::new(gid(0x3591_0D02)),
+        2,
+        &[(vote_rel(2, 0x10), B), (vote_rel(2, 0x11), C)],
+    );
+    apply(
+        2,
+        deletes(resubmit, &[vote_rel(2, 0), vote_rel(2, 1)]).build(),
+        22,
+    )
+    .await;
+    assert_eq!(
+        items_of(2).await,
+        vec![
+            (u(B), Some(u(vote_rel(2, 0x10)))),
+            (u(C), Some(u(vote_rel(2, 0x11)))),
+        ]
+    );
+    // Ranker 2, deletes first (the SDK's order): [A] -> [C].
+    let resubmit = deletes(EditBuilder::new(gid(0x3591_0D03)), &[vote_rel(1, 0)]);
+    apply(1, votes(resubmit, 1, &[(vote_rel(1, 0x10), C)]).build(), 23).await;
+    assert_eq!(items_of(1).await, vec![(u(C), Some(u(vote_rel(1, 0x10))))]);
+    assert_eq!(
+        state().await,
+        (vec![(u(B), 1), (u(C), 2)], 2),
+        "exactly the new ballots"
+    );
+
+    // --- a cleared ranker submits again ----------------------------------------
+    apply(
+        0,
+        votes(
+            EditBuilder::new(gid(0x3591_0D04)),
+            0,
+            &[(vote_rel(0, 0x10), A)],
+        )
+        .build(),
+        24,
+    )
+    .await;
+    assert_eq!(state().await, (vec![(u(A), 1), (u(B), 1), (u(C), 2)], 3));
+
+    // --- a deleted RANK_BLOCK link takes ranker 3 out of the block -------------
+    apply(
+        2,
+        deletes(EditBuilder::new(gid(0x3591_0D05)), &[link_rel(2)]).build(),
+        25,
+    )
+    .await;
+    assert_eq!(state().await, (vec![(u(A), 1), (u(C), 1)], 2));
+    assert_eq!(
+        storage.block_id_for_ranking(u(RANKS[2])).await.unwrap(),
+        None
+    );
+
+    // --- an item from before migration 0125 (no relation id) -------------------
+    // Ranker 1's item loses its relation id, as if an older indexer wrote it;
+    // the graph still holds the vote relation, so the backfill fills it in and
+    // a later delete of that relation is honoured.
+    sqlx::query("UPDATE ranks.ranking_items SET relation_id = NULL WHERE ranking_id = $1")
+        .bind(u(RANKS[0]))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, \
+         to_space_id, space_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(u(vote_rel(0, 0x10)))
+    .bind(u(0x3591_0E10))
+    .bind(Uuid::parse_str(RANK_VOTES_RELATION_TYPE_ID).unwrap())
+    .bind(u(RANKS[0]))
+    .bind(u(A))
+    .bind(u(SPACE))
+    .bind(u(MEMBERS[0]))
+    .execute(pool)
+    .await
+    .unwrap();
+    let (filled_items, _) = storage.fill_missing_relation_ids().await.unwrap();
+    assert!(filled_items >= 1);
+    assert_eq!(items_of(0).await, vec![(u(A), Some(u(vote_rel(0, 0x10))))]);
+    apply(
+        0,
+        deletes(EditBuilder::new(gid(0x3591_0D06)), &[vote_rel(0, 0x10)]).build(),
+        26,
+    )
+    .await;
+    assert!(items_of(0).await.is_empty());
+    assert_eq!(state().await, (vec![(u(C), 1)], 1));
+}
+
+/// GEO-3591: the exact edits the web sends, mirrored op for op from geo-sdk
+/// 0.20.5. `buildVoteOps` emits, per vote, a RANK_VOTES `CreateRelation` with
+/// its own reified vote entity, then a `CreateEntity` of that vote entity with
+/// the ordinal value. `updateRank` emits, per existing vote, a `DeleteRelation`
+/// of the vote relation then a `DeleteEntity` of its vote entity, followed by
+/// `buildVoteOps` for the new votes. It never touches the Rank entity or its
+/// RANK_BLOCK link. Clearing a ranking is `ranks.update` with `votes: []`:
+/// deletes only.
+#[tokio::test]
+async fn sdk_shaped_update_rank_clears_and_reranks() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const SPACE: u128 = 0xE2E5_3592_0001;
+    const MEMBERS: [u128; 2] = [0xE2E5_3592_0011, 0xE2E5_3592_0012];
+    const BLOCK: u128 = 0xE2E5_3592_0021;
+    const RANKS: [u128; 2] = [0xE2E5_3592_0041, 0xE2E5_3592_0042];
+    const A: u128 = 0xE2E5_3592_0031;
+    const B: u128 = 0xE2E5_3592_0032;
+    const C: u128 = 0xE2E5_3592_0033;
+
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    let rank_ids: Vec<Uuid> = RANKS.iter().map(|r| u(*r)).collect();
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
+        "DELETE FROM ranks.rankings WHERE id = ANY($1)",
+    ] {
+        sqlx::query(sql)
+            .bind(&rank_ids[..])
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_scores WHERE block_id = $1",
+        "DELETE FROM ranks.ranking_blocks WHERE id = $1",
+        "DELETE FROM ranks.ranking_block_config WHERE block_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(BLOCK)).execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3592')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    for m in MEMBERS {
+        sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+            .bind(u(m))
+            .bind(u(SPACE))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO ranks.ranking_block_config (block_id, max_rows, scoring_mode) \
+         VALUES ($1, 2000, 'average')",
+    )
+    .bind(u(BLOCK))
+    .execute(pool)
+    .await
+    .unwrap();
+    let block_edit = EditBuilder::new(gid(0x3592_0001))
+        .create_relation(|r| {
+            r.id(gid(0x3592_0100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "SDK-shaped (e2e)", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    /// One vote as the SDK writes it: the relation id and its reified vote entity id.
+    #[derive(Clone, Copy)]
+    struct Vote {
+        relation: u128,
+        entity: u128,
+    }
+    const POSITIONS: [&str; 3] = ["a0", "a1", "a2"];
+    // geo-sdk buildVoteOps (ORDINAL): CreateRelation + CreateEntity per vote.
+    let build_vote_ops = |mut edit: EditBuilder<'static>, rank: u128, votes: &[(Vote, u128)]| {
+        for (i, (vote, ranked)) in votes.iter().enumerate() {
+            let position = POSITIONS[i];
+            let vote = *vote;
+            edit = edit
+                .create_relation(|b| {
+                    b.id(gid(vote.relation))
+                        .entity(gid(vote.entity))
+                        .from(gid(rank))
+                        .to(gid(*ranked))
+                        .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                        .to_space(gid(SPACE))
+                        .position(position)
+                })
+                .create_entity(gid(vote.entity), |e| {
+                    e.text(sid(VOTE_ORDINAL_VALUE_PROPERTY_ID), position, None)
+                });
+        }
+        edit
+    };
+    // geo-sdk updateRank: DeleteRelation + DeleteEntity per existing vote, then
+    // buildVoteOps for the new ones.
+    let update_rank = |rank: u128, existing: &[Vote], votes: &[(Vote, u128)]| {
+        let mut edit = EditBuilder::new(gid(rank ^ 0x0BDA7E));
+        for vote in existing {
+            edit = edit
+                .delete_relation(gid(vote.relation))
+                .delete_entity(gid(vote.entity));
+        }
+        build_vote_ops(edit, rank, votes).build()
+    };
+    let vote = |rank: usize, n: u128| Vote {
+        relation: 0x3592_0000 + ((rank as u128 + 1) << 12) + n,
+        entity: 0x3592_0000 + ((rank as u128 + 1) << 12) + 0x800 + n,
+    };
+    let apply = |r: usize, edit: grc_20::Edit<'static>, block_number: i64| {
+        let storage = &storage;
+        async move {
+            let member = u(MEMBERS[r]);
+            apply_detected_edit(&detect(&edit, member, block_number, 0), member, storage)
+                .await
+                .unwrap();
+        }
+    };
+    let state = || async {
+        let rows: Vec<(Uuid, i32)> = sqlx::query_as(
+            "SELECT entity_id, ballots FROM ranks.ranking_scores WHERE block_id = $1 \
+             ORDER BY entity_id",
+        )
+        .bind(u(BLOCK))
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let aggregated = Uuid::parse_str(AGGREGATED_RANKINGS_RELATION_TYPE_ID).unwrap();
+        let prov: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM relations WHERE from_entity_id = $1 AND type_id = $2",
+        )
+        .bind(u(BLOCK))
+        .bind(aggregated)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (rows, prov)
+    };
+
+    // --- first submissions: Rank entity + RANK_BLOCK link + SDK vote ops --------
+    let first: [Vec<(Vote, u128)>; 2] = [
+        vec![(vote(0, 0), A), (vote(0, 1), B), (vote(0, 2), C)],
+        vec![(vote(1, 0), A), (vote(1, 1), C)],
+    ];
+    for (r, votes) in first.iter().enumerate() {
+        let edit = EditBuilder::new(gid(RANKS[r] ^ 0xED17))
+            .create_entity(gid(RANKS[r]), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            .create_relation(|b| {
+                b.id(gid(0x3592_0F00 + r as u128))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(RANKS[r]))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_relation(|b| {
+                b.id(gid(0x3592_0F10 + r as u128))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(RANKS[r]))
+                    .to(gid(BLOCK))
+            });
+        apply(
+            r,
+            build_vote_ops(edit, RANKS[r], votes).build(),
+            10 + r as i64,
+        )
+        .await;
+    }
+    assert_eq!(state().await, (vec![(u(A), 2), (u(B), 1), (u(C), 2)], 2));
+
+    // --- re-rank: ranker 1 goes from [A, B, C] to [C, A] ------------------------
+    let existing: Vec<Vote> = first[0].iter().map(|(v, _)| *v).collect();
+    let rerank = vec![(vote(0, 0x10), C), (vote(0, 0x11), A)];
+    apply(0, update_rank(RANKS[0], &existing, &rerank), 20).await;
+    let items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT entity_id, relation_id FROM ranks.ranking_items WHERE ranking_id = $1 \
+         ORDER BY position",
+    )
+    .bind(u(RANKS[0]))
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        items,
+        vec![
+            (u(C), Some(u(vote(0, 0x10).relation))),
+            (u(A), Some(u(vote(0, 0x11).relation))),
+        ],
+        "exactly the new ballot"
+    );
+    assert_eq!(state().await, (vec![(u(A), 2), (u(C), 2)], 2));
+
+    // --- clear: ranks.update with votes: [] (deletes only) ----------------------
+    let existing: Vec<Vote> = rerank.iter().map(|(v, _)| *v).collect();
+    apply(0, update_rank(RANKS[0], &existing, &[]), 21).await;
+    let left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ranks.ranking_items WHERE ranking_id = $1")
+            .bind(u(RANKS[0]))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(left, 0);
+    // The Rank and its link are untouched; it just isn't a ballot any more.
+    assert_eq!(
+        storage.block_id_for_ranking(u(RANKS[0])).await.unwrap(),
+        Some(u(BLOCK))
+    );
+    assert_eq!(
+        state().await,
+        (vec![(u(A), 1), (u(C), 1)], 1),
+        "only ranker 2's ballot counts"
+    );
+
+    // --- and ranks again from empty: no deletes, just the new votes -------------
+    apply(0, update_rank(RANKS[0], &[], &[(vote(0, 0x20), B)]), 22).await;
+    assert_eq!(state().await, (vec![(u(A), 1), (u(B), 1), (u(C), 1)], 2));
+}

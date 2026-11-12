@@ -887,26 +887,151 @@ impl Storage {
     /// Set a rank's block link (the `RANK_BLOCK` relation may land in a later edit).
     /// `ranks.rankings` is keyed on `(id, space_id)`, so the update is scoped to
     /// the rank's space — a same-id rank perspectived into another space is left
-    /// untouched.
+    /// untouched. `relation_id` is the `RANK_BLOCK` relation's id, kept so a
+    /// later delete of it unlinks the rank ([`Self::unlink_rankings_by_relation`]).
     pub async fn set_ranking_block(
         &self,
         ranking_id: Uuid,
         block_id: Uuid,
+        relation_id: Uuid,
         space_id: Uuid,
     ) -> Result<(), IndexerError> {
         if self.skip_pg_write(PgWriteSite::SetRankingBlock) {
             return Ok(());
         }
         sqlx::query(
-            "UPDATE ranks.rankings SET block_id = $2, updated_at = now() \
+            "UPDATE ranks.rankings SET block_id = $2, block_relation_id = $4, updated_at = now() \
              WHERE id = $1 AND space_id = $3",
         )
         .bind(ranking_id)
         .bind(block_id)
         .bind(space_id)
+        .bind(relation_id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Unlink every rank whose `RANK_BLOCK` relation is among `relation_ids`
+    /// (deleted in an edit), so it stops counting in that block. Returns the
+    /// blocks they were linked to, which the caller recomputes: once unlinked,
+    /// a rank no longer leads back to its old block. GEO-3591.
+    pub async fn unlink_rankings_by_relation(
+        &self,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<Uuid>, IndexerError> {
+        if self.skip_pg_write(PgWriteSite::UnlinkRankings) {
+            return Ok(Vec::new());
+        }
+        let blocks: Vec<Uuid> = sqlx::query_scalar(
+            "WITH old AS ( \
+                 SELECT id, space_id, block_id FROM ranks.rankings \
+                 WHERE block_relation_id = ANY($1) AND block_id IS NOT NULL FOR UPDATE \
+             ) \
+             UPDATE ranks.rankings r \
+             SET block_id = NULL, block_relation_id = NULL, updated_at = now() \
+             FROM old WHERE r.id = old.id AND r.space_id = old.space_id \
+             RETURNING old.block_id",
+        )
+        .bind(relation_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(blocks)
+    }
+
+    /// Delete the Rank submissions among `entity_ids` (entities deleted in an
+    /// edit in `space_id`), with their items. Returns the blocks they were
+    /// linked to, for the caller to recompute. Items are keyed by ranking id
+    /// alone, so they are deleted only when no row for that id is left in
+    /// another space. GEO-3591.
+    pub async fn delete_rankings(
+        &self,
+        entity_ids: &[Uuid],
+        space_id: Uuid,
+    ) -> Result<Vec<Uuid>, IndexerError> {
+        if self.skip_pg_write(PgWriteSite::DeleteRankings) {
+            return Ok(Vec::new());
+        }
+        let mut tx = self.pool.begin().await?;
+        let deleted: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "DELETE FROM ranks.rankings WHERE id = ANY($1) AND space_id = $2 \
+             RETURNING id, block_id",
+        )
+        .bind(entity_ids)
+        .bind(space_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if !deleted.is_empty() {
+            let ids: Vec<Uuid> = deleted.iter().map(|(id, _)| *id).collect();
+            sqlx::query(
+                "DELETE FROM ranks.ranking_items i WHERE i.ranking_id = ANY($1) \
+                 AND NOT EXISTS (SELECT 1 FROM ranks.rankings r WHERE r.id = i.ranking_id)",
+            )
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(deleted.into_iter().filter_map(|(_, block)| block).collect())
+    }
+
+    /// Delete the items whose `RANK_VOTES` relation is among `relation_ids`
+    /// (deleted in an edit). Returns the rankings that lost an item. An edit
+    /// that deletes every vote of a ranking and creates none leaves it with no
+    /// items, which scoring treats as no ballot at all. GEO-3591.
+    pub async fn delete_ranking_items_by_relation(
+        &self,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<Uuid>, IndexerError> {
+        if self.skip_pg_write(PgWriteSite::DeleteRankingItems) {
+            return Ok(Vec::new());
+        }
+        let rankings: Vec<Uuid> = sqlx::query_scalar(
+            "WITH gone AS ( \
+                 DELETE FROM ranks.ranking_items WHERE relation_id = ANY($1) RETURNING ranking_id \
+             ) SELECT DISTINCT ranking_id FROM gone",
+        )
+        .bind(relation_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rankings)
+    }
+
+    /// Fill `ranking_items.relation_id` and `rankings.block_relation_id` where
+    /// they are NULL, from the indexed public graph. Migration 0125 ran the same
+    /// statements once; this repeats them for rows an older indexer wrote since
+    /// (during a rollout) and for ranks the backfill recovers from the graph,
+    /// which carry no relation id. Without it, a delete of those relations
+    /// would go unnoticed. Idempotent. Returns `(items, rankings)` filled.
+    pub async fn fill_missing_relation_ids(&self) -> Result<(u64, u64), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::FillRelationIds) {
+            return Ok((0, 0));
+        }
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        let items = sqlx::query(
+            "UPDATE ranks.ranking_items i SET relation_id = r.id \
+             FROM relations r \
+             WHERE i.relation_id IS NULL AND r.type_id = $1 \
+               AND r.from_entity_id = i.ranking_id AND r.to_entity_id = i.entity_id \
+               AND r.to_space_id = i.space_id",
+        )
+        .bind(pid(ids::RANK_VOTES_RELATION_TYPE_ID))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        let rankings = sqlx::query(
+            "UPDATE ranks.rankings k SET block_relation_id = r.id \
+             FROM relations r \
+             WHERE k.block_relation_id IS NULL AND k.block_id IS NOT NULL AND r.type_id = $1 \
+               AND r.from_entity_id = k.id AND r.to_entity_id = k.block_id \
+               AND r.space_id = k.space_id",
+        )
+        .bind(pid(ids::RANK_BLOCK_RELATION_TYPE_ID))
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok((items, rankings))
     }
 
     /// Replace a submission's items wholesale (re-submission rebuilds them).
@@ -926,8 +1051,9 @@ impl Storage {
         for it in items {
             sqlx::query(
                 r#"
-                INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position, weight)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO ranks.ranking_items
+                    (ranking_id, entity_id, space_id, position, weight, relation_id)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
             )
             .bind(it.ranking_id)
@@ -935,6 +1061,7 @@ impl Storage {
             .bind(it.space_id)
             .bind(&it.position)
             .bind(it.weight)
+            .bind(it.relation_id)
             .execute(&mut *tx)
             .await?;
         }
@@ -951,7 +1078,7 @@ impl Storage {
             return Ok(Vec::new());
         }
         let rows = sqlx::query_as::<_, RankingItem>(
-            "SELECT ranking_id, entity_id, space_id, position, weight \
+            "SELECT ranking_id, entity_id, space_id, position, weight, relation_id \
              FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
         )
         .bind(ranking_ids)

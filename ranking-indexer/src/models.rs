@@ -60,4 +60,8 @@ pub struct RankingItem {
     pub position: Option<String>,
     /// Weighted value (`None` for ordinal ranks).
     pub weight: Option<f64>,
+    /// The `RANK_VOTES` relation this item came from, so a later
+    /// `DeleteRelation` of it removes the item (GEO-3591). `None` for an item
+    /// written before migration 0125 whose relation could not be found.
+    pub relation_id: Option<Uuid>,
 }

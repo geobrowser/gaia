@@ -50,6 +50,10 @@ pub enum PgWriteSite {
     UpsertRanking,
     SetRankingBlock,
     ReplaceRankingItems,
+    DeleteRankingItems,
+    UnlinkRankings,
+    DeleteRankings,
+    FillRelationIds,
     ReplaceRankPositionProjection,
     ReplaceRankingScores,
     AccountExclusionsReplace,
@@ -70,7 +74,7 @@ pub enum PgWriteSite {
 }
 
 impl PgWriteSite {
-    pub(crate) const ALL: [PgWriteSite; 25] = [
+    pub(crate) const ALL: [PgWriteSite; 29] = [
         PgWriteSite::AddMember,
         PgWriteSite::RemoveMember,
         PgWriteSite::AddEditor,
@@ -79,6 +83,10 @@ impl PgWriteSite {
         PgWriteSite::UpsertRanking,
         PgWriteSite::SetRankingBlock,
         PgWriteSite::ReplaceRankingItems,
+        PgWriteSite::DeleteRankingItems,
+        PgWriteSite::UnlinkRankings,
+        PgWriteSite::DeleteRankings,
+        PgWriteSite::FillRelationIds,
         PgWriteSite::ReplaceRankPositionProjection,
         PgWriteSite::ReplaceRankingScores,
         PgWriteSite::AccountExclusionsReplace,
@@ -108,6 +116,10 @@ impl PgWriteSite {
             PgWriteSite::UpsertRanking => "upsert_ranking",
             PgWriteSite::SetRankingBlock => "set_ranking_block",
             PgWriteSite::ReplaceRankingItems => "replace_ranking_items",
+            PgWriteSite::DeleteRankingItems => "delete_ranking_items",
+            PgWriteSite::UnlinkRankings => "unlink_rankings",
+            PgWriteSite::DeleteRankings => "delete_rankings",
+            PgWriteSite::FillRelationIds => "fill_relation_ids",
             PgWriteSite::ReplaceRankPositionProjection => "replace_rank_position_projection",
             PgWriteSite::ReplaceRankingScores => "replace_ranking_scores",
             PgWriteSite::AccountExclusionsReplace => "account_exclusions_replace",

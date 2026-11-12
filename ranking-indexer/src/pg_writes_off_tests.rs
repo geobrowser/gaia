@@ -43,6 +43,9 @@ fn id() -> Uuid {
 
 /// Calls every `Storage` write once.
 async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerError>> {
+    let nothing = |r: Result<Vec<Uuid>, crate::error::IndexerError>| {
+        r.map(|v| assert!(v.is_empty(), "a skipped delete reports nothing deleted"))
+    };
     let (a, b) = (id(), id());
     let block = RankingBlock {
         id: a,
@@ -71,6 +74,7 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         space_id: b,
         position: None,
         weight: None,
+        relation_id: None,
     };
     let score = ScoreRow {
         entity_id: a,
@@ -95,8 +99,14 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         s.remove_editor(a, b).await,
         s.upsert_ranking_block(&block).await,
         s.upsert_ranking(&ranking).await,
-        s.set_ranking_block(a, b, b).await,
+        s.set_ranking_block(a, b, b, b).await,
         s.replace_ranking_items(a, &[item]).await,
+        nothing(s.delete_ranking_items_by_relation(&[a]).await),
+        nothing(s.unlink_rankings_by_relation(&[a]).await),
+        nothing(s.delete_rankings(&[a], b).await),
+        s.fill_missing_relation_ids()
+            .await
+            .map(|n| assert_eq!(n, (0, 0))),
         s.replace_ranking_scores(a, &[score]).await,
         s.replace_rank_position_projection(
             a,
@@ -164,6 +174,10 @@ fn pg_writes_off_issues_no_statements_and_counts_skips() {
         "upsert_ranking",
         "set_ranking_block",
         "replace_ranking_items",
+        "delete_ranking_items",
+        "unlink_rankings",
+        "delete_rankings",
+        "fill_relation_ids",
         "replace_ranking_scores",
         "replace_rank_position_projection",
     ] {

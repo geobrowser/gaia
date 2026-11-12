@@ -1341,12 +1341,17 @@ export const rankings = ranks.table(
 		updatedAtBlock: bigint("updated_at_block", {mode: "number"}).notNull().default(0),
 		updateIndex: bigint("update_index", {mode: "number"}).notNull().default(0),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+		/** The RANK_BLOCK relation behind `block_id`, so deleting it unlinks the rank (GEO-3591, 0125). */
+		blockRelationId: uuid("block_relation_id"),
 	},
 	(table) => [
 		primaryKey({columns: [table.id, table.spaceId]}),
 		index("rankings_block_id_idx").on(table.blockId),
 		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
 		index("rankings_space_id_idx").on(table.spaceId),
+		index("rankings_block_relation_id_idx")
+			.on(table.blockRelationId)
+			.where(sql`${table.blockRelationId} IS NOT NULL`),
 	],
 )
 
@@ -1359,8 +1364,15 @@ export const rankingItems = ranks.table(
 		spaceId: uuid("space_id").notNull(),
 		position: text(),
 		weight: doublePrecision(),
+		/** The RANK_VOTES relation the item came from, so deleting it removes the item (GEO-3591, 0125). */
+		relationId: uuid("relation_id"),
 	},
-	(table) => [primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]})],
+	(table) => [
+		primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]}),
+		index("ranking_items_relation_id_idx")
+			.on(table.relationId)
+			.where(sql`${table.relationId} IS NOT NULL`),
+	],
 )
 
 /**
