@@ -11,7 +11,7 @@
 //! This allows operations to use direct bulk doc ID updates (`_bulk` API)
 //! instead of `update_by_query`, reducing indexing time by orders of magnitude.
 
-use hermes_instrumentation::{error, info};
+use hermes_instrumentation::{error, info, warn};
 use sqlx::{PgPool, Row};
 use std::env;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::errors::IngestError;
+use crate::geodb_shadow::serve::{self, AppliedBlockServe, ServeConfig};
 use crate::geodb_shadow::GeoDbShadow;
 use geodb_cursor::meta_read::MetaBlockShadow;
 
@@ -41,6 +42,24 @@ pub struct EntitySpaceLookup {
     shadow: Option<Arc<GeoDbShadow>>,
     /// Compares the block `kg_applied_block` answers with the one geo-db's feeder records.
     applied_block_shadow: Option<Arc<MetaBlockShadow>>,
+    /// Which reads geo-db answers (`SEARCH_INDEXER_GEODB_SERVE`); everything off by default.
+    serve: ServeState,
+}
+
+/// The serve switches and the state `applied_block` needs. A listed read whose geo-db reader is not
+/// configured is switched off at construction, so it can never be half on.
+struct ServeState {
+    entities_for_spaces: bool,
+    applied_block: Option<AppliedBlockServe>,
+}
+
+impl ServeState {
+    fn off() -> Self {
+        Self {
+            entities_for_spaces: false,
+            applied_block: None,
+        }
+    }
 }
 
 /// Longest the timer's Postgres read of one Space may take.
@@ -84,6 +103,7 @@ impl EntitySpaceLookup {
             pool,
             shadow: None,
             applied_block_shadow: None,
+            serve: ServeState::off(),
         }
     }
 
@@ -93,6 +113,7 @@ impl EntitySpaceLookup {
             pool,
             shadow: Some(shadow),
             applied_block_shadow: None,
+            serve: ServeState::off(),
         }
     }
 
@@ -100,6 +121,60 @@ impl EntitySpaceLookup {
     pub fn with_applied_block_shadow(mut self, shadow: Arc<MetaBlockShadow>) -> Self {
         self.applied_block_shadow = Some(shadow);
         self
+    }
+
+    /// Answers the reads `cfg` lists from geo-db, falling back to Postgres on any failure. Call after
+    /// `with_shadow` / `with_applied_block_shadow`: `entities_for_spaces` needs the shadow's geo-db
+    /// reader and `applied_block` the applied-block reader; one that is missing is left off (logged).
+    pub fn with_serve(mut self, cfg: &ServeConfig) -> Self {
+        if cfg.entities_for_spaces {
+            if self.shadow.is_some() {
+                self.serve.entities_for_spaces = true;
+            } else {
+                error!(
+                    "{} lists entities_for_spaces but {} is off; serving it from Postgres",
+                    serve::SERVE_VAR,
+                    crate::geodb_shadow::FLAG
+                );
+            }
+        }
+        if cfg.applied_block {
+            if self.applied_block_shadow.is_some() {
+                self.serve.applied_block = Some(AppliedBlockServe::new(cfg.applied_block_max_age));
+            } else {
+                error!(
+                    "{} lists applied_block but the meta-block reader is off; serving it from Postgres",
+                    serve::SERVE_VAR
+                );
+            }
+        }
+        if cfg.any() {
+            serve::describe();
+        }
+        self
+    }
+
+    /// The feeder's applied block from geo-db, when `applied_block` is served and the row is fresh.
+    /// `None` means ask Postgres (the fallback is counted).
+    async fn served_applied_block(&self) -> Option<u64> {
+        let (state, shadow) = (
+            self.serve.applied_block.as_ref()?,
+            self.applied_block_shadow.as_ref()?,
+        );
+        let read = shadow
+            .read_block(FEEDER_APPLIED_ID)
+            .await
+            .map_err(|e| warn!(error = %e, "geo-db applied-block read failed; asking Postgres"));
+        match state.decide(read, std::time::Instant::now()) {
+            Ok(block) => {
+                serve::count_served(serve::READ_APPLIED_BLOCK);
+                Some(block)
+            }
+            Err(reason) => {
+                serve::count_fallback(serve::READ_APPLIED_BLOCK, reason);
+                None
+            }
+        }
     }
 
     /// Counts the geo-db row against the block Postgres answered. A no-op with the shadow off.
@@ -166,10 +241,19 @@ impl EntitySpaceLookup {
                         }
                     }
                 }
-                Some(Self {
+                let lookup = Self {
                     pool,
                     shadow,
                     applied_block_shadow: MetaBlockShadow::from_env().map(Arc::new),
+                    serve: ServeState::off(),
+                };
+                Some(match ServeConfig::from_vars(|k| env::var(k).ok()) {
+                    Ok(cfg) if cfg.any() => lookup.with_serve(&cfg),
+                    Ok(_) => lookup,
+                    Err(e) => {
+                        error!(error = %e, "geo-db serve is misconfigured; serving nothing from geo-db");
+                        lookup
+                    }
                 })
             }
             Err(e) => {
@@ -247,6 +331,21 @@ impl EntitySpaceLookup {
     ) -> Result<Vec<(Uuid, Uuid)>, IngestError> {
         if space_ids.is_empty() {
             return Ok(Vec::new());
+        }
+
+        if self.serve.entities_for_spaces {
+            if let Some(shadow) = &self.shadow {
+                match shadow.serve_entities_for_spaces(space_ids).await {
+                    Ok(pairs) => {
+                        serve::count_served(serve::READ_ENTITIES_FOR_SPACES);
+                        return Ok(pairs);
+                    }
+                    Err(why) => {
+                        serve::count_fallback(serve::READ_ENTITIES_FOR_SPACES, why.reason());
+                        warn!(reason = why.reason(), detail = ?why, "geo-db could not answer entities_for_spaces; asking Postgres");
+                    }
+                }
+            }
         }
 
         let mut all_results = Vec::new();
@@ -377,6 +476,9 @@ impl EntitySpaceLookup {
     /// kg-indexer's (they apply independently), so judge mismatches as a rate. The log's
     /// per-Space version sequence is not chain blocks, which is why the feeder records its own.
     pub async fn kg_applied_block(&self) -> Result<Option<u64>, IngestError> {
+        if let Some(block) = self.served_applied_block().await {
+            return Ok(Some(block));
+        }
         let block: Option<i64> = sqlx::query_scalar(KG_APPLIED_BLOCK_SQL)
             .fetch_one(&self.pool)
             .await
@@ -512,5 +614,67 @@ mod applied_block_shadow_tests {
         let lookup =
             EntitySpaceLookup::new(lazy_pool()).with_applied_block_shadow(fake_shadow("exit 1"));
         lookup.observe_applied_block(Some(1)).await;
+    }
+
+    /// A geo-db pipe whose applied-block row names `block` (hex of `<block>:c`).
+    fn pipe_with_block(block: u64) -> String {
+        let hex: String = format!("{block}:c")
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let row = format!("{}\\t0\\t{hex}", "0".repeat(32));
+        format!(
+            "echo ready; while IFS= read -r l; do printf '+{}\\n{row}'; done",
+            row.len() - 2
+        )
+    }
+
+    fn serving(script: &str, max_age_secs: u64) -> EntitySpaceLookup {
+        let cfg = ServeConfig {
+            applied_block: true,
+            applied_block_max_age: Duration::from_secs(max_age_secs),
+            ..ServeConfig::default()
+        };
+        EntitySpaceLookup::new(lazy_pool())
+            .with_applied_block_shadow(fake_shadow(script))
+            .with_serve(&cfg)
+    }
+
+    #[tokio::test]
+    async fn applied_block_is_served_from_geodb_once_the_row_is_fresh() {
+        let lookup = serving(&pipe_with_block(42), 60);
+        // The first read only sets the baseline: Postgres would answer.
+        assert_eq!(lookup.served_applied_block().await, None);
+        // The row is unchanged but young: served.
+        assert_eq!(lookup.served_applied_block().await, Some(42));
+    }
+
+    #[tokio::test]
+    async fn applied_block_falls_back_when_the_row_is_stale() {
+        // A zero-length window is not configurable, so use the smallest (1 s) and wait it out.
+        let lookup = serving(&pipe_with_block(7), 1);
+        assert_eq!(lookup.served_applied_block().await, None);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(lookup.served_applied_block().await, None);
+    }
+
+    #[tokio::test]
+    async fn applied_block_falls_back_on_no_row_or_a_dead_pipe() {
+        let none = "echo ready; while IFS= read -r l; do printf '+4\\nnone'; done";
+        assert_eq!(serving(none, 60).served_applied_block().await, None);
+        assert_eq!(serving("exit 1", 60).served_applied_block().await, None);
+    }
+
+    #[tokio::test]
+    async fn a_listed_read_without_its_geodb_reader_stays_on_postgres() {
+        let cfg = ServeConfig {
+            applied_block: true,
+            entities_for_spaces: true,
+            ..ServeConfig::default()
+        };
+        let lookup = EntitySpaceLookup::new(lazy_pool()).with_serve(&cfg);
+        assert!(lookup.serve.applied_block.is_none());
+        assert!(!lookup.serve.entities_for_spaces);
+        assert_eq!(lookup.served_applied_block().await, None);
     }
 }
