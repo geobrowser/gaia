@@ -472,7 +472,8 @@ export async function* readSpaceVotingSettingsRows(db: ReadOnlyPg): AsyncGenerat
 /**
  * Every `proposal_versions` row, keyset-paged on the primary key (proposal_id, proposal_version). The ordinal is
  * returned for the paging only: the record is keyed by the block (proposalVersionsKeyed.ts). `threshold` and the
- * tally counts are not selected.
+ * tally counts are not selected. The proposal's proposer and owning Space come from `proposals` (LEFT JOIN: null when
+ * the row is missing); the backfill writes them only with GEODB_PROPOSAL_VERSION_PROPOSER_SPACE.
  */
 export async function* readProposalVersionRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalVersionRow & {proposal_version: number}> {
 	let after: (ProposalVersionRow & {proposal_version: number}) | null = null
@@ -484,8 +485,10 @@ export async function* readProposalVersionRows(db: ReadOnlyPg, pageSize = 5000):
 			        v.partial_percentage_support_threshold::text AS partial_percentage_support_threshold,
 			        v.universal_percentage_support_threshold::text AS universal_percentage_support_threshold,
 			        v.flat_support_threshold::text AS flat_support_threshold,
-			        v.execute_by::text AS execute_by, v.name AS name, v.version_created_at AS version_created_at
+			        v.execute_by::text AS execute_by, v.name AS name, v.version_created_at AS version_created_at,
+			        p.proposed_by::text AS proposer_id, p.space_id::text AS space_id
 			 FROM proposal_versions v
+			 LEFT JOIN proposals p ON p.id = v.proposal_id
 			 WHERE $1::boolean OR (v.proposal_id, v.proposal_version) > ($2::uuid, $3::int)
 			 ORDER BY v.proposal_id, v.proposal_version
 			 LIMIT $4`,

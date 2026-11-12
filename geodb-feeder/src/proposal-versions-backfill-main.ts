@@ -6,7 +6,8 @@
  * `space.governance` still retains.
  *
  * Env: GEODB_RECORD_KEYS=1 and GEODB_PROPOSAL_VERSIONS=1 are both required (the Job refuses otherwise), as for the
- * consumer. Needs serve at geo-db 9d97069a78 or later (`put`). The rest is keyedBackfillJob.ts's.
+ * consumer. GEODB_PROPOSAL_VERSION_PROPOSER_SPACE=1 also writes each proposal's proposer and owning Space onto its
+ * versions (default off; rerun the Job with it on to add them to records already written). Needs serve at geo-db 9d97069a78 or later (`put`). The rest is keyedBackfillJob.ts's.
  */
 import {mainKeyedBackfill} from "./keyedBackfillJob.js"
 import {readProposalVersionRows} from "./pgSource.js"
@@ -16,5 +17,6 @@ mainKeyedBackfill({
 	name: "proposal_versions",
 	refuse: (config) => (proposalVersionsKeyedEnabled(config) ? null : "GEODB_RECORD_KEYS=1 and GEODB_PROPOSAL_VERSIONS=1 are both required"),
 	offsetsDir: proposalVersionsOffsetsDir,
-	run: (deps, pg, progress) => backfillProposalVersions(deps, readProposalVersionRows(pg), progress),
+	run: (deps, pg, progress, config) =>
+		backfillProposalVersions({...deps, storeProposerSpace: config.proposalVersions.storeProposerSpace}, readProposalVersionRows(pg), progress),
 })

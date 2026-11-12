@@ -11,6 +11,8 @@ import {ReadOnlyPg, readProposalVersionRows} from "../pgSource.js"
 import {proposalVersionFromRow} from "../proposalVersionsKeyed.js"
 
 const url = process.env.GEODB_FEEDER_TEST_PG_URL
+const SPACE = "a19c345a-b986-6679-b001-d7d2138d88a1"
+const PROPOSER = "b29c345a-b986-6679-b001-d7d2138d88a2"
 
 describe.skipIf(!url)("readProposalVersionRows on a real Postgres", () => {
 	const dbName = `pversions_order_${randomUUID().replaceAll("-", "").slice(0, 12)}`
@@ -38,8 +40,11 @@ describe.skipIf(!url)("readProposalVersionRows on a real Postgres", () => {
 			yes_count bigint DEFAULT 0 NOT NULL, no_count bigint DEFAULT 0 NOT NULL, abstain_count bigint DEFAULT 0 NOT NULL,
 			version_created_at text NOT NULL, version_created_at_block text NOT NULL,
 			PRIMARY KEY (proposal_id, proposal_version), UNIQUE (proposal_id, version_created_at_block))`)
+		await c.query(`CREATE TABLE proposals (id uuid PRIMARY KEY, space_id uuid NOT NULL, proposed_by uuid NOT NULL)`)
 		for (let p = 0; p < 10; p++) {
 			const proposal = randomUUID()
+			// The last proposal has no proposals row: the LEFT JOIN must keep its versions, with a null proposer and Space.
+			if (p < 9) await c.query(`INSERT INTO proposals (id, space_id, proposed_by) VALUES ($1, $2, $3)`, [proposal, SPACE, PROPOSER])
 			for (const version of [1, 2, 3, 4]) {
 				await c.query(
 					`INSERT INTO proposal_versions (proposal_id, proposal_version, voting_mode, start_time, end_time, quorum, threshold,
@@ -78,5 +83,7 @@ describe.skipIf(!url)("readProposalVersionRows on a real Postgres", () => {
 		expect(v3?.block).toMatch(/^\d*3$/)
 		expect(rows.find((x) => x.proposal_version === 2)).toMatchObject({voting_mode: "Fast", execute_by: null, name: null})
 		for (const x of rows) expect(() => proposalVersionFromRow(x)).not.toThrow()
+		expect(rows.filter((x) => x.proposer_id === PROPOSER && x.space_id === SPACE)).toHaveLength(36)
+		expect(rows.filter((x) => x.proposer_id === null && x.space_id === null)).toHaveLength(4)
 	})
 })

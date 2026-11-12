@@ -250,6 +250,8 @@ describe("record columns", () => {
 				executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
 				name: "a76bbfa24cfa43708b89326ae5f72e18",
 				createdAt: "6c74f4f248d249368e1002b4c393a59e",
+				proposer: "e95e27260a364e95877b3973746a9ca6",
+				space: "e35197b9528d4b04a7e8583d0c20a5b9",
 			},
 		})
 	})

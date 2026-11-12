@@ -46,6 +46,7 @@ export type KeyedBackfillJob = {
 		deps: KeyedRecordDeps,
 		pg: ReadOnlyPg,
 		progress: (done: number) => void,
+		config: Config,
 	) => Promise<KeyedBackfillResult>
 }
 
@@ -153,6 +154,7 @@ async function runJob(job: KeyedBackfillJob): Promise<void> {
 			(done) => {
 				if (done % 5000 === 0) log("info", `${job.name} backfill progress`, {done})
 			},
+			config,
 		)
 		log(result.deadLetter ? "error" : "info", `${job.name} backfill done`, {...result, seconds: Math.round((Date.now() - t0) / 1000)})
 		if (result.deadLetter > 0) throw new Error(`${result.deadLetter} rows were refused (see errors.jsonl); fix and rerun`)

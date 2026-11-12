@@ -493,6 +493,10 @@ spec:
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_PROPOSAL_VERSIONS
               value: "1"
+            # Also write each version's proposer and owning Space (references) for the notification-indexer twin to compare.
+            # OFF. Turn on only after the proposal-versions backfill Job has been rerun with the same value on (RUNBOOK §2c-octies).
+            - name: GEODB_PROPOSAL_VERSION_PROPOSER_SPACE
+              value: "0"
             # Keyed proposal status facts (executed_at from PROPOSAL_EXECUTED on space.governance, unexecutable_at from the
             # backfill only, into the governance system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-novies.
             # OFF until the proposal-status backfill Job (geodb-proposal-status-backfill-job.yaml) has run with the feeder at 0.

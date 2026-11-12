@@ -468,6 +468,7 @@ async function main(config: Config): Promise<void> {
 					systemSpaces,
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(proposalVersionsOffsetsDir(config.dataDir)),
+					storeProposerSpace: config.proposalVersions.storeProposerSpace,
 				},
 			}),
 		)

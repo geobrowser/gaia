@@ -290,6 +290,151 @@ async fn proposal_existence_follows_the_version_record() {
     );
 }
 
+// ---- proposer and owning Space values --------------------------------------------------------
+
+/// One version record per `(record, proposer, space)` for the proposal; each field is written only when `Some`.
+fn version_values_fixture(p: &Uuid, versions: &[(&str, Option<&Uuid>, Option<&Uuid>)]) -> Fake {
+    let pe = ent(p);
+    let mut links = String::new();
+    let mut cards = String::new();
+    let mut ids: Vec<String> = vec![];
+    for (rec, proposer, space) in versions {
+        links += &link(VERSION_PROPOSAL, &pe, rec);
+        if let Some(x) = proposer {
+            cards += &row(VERSION_PROPOSER, &ent(x), rec);
+        }
+        if let Some(x) = space {
+            cards += &row(VERSION_SPACE, &ent(x), rec);
+        }
+        ids.push((*rec).to_string());
+    }
+    ids.sort();
+    Fake::default()
+        .backlinks(GOV, &pe, links)
+        .cards(GOV, &ids, cards)
+}
+
+const R1: &str = "dddddddddddddddddddddddddddddddd";
+const R2: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+async fn values(fake: &Fake, sql: Option<ProposalValues>) -> Vec<Verdict> {
+    compare_proposal_values(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_match_when_every_version_names_them() {
+    let (p, proposer, space) = (u(10), u(20), u(30));
+    let fake = version_values_fixture(
+        &p,
+        &[
+            (R1, Some(&proposer), Some(&space)),
+            (R2, Some(&proposer), Some(&space)),
+        ],
+    );
+    let both = ProposalValues {
+        proposer,
+        space: Some(space),
+    };
+    assert_eq!(values(&fake, Some(both)).await, vec![Verdict::Match]);
+    // The proposer-only read does not look at the Space.
+    let only = ProposalValues {
+        proposer,
+        space: None,
+    };
+    assert_eq!(values(&fake, Some(only)).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_mismatch_by_which_differs() {
+    let (p, proposer, space, other) = (u(10), u(20), u(30), u(40));
+    let fake = version_values_fixture(&p, &[(R1, Some(&proposer), Some(&space))]);
+    let sql = |proposer, space| Some(ProposalValues { proposer, space });
+    assert_eq!(
+        values(&fake, sql(other, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    assert_eq!(
+        values(&fake, sql(proposer, Some(other))).await,
+        vec![Verdict::Mismatch("space_differs")]
+    );
+    // A proposer difference with the Space unread still counts; a Space difference is not seen
+    // by the proposer-only read.
+    assert_eq!(
+        values(&fake, sql(other, None)).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    assert_eq!(
+        values(&fake, sql(proposer, None)).await,
+        vec![Verdict::Match]
+    );
+    // Two versions that disagree with each other cannot both equal Postgres's one value.
+    let split = version_values_fixture(
+        &p,
+        &[
+            (R1, Some(&proposer), Some(&space)),
+            (R2, Some(&other), Some(&space)),
+        ],
+    );
+    assert_eq!(
+        values(&split, sql(proposer, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    // A mismatch outranks an unsupported check.
+    let proposer_wrong_space_unstored = version_values_fixture(&p, &[(R1, Some(&other), None)]);
+    assert_eq!(
+        values(&proposer_wrong_space_unstored, sql(proposer, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_not_stored_is_unsupported_not_a_mismatch() {
+    let (p, proposer, space) = (u(10), u(20), u(30));
+    let fake = version_values_fixture(&p, &[(R1, None, None)]);
+    let sql = Some(ProposalValues {
+        proposer,
+        space: Some(space),
+    });
+    assert_eq!(
+        values(&fake, sql).await,
+        vec![Verdict::Unsupported("values_not_stored")]
+    );
+    // One stored and matching, the other not stored: unsupported, since the Space cannot be judged.
+    let half = version_values_fixture(&p, &[(R1, Some(&proposer), None)]);
+    assert_eq!(
+        values(&half, sql).await,
+        vec![Verdict::Unsupported("values_not_stored")]
+    );
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_follow_existence_around_the_edges() {
+    let (p, proposer) = (u(10), u(20));
+    let sql = Some(ProposalValues {
+        proposer,
+        space: None,
+    });
+    // A row in Postgres and no version record.
+    assert_eq!(
+        values(&Fake::default(), sql).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // No row in Postgres: the existence rules.
+    assert_eq!(values(&Fake::default(), None).await, vec![Verdict::Match]);
+    let held = version_values_fixture(&p, &[(R1, Some(&proposer), None)]);
+    assert_eq!(
+        values(&held, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+    // No governance Space, a failed read.
+    let no_gov = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_proposal_values(&held, &no_gov, &p, sql).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    assert_eq!(values(&Fake::failing(), sql).await, vec![Verdict::Failed]);
+}
+
 // ---- expiry scan -----------------------------------------------------------------------------
 
 const NOW: i64 = 2_000;
@@ -563,6 +708,8 @@ fn pinned_columns_match_the_feeders_record_kinds_when_it_is_in_the_checkout() {
         VERSION_PROPOSAL,
         VERSION_BLOCK,
         VERSION_END_TIME,
+        VERSION_PROPOSER,
+        VERSION_SPACE,
         STATUS_PROPOSAL,
         STATUS_EXECUTED_AT,
         ESCALATION_PROPOSAL,
