@@ -1,9 +1,17 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {conformingId, entityVersionRowsFromGeoDbOutput, type GeoVersionRow} from "../card"
+import {
+	CREATED_AT_PROPERTY,
+	conformingId,
+	entityVersionRowsFromGeoDbOutput,
+	type GeoCardRow,
+	type GeoVersionRow,
+	UPDATED_AT_PROPERTY,
+} from "../card"
 import {type GeoDbCardClient, GeoDbError} from "../client"
 import {
 	__resetEntityVersionsShadowMetricsForTests,
 	compareVersions,
+	compareVersionTimes,
 	createEntityVersionsShadow,
 	PROBE_COOLDOWN_MS,
 	readEntityVersionsShadowConfig,
@@ -42,6 +50,20 @@ const result = (r: string) => count("gaia_api_versions_shadow_total", "result", 
 const mismatch = (f: string) => count("gaia_api_versions_shadow_mismatch_total", "field", f)
 const unsupported = (r: string) => count("gaia_api_versions_shadow_unsupported_total", "reason", r)
 const skipped = (r: string) => count("gaia_api_versions_shadow_skipped_total", "reason", r)
+
+const timesCount = (r: string) => count("gaia_api_versions_shadow_times_total", "result", r)
+const instant = (seconds: number) => `instant:${seconds}.000000000`
+const T = (n: number) => 1_700_000_000 + n * 60
+const iso = (seconds: number) => new Date(seconds * 1000).toISOString()
+const withTimes = (over: Partial<ServedVersions> = {}, ids = [1, 2, 3]): ServedVersions => ({
+	...served(over, ids),
+	versions: ids.map((n) => ({editId: EDIT(n), createdById: AUTHOR, createdAt: iso(T(10 - n))})),
+	...(over.offset === undefined ? {} : {offset: over.offset}),
+})
+const timeRows = (created: number | null, updated: number | null): GeoCardRow[] => [
+	...(created === null ? [] : [{prop: CREATED_AT_PROPERTY, raw: instant(created)}]),
+	...(updated === null ? [] : [{prop: UPDATED_AT_PROPERTY, raw: instant(updated)}]),
+]
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
@@ -323,5 +345,85 @@ describe("createEntityVersionsShadow", () => {
 		bare.versions(served())
 		await settle()
 		expect(unsupported("client")).toBe(1)
+	})
+})
+
+describe("compareVersionTimes", () => {
+	// Served newest first: edit 1 is the newest (T(9)), edit 3 the oldest (T(7)).
+	it("agrees when the newest edit is updatedAt and the oldest is createdAt", () => {
+		expect(compareVersionTimes(withTimes(), 3, {createdAt: T(7), updatedAt: T(9)})).toEqual({
+			fields: [],
+			result: "ok",
+		})
+	})
+	it("names the end that differs", () => {
+		expect(compareVersionTimes(withTimes(), 3, {createdAt: T(7), updatedAt: T(8)}).fields).toEqual(["newest_time"])
+		expect(compareVersionTimes(withTimes(), 3, {createdAt: T(6), updatedAt: T(9)}).fields).toEqual(["oldest_time"])
+	})
+	it("checks the newest only from offset 0 and the oldest only when the page reaches the end of the log", () => {
+		// offset 1 of 5: neither end is on the page.
+		expect(compareVersionTimes(withTimes({offset: 1}), 5, {createdAt: 1, updatedAt: 1})).toEqual({
+			fields: [],
+			result: "absent",
+		})
+		// offset 0 of 9, a full page: only the newest end.
+		expect(compareVersionTimes(withTimes(), 9, {createdAt: 1, updatedAt: T(9)})).toEqual({fields: [], result: "ok"})
+	})
+	it("claims nothing without a geo-db time or a served createdAt", () => {
+		expect(compareVersionTimes(withTimes(), 3, {createdAt: null, updatedAt: null}).result).toBe("absent")
+		expect(compareVersionTimes(served(), 3, {createdAt: T(7), updatedAt: T(9)}).result).toBe("absent")
+	})
+})
+
+describe("the createdAt check in the shadow", () => {
+	beforeEach(() => __resetEntityVersionsShadowMetricsForTests())
+	const run = async (readCards: GeoDbCardClient["readCards"] | undefined, page: ServedVersions) => {
+		const readEntityVersions = vi.fn(async () => [geoRow(1), geoRow(2), geoRow(3)])
+		const shadow = createEntityVersionsShadow({
+			config: readEntityVersionsShadowConfig({
+				GEODB_VERSIONS_SHADOW: "on",
+				GEODB_VERSIONS_SHADOW_SAMPLE_EVERY: "1",
+			}),
+			geoDb: {readEntityVersions, ...(readCards ? {readCards} : {})} as unknown as GeoDbCardClient,
+			log: {warn: vi.fn()},
+		})
+		shadow.versions(page)
+		await settle()
+		return readCards
+	}
+
+	it("matches when both ends agree, reading the card of the Spaces in the log", async () => {
+		const readCards = vi.fn(async () => timeRows(T(7), T(9)))
+		await run(readCards, withTimes())
+		expect(readCards).toHaveBeenCalledWith({geoSpaceIds: [SPACE], entityIds: [conformingId("entity", ENTITY)]})
+		expect(result("match")).toBe(1)
+		expect(timesCount("ok")).toBe(1)
+	})
+	it("counts a time mismatch under the result and the field", async () => {
+		await run(
+			vi.fn(async () => timeRows(T(7), T(8))),
+			withTimes(),
+		)
+		expect(result("mismatch")).toBe(1)
+		expect(mismatch("newest_time")).toBe(1)
+		expect(timesCount("mismatch")).toBe(1)
+	})
+	it("counts absent where geo-db holds no time or the client cannot read cards", async () => {
+		await run(
+			vi.fn(async () => timeRows(null, null)),
+			withTimes(),
+		)
+		await run(undefined, withTimes())
+		expect(timesCount("absent")).toBe(2)
+		expect(result("match")).toBe(2)
+	})
+	it("counts a failed card read apart and keeps the rest of the comparison", async () => {
+		await run(
+			vi.fn(async () => Promise.reject(new GeoDbError("timeout", "t"))),
+			withTimes(),
+		)
+		expect(timesCount("failed")).toBe(1)
+		expect(result("match")).toBe(1)
+		expect(result("failed")).toBe(0)
 	})
 })
