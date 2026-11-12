@@ -522,11 +522,16 @@ spec:
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES
               value: "1"
-            # Applied-block mirror (appliedBlock.ts): off. Unset already reads as off; explicit so turning it on is a
-            # one-value diff. With "1" the feeder writes the geo-db cursors row geodb-feeder-applied using the
-            # geodb-cursor-key mounted below (derived=10 only); the path is read only when the flag is on.
+            # Applied-block mirror (appliedBlock.ts): on since 2026-11-12. The feeder writes the geo-db cursors row
+            # geodb-feeder-applied using the geodb-cursor-key mounted below (derived=10 only). Write-side only:
+            # nothing reads the row for serving yet. Rollback: "0".
             - name: GEODB_APPLIED_BLOCK
-              value: "0"
+              value: "1"
+            # Edit meta (editMetaConsumer.ts, RUNBOOK §2c-duodecies): on since 2026-11-12. Takes effect only with
+            # GEODB_RECORD_KEYS. Own consumer group geodb-feeder-edit-meta-keyed-v1-testnet; no backfill needed.
+            # Write-side only. Rollback: "0".
+            - name: GEODB_EDIT_META
+              value: "1"
             - name: GEODB_APPLIED_BLOCK_KEY_PATH
               value: /etc/geodb/cursor-key/cursor.key
             # Read only; used by the membership comparison, ignored while it is off.
