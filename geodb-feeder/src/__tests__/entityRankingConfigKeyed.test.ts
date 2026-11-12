@@ -60,7 +60,7 @@ const PG: Record<string, string> = {
 	ranking_places_mode: "0",
 	ranking_place_base: "2500",
 	ranking_place_step: "100",
-	ranking_pushdown: "100",
+	ranking_pushdown: "150",
 	ranking_pushdown_since: "0",
 }
 const row = (o: Record<string, string> = {}): EntityRankingConfigRow => ({...PG, ...o})
@@ -99,7 +99,7 @@ describe("entity_ranking_config record", () => {
 		expect(entityRankingConfigIntents(entityRankingConfigFromRow(row({watch_window_days: "14"})))).not.toEqual(
 			entityRankingConfigIntents(base),
 		)
-		// The Best debates switch (0123): flipping it is a new value, as a cutover or a rollback must be.
+		// The Best debates switch (0124): flipping it is a new value, as a cutover or a rollback must be.
 		expect(entityRankingConfigIntents(entityRankingConfigFromRow(row({ranking_places_mode: "2"})))).not.toEqual(
 			entityRankingConfigIntents(base),
 		)
@@ -125,7 +125,7 @@ describe("entity_ranking_config record", () => {
 		expect(model.cell(rec, COL.rankingPlacesMode)).toEqual([".{ .number = 0 }"])
 		expect(model.cell(rec, COL.rankingPlaceBase)).toEqual(['.{ .decimal = "25,2" }'])
 		expect(model.cell(rec, COL.rankingPlaceStep)).toEqual(['.{ .decimal = "1,2" }'])
-		expect(model.cell(rec, COL.rankingPushdown)).toEqual(['.{ .decimal = "1,2" }'])
+		expect(model.cell(rec, COL.rankingPushdown)).toEqual(['.{ .decimal = "15,1" }'])
 		expect(model.cell(rec, COL.rankingPushdownSince)).toEqual([".{ .number = 0 }"])
 		for (const {key} of ENTITY_RANKING_COLUMNS) expect(model.cell(rec, COL[key])).toHaveLength(1)
 	})

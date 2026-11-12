@@ -153,14 +153,14 @@ struct RescoreBefore {
     terms: Vec<rescore::StoredTerm>,
     last_full_pass_on: Option<chrono::NaiveDate>,
     cfg: RescoreConfig,
-    /// The Best debates ranking (0123): `ranking_places_mode`, `ranking_place_base`, `ranking_place_step`,
+    /// The Best debates ranking (0124): `ranking_places_mode`, `ranking_place_base`, `ranking_place_step`,
     /// `ranking_pushdown`, and its two tables before the refresh.
     ranking_cfg: (i32, f64, f64, f64),
     ranking_places: std::collections::BTreeSet<ranking_indexer::ranking_places_compute::Place>,
     ranking_pushdowns: std::collections::BTreeSet<uuid::Uuid>,
 }
 
-/// `trending.ranking_places` and `trending.ranking_pushdowns` (migration 0123).
+/// `trending.ranking_places` and `trending.ranking_pushdowns` (migration 0124).
 async fn read_ranking_rows(
     pool: &sqlx::PgPool,
 ) -> Result<
@@ -193,7 +193,7 @@ async fn read_ranking_rows(
     ))
 }
 
-/// `trending.ranking_place_sources` (migration 0123).
+/// `trending.ranking_place_sources` (migration 0124).
 async fn read_ranking_sources(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<ranking_indexer::ranking_places_compute::Source>, IndexerError> {

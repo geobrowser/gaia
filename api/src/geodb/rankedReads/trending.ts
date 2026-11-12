@@ -6,7 +6,7 @@
  *
  * Functions covered: trending.claims_and_debates, debate_links, current_agendas, agenda_contents, current_agenda_listings,
  * newest_listings, claim_listings, entity_listings, entity_topic_listings, public.current_debate_agendas and
- * public.topic_suggestions_for_spaces; and (0123, at the end of the file) ranking_member_ballots, current_ranking_pushdowns,
+ * public.topic_suggestions_for_spaces; and (0124, at the end of the file) ranking_member_ballots, current_ranking_pushdowns,
  * current_ranking_places and ranking_place_values.
  *
  * Fidelity notes (each is a place the SQL is subtle, and each is exercised by the golden grid):
@@ -803,7 +803,7 @@ export class Trending {
 	}
 }
 
-// ---- Best debates ranking places and push-downs (migration 0123, GEO-3681) -------------------------------------------
+// ---- Best debates ranking places and push-downs (migration 0124, GEO-3681) -------------------------------------------
 //
 // Twins of trending.ranking_member_ballots, current_ranking_pushdowns, current_ranking_places and ranking_place_values,
 // held to `__tests__/fixtures/ranking-places-golden.json` (api/scripts/rankingplaces/gen_golden.py, the migrations' own

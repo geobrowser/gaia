@@ -11,7 +11,7 @@ import {
 } from "../trending"
 
 /**
- * The TypeScript twin of the Best debates ranking reads (migration 0123, GEO-3681), held to the SQL's own output over a
+ * The TypeScript twin of the Best debates ranking reads (migration 0124, GEO-3681), held to the SQL's own output over a
  * seeded graph and ten scenarios (api/scripts/rankingplaces/gen_golden.py; the Rust twin reads the same run's .txt).
  */
 interface Scenario {
@@ -57,7 +57,7 @@ const inputs: RankingInputs = {
 }
 const key = (p: RankingPlace) => `${p.source}|${p.entity_id}|${p.place}`
 
-describe("Best debates ranking twins (0123)", () => {
+describe("Best debates ranking twins (0124)", () => {
 	it("has the scenarios and the named cases", () => {
 		expect(g.scenarios).toHaveLength(10)
 		const onFull = g.scenarios.find((s) => s.name === "on_full")!

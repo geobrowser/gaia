@@ -1,6 +1,6 @@
-//! The Rust twin of the Best debates ranking places and push-downs (migration 0123, GEO-3681).
+//! The Rust twin of the Best debates ranking places and push-downs (migration 0124, GEO-3681).
 //!
-//! 0123 lets the top of Best follow the Debates space's Best debates ranking instead of agendas, behind
+//! 0124 lets the top of Best follow the Debates space's Best debates ranking instead of agendas, behind
 //! `entity_ranking_config.ranking_places_mode` (0 off, the default; 1 shadow; 2 on). The hourly sweep keeps two
 //! small tables, `trending.ranking_places` and `trending.ranking_pushdowns`, from `ranks.*` and `user_votes`, and
 //! `trending.entity_trending_terms` turns them into a place value inside the GREATEST and a flat push-down after
@@ -8,7 +8,7 @@
 //! [`crate::entity_ranking_score_compute::trending_terms`] and the target set and re-score ids are in
 //! [`crate::agenda_rescore_compute`].
 //!
-//! | Rust | SQL (0123) |
+//! | Rust | SQL (0124) |
 //! | -- | -- |
 //! | [`member_ballots`] | `trending.ranking_member_ballots` (with `trending.ranking_members`) |
 //! | [`pushdowns`] | `trending.current_ranking_pushdowns` |
@@ -840,6 +840,14 @@ mod tests {
         assert_eq!(places_of("pushed"), 0);
         assert!(close(term("pushed"), -s.pushdown));
         assert!(listed("pushed_listed") && close(term("pushed_listed"), f.cfg[1] - s.pushdown));
+        // ...and no age credit, which an agenda listing would otherwise add back.
+        let age = s
+            .want_terms
+            .iter()
+            .find(|t| t.0 == f.cases["pushed_listed"])
+            .unwrap()
+            .1;
+        assert_eq!(age, 0.0);
     }
 
     /// Off and shadow score exactly as 0122 did: the SQL's rows equal the twin with the ranking as it ships.

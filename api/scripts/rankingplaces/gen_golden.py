@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden output for the Best debates ranking places and push-downs (migration 0123, GEO-3681).
+"""Golden output for the Best debates ranking places and push-downs (migration 0124, GEO-3681).
 
 Runs the migrations' own SQL on a scratch Postgres that already holds the whole schema (applied by the real
 migrator), over one seeded graph and a grid of scenarios, inside ONE transaction that is rolled back (so now()
@@ -126,19 +126,19 @@ stored_terms = [(debates[7], 3.5, 0.0), (debates[8], -100.0, 0.0), (IN_BOTH, 900
 STD = [("new", DEB, BLK, 1, 7, 20, 0.65), ("all_time", DEB, BLK, 0.5, None, 30, 0.97)]
 SCENARIOS = [
     # name, mode, full, since offset (None = 0), base, step, pushdown, sources, stored places, stored pushdowns
-    ("off", 0, False, L, 2500, 100, 100, STD, [], []),
-    ("shadow_full", 1, True, L, 2500, 100, 100, STD, [], []),
-    ("shadow_hourly", 1, False, L, 2500, 100, 100, STD, "perturb", "perturb"),
+    ("off", 0, False, L, 2500, 100, 150, STD, [], []),
+    ("shadow_full", 1, True, L, 2500, 100, 150, STD, [], []),
+    ("shadow_hourly", 1, False, L, 2500, 100, 150, STD, "perturb", "perturb"),
     # Off with shadow's rows still stored: the full pass empties them and re-scores what they held.
-    ("off_full_with_rows", 0, True, L, 2500, 100, 100, STD, "prev", "prev"),
-    ("on_full", 2, True, L, 2500, 100, 100, STD, [], []),
-    ("on_hourly_moves", 2, False, L, 2500, 100, 100, STD, "perturb", "perturb"),
-    ("on_unchanged", 2, False, L, 2500, 100, 100, STD, "same", "same"),
+    ("off_full_with_rows", 0, True, L, 2500, 100, 150, STD, "prev", "prev"),
+    ("on_full", 2, True, L, 2500, 100, 150, STD, [], []),
+    ("on_hourly_moves", 2, False, L, 2500, 100, 150, STD, "perturb", "perturb"),
+    ("on_unchanged", 2, False, L, 2500, 100, 150, STD, "same", "same"),
     ("on_two_blocks_no_since", 2, True, None, 2500, 100, 100,
      STD + [("other", DEB2, BLK2, 1, 3, 5, 0.5)], [], []),
     ("on_retuned", 2, True, L - DAY, 1000, 37.5, 250,
      [("new", DEB, BLK, 1, 2, 3, 1), ("all_time", DEB, BLK, 0, None, 30, 0.97)], [], []),
-    ("on_early_launch", 2, True, L + 4 * DAY, 2500, 100, 100, STD, [], []),
+    ("on_early_launch", 2, True, L + 4 * DAY, 2500, 100, 150, STD, [], []),
 ]
 
 
@@ -327,6 +327,10 @@ def main(url):
     with open(JSN, "w") as f:
         json.dump(data, f, indent="\t")
         f.write("\n")
+    # CI's format check covers fixtures too.
+    biome = os.path.join(ROOT, "api", "node_modules", ".bin", "biome")
+    if os.path.exists(biome):
+        subprocess.run([biome, "format", "--write", JSN], capture_output=True)
     print(f"{len(head) + len(vote_rows) + len(body)} rows, {len(SCENARIOS)} scenarios")
 
 

@@ -13,9 +13,9 @@
 //! | [`Graph::topic_listings`] | `trending.entity_topic_listings` | 0113 |
 //! | [`Graph::debate_links`], [`Graph::claims_and_debates`] | `trending.debate_links`, `trending.claims_and_debates` | 0113 |
 //! | [`Graph::debate_positions`] | `trending.debate_positions` | 0122 |
-//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms`, with the position term and the ranking place and push-down | 0118, 0122, 0123 |
+//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms`, with the position term and the ranking place and push-down | 0118, 0122, 0124 |
 //!
-//! Since 0123 the sweep also keeps `trending.ranking_places` and `trending.ranking_pushdowns` (the Best debates
+//! Since 0124 the sweep also keeps `trending.ranking_places` and `trending.ranking_pushdowns` (the Best debates
 //! ranking, [`crate::ranking_places_compute`]) while `ranking_places_mode` is not off: [`RankingRows`] holds them,
 //! [`rescore_ids`] adds the debates whose rows changed (while on) and every debate in them (on a full pass), and
 //! [`Graph::trending_terms`] adds placed and pushed-down debates to its targets (while on).
@@ -93,11 +93,11 @@ pub struct Sweep {
     pub position_step: f64,
     pub position_slots: i32,
     pub full_pass: bool,
-    /// `ranking_places_mode` (0123): 0 off, 1 shadow, 2 on.
+    /// `ranking_places_mode` (0124): 0 off, 1 shadow, 2 on.
     pub ranking_mode: i32,
 }
 
-/// The Best debates ranking's tables and config as the sweep and the terms read them (migration 0123). The
+/// The Best debates ranking's tables and config as the sweep and the terms read them (migration 0124). The
 /// default is the shipped state: off, no sources, no rows.
 #[derive(Debug, Clone, Default)]
 pub struct RankingRows {
@@ -370,7 +370,7 @@ impl Graph {
         let tp = self.topic_listings(table, ids, today);
         let li_ids: HashSet<Uuid> = li.keys().copied().collect();
         let pos = Self::debate_positions(positions, &li_ids, today);
-        // 0123, while on: placed debates with a numeric created time, and pushed-down ones.
+        // 0124, while on: placed debates with a numeric created time, and pushed-down ones.
         let (values, pushed): (HashMap<Uuid, f64>, HashSet<Uuid>) = if cfg.ranking_on {
             (
                 place_values(
@@ -442,6 +442,7 @@ impl Graph {
                 } else {
                     0.0
                 },
+                pushed: pushed.contains(entity),
             };
             out.insert(
                 *entity,
@@ -475,7 +476,7 @@ impl Graph {
 /// `stored` is `trending.agenda_listings` before the call, `incoming` what the agendas name now (the table
 /// after it); `stored_positions` and `incoming_positions` are the same pair for
 /// `trending.agenda_debate_positions`. `stored_terms` holds the `entity_ranking_scores` rows with `trending_score <> 0 OR age_credit <> 0`.
-/// `ranking` is the Best debates ranking's two tables before and after (0123).
+/// `ranking` is the Best debates ranking's two tables before and after (0124).
 #[allow(clippy::too_many_arguments)]
 pub fn rescore_ids(
     graph: &Graph,
@@ -745,7 +746,7 @@ mod tests {
                 full_pass: s.full,
                 ranking_mode: 0,
             };
-            // The 0122 scenarios, with the ranking as it ships (off, no rows): 0123 changes none of them.
+            // The 0122 scenarios, with the ranking as it ships (off, no rows): 0124 changes none of them.
             let got = rescore_ids(
                 &f.graph,
                 &s.stored,

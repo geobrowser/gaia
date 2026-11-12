@@ -193,7 +193,7 @@ export const RECORD_COLUMNS = {
 		trendingPositionSlots: "8ef101e5e2ff45519677eb8de7208be3",
 		trendingPositionDayFactor: "a68b8359f702468cb0dae2165ce8e417",
 		/**
-		 * Added with 0123 (GEO-3681), minted 2026-11-11: the Best debates ranking places. The mode (0 off, 1 shadow,
+		 * Added with 0124 (GEO-3681), minted 2026-11-11: the Best debates ranking places. The mode (0 off, 1 shadow,
 		 * 2 on) and the push-down launch time (epoch seconds) are integers.
 		 */
 		rankingPlacesMode: "f1905a9d3e3745a79f90e2037f90861b",

@@ -48,21 +48,26 @@
 -- Rankers are the distinct ranks.rankings.space_id in the same set whose LATEST ballot on the block (the
 -- indexer's dedup: newest updated_at_block, then update_index) holds the debate. A Debate-typed debate is
 -- pushed down when downvoters > rankers: it takes no place and, while on, its trending score is the
--- GREATEST(listing, topic, place) minus ranking_pushdown, a flat amount however many downvotes there are.
--- trending_score can therefore be negative for a pushed-down debate; it is the only term that can.
+-- GREATEST(listing, topic, place) minus ranking_pushdown, a flat amount however many downvotes there are, and it
+-- gets no age credit (an agenda listing it would otherwise move its recency up to the listed day). The agenda
+-- position term is already gone for everyone while on. trending_score can therefore be negative for a
+-- pushed-down debate; it is the only term that can.
 --
 -- HOW IT COMBINES. trending_score = GREATEST(listing, topic, ranking place) − push-down. The ranking place is
 -- reported as trending_source 'listing' when it wins (a curated list placed it): geo-db's overlay has room for
 -- only none / listing / topic. listing_score, last_listed_on and agenda_id stay the agenda's own.
 -- entity_trending_terms keeps its signature.
 --
--- NUMBERS (defaults; sources are inserted by the runbook). base 2500 and step 100 are 0122's: they put any
--- placed debate above the ~90-point organic spread. With the planned rows, New (weight 1, 20 slots, 0.65 a day,
--- last 7 days) places 1..20 at 4500..2600 on the debate's first day, and All time (weight 0.5, 30 slots,
--- 0.97 a day) places 1..30 at 2750..1300 at age 0, about half after 23 days. ranking_pushdown 100 beats the
--- organic spread of debates of about the same age; against a debate 30 days older it also has to beat
--- 30 days of recency (30 × 86400 / tau = 57.6 at tau 45000), so it holds when the pushed-down debate's
--- organic lead is under about 42 points (the Best top 40 on 9 Nov spanned 5).
+-- NUMBERS (defaults; sources are inserted by the runbook). base 2500 and step 100 are 0122's: a place is worth
+-- at least 1300 (All time #30 at age 0), far above any organic gap. With the planned rows, New (weight 1,
+-- 20 slots, 0.65 a day, last 7 days) places 1..20 at 4500..2600 on the debate's first day, and All time
+-- (weight 0.5, 30 slots, 0.97 a day) places 1..30 at 2750..1300 at age 0, about half after 23 days.
+-- ranking_pushdown 150: against an unranked debate up to 30 days older, a pushed-down debate starts 57.6 ahead on
+-- recency (30 × 86400 / tau at tau 45000) and can carry its listing or topic boost (≤ 8), so it stays below
+-- while the rest of its organic lead (quality, intrinsic, participation ≤ 19, comments ≤ 30, watch ≤ 8 + 5
+-- fresh, topic ≤ 2) is under 150 − 57.6 − 8 = 84.4. Those caps add up to about 90 at the extreme, so this is
+-- not unconditional; the Best top 40 on 9 Nov spanned 5. The shadow report counts any pushed-down debate that
+-- would still sit above such a debate (ranking_shadow_days.pushed_above_unranked).
 --
 -- FRESHNESS. refresh_agenda_listings brings ranking_places and ranking_pushdowns in step every hour (while the
 -- mode is not off) and, while on, re-scores the debates whose rows changed. The daily full pass re-scores every
@@ -70,12 +75,17 @@
 -- runbook forces it after a weight or mode change. At the end of a full pass with the mode on or in shadow, the
 -- sweep writes the day's shadow report.
 --
--- SHADOW REPORT. trending.ranking_shadow_report: per New York day, the top 50 debates Best serves (stored
--- ranking_score DESC, entity_id DESC, Debate-typed, not blocklisted: entities_in_best_order's order) next to the
--- top 50 under the ranking alone (weighted place value DESC, then the same order), with each debate's rank in
--- both. trending.ranking_shadow_days holds the day's overlap, the push-down count and the cutover bar of
--- GEO-3591 (rankers, share of the last 7 days ranked, All time top 30 on 2+ ballots).
--- trending.ranking_shadow_moves lists the biggest moves.
+-- SHADOW REPORT. trending.ranking_shadow_report: per New York day, for every debate in one of three top 50s,
+-- its rank in Best today (stored ranking_score DESC, entity_id DESC, Debate-typed, not blocklisted:
+-- entities_in_best_order's order), its rank if mode 2 served now (the same order over the score
+-- entity_trending_terms_as(ids, true) gives), and its rank by weighted place value alone. trending.ranking_shadow_days
+-- holds the overlap of the served and if-on top 50s, the push-down count, the push-down violations and the cutover
+-- bar of GEO-3591 (rankers, share of the last 7 days ranked, All time top 30 on 2+ ballots).
+-- trending.ranking_shadow_moves lists the biggest moves from served to if-on.
+--
+-- REVERTS. Any later migration that re-creates entity_trending_terms or refresh_agenda_listings from 0122's bodies
+-- (gaia#1483 was one) would silently drop all of this; the 0124 suite fails if either stops reading
+-- ranking_places_mode.
 
 ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "ranking_places_mode" integer NOT NULL DEFAULT 0;
@@ -87,7 +97,7 @@ ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "ranking_place_step" numeric NOT NULL DEFAULT 100;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "ranking_pushdown" numeric NOT NULL DEFAULT 100;
+  ADD COLUMN IF NOT EXISTS "ranking_pushdown" numeric NOT NULL DEFAULT 150;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "ranking_pushdown_since" bigint NOT NULL DEFAULT 0;
@@ -133,9 +143,11 @@ CREATE TABLE IF NOT EXISTS "trending"."ranking_pushdowns" (
 CREATE TABLE IF NOT EXISTS "trending"."ranking_shadow_report" (
   "report_on" date NOT NULL,
   "entity_id" uuid NOT NULL,
-  "served_rank" integer,                                               -- 1..50 in Best today, NULL if outside
-  "ranking_rank" integer,                                              -- 1..50 under the ranking alone, NULL if outside
+  "served_rank" integer,                                               -- rank among debates in Best today
+  "on_rank" integer,                                                   -- rank among debates if mode 2 served now
+  "ranking_rank" integer,                                              -- 1..50 by place value alone, NULL if unplaced
   "ranking_score" numeric,                                             -- the stored Best score when written
+  "on_score" numeric,                                                  -- the Best score mode 2 would give
   "place_value" numeric,                                               -- the weighted place value, NULL if unplaced
   "pushed_down" boolean NOT NULL DEFAULT false,
   PRIMARY KEY ("report_on", "entity_id")
@@ -144,7 +156,7 @@ CREATE TABLE IF NOT EXISTS "trending"."ranking_shadow_report" (
 CREATE TABLE IF NOT EXISTS "trending"."ranking_shadow_days" (
   "report_on" date PRIMARY KEY,
   "mode" integer NOT NULL,
-  "overlap" integer NOT NULL,                                          -- debates in both top 50s
+  "overlap" integer NOT NULL,                                          -- debates in both top 50s (served, if on)
   "placed" integer NOT NULL,                                           -- debates with a ranking place
   "pushed_down" integer NOT NULL,
   "rankers" integer NOT NULL,                                          -- members with a non-empty latest ballot
@@ -152,6 +164,9 @@ CREATE TABLE IF NOT EXISTS "trending"."ranking_shadow_days" (
   "recent_ranked" integer NOT NULL,                                    -- of those, on the block's ranking
   "all_time_top" integer NOT NULL,                                     -- the block's top 30 debates (≤ 30)
   "all_time_top_two_ballots" integer NOT NULL,                         -- of those, on 2+ members' ballots
+  "pushed_above_unranked" integer NOT NULL,                            -- pushed-down debates that, if on, would sit
+                                                                       -- above an unranked debate created within
+                                                                       -- 30 days of them (should be 0)
   "written_at" timestamp with time zone NOT NULL DEFAULT now()
 );
 --> statement-breakpoint
@@ -237,9 +252,11 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- Each source's places now: the block's ranking deduped by entity (best position), rankable and not pushed
--- down, inside the window, renumbered 1.. and cut at the slots. Ties on position go to the lower entity id.
-CREATE OR REPLACE FUNCTION trending.current_ranking_places()
+-- Each source's places now: the block's ranking deduped by entity (best position), rankable and not in
+-- `pushed`, inside the window, renumbered 1.. and cut at the slots. Ties on position go to the lower entity id.
+-- The sweep passes the push-downs it has just stored, so both come from one read of the votes; NULL (the
+-- default, for reading by hand) computes them.
+CREATE OR REPLACE FUNCTION trending.current_ranking_places(pushed uuid[] DEFAULT NULL)
 RETURNS TABLE (source text, entity_id uuid, place integer)
 LANGUAGE sql STABLE AS $$
   WITH ranked AS (
@@ -251,7 +268,8 @@ LANGUAGE sql STABLE AS $$
   ok AS (
     SELECT rd.entity_id, trending.epoch_day(rd.created_epoch) AS created_on
     FROM trending.rankable_debates(ARRAY(SELECT DISTINCT entity_id FROM ranked)) rd
-    WHERE rd.entity_id NOT IN (SELECT p.entity_id FROM trending.current_ranking_pushdowns() p)
+    WHERE rd.entity_id <> ALL(COALESCE(current_ranking_places.pushed,
+                                       ARRAY(SELECT p.entity_id FROM trending.current_ranking_pushdowns() p)))
   ),
   numbered AS (
     SELECT r.name, r.entity_id, r.slots,
@@ -283,15 +301,17 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- 0122's terms, plus, while the mode is on (2): the ranking place inside the GREATEST, the push-down after it,
--- and no agenda position term. Off (0) and shadow (1) return exactly 0122's rows.
-CREATE OR REPLACE FUNCTION trending.entity_trending_terms(entity_ids uuid[])
+-- 0122's terms, plus, with `ranking_on`: the ranking place inside the GREATEST, the push-down after it, no
+-- agenda position term, and no age credit for a pushed-down debate (an agenda listing it would otherwise move its
+-- recency up to the listed day, enough to undo the push-down). Without it, exactly 0122's rows. The shadow report
+-- calls it with true to see what mode 2 would serve; entity_trending_terms passes the mode.
+CREATE OR REPLACE FUNCTION trending.entity_trending_terms_as(entity_ids uuid[], ranking_on boolean)
 RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
                listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
                topic_score numeric, topic_id uuid, topic_listed_on date)
 LANGUAGE sql STABLE AS $$
   WITH cfg AS (
-    SELECT c.*, trending.today() AS today, c.ranking_places_mode = 2 AS ranking_on
+    SELECT c.*, trending.today() AS today, entity_trending_terms_as.ranking_on AS ranking_on
     FROM public.entity_ranking_config c WHERE c.id
   ),
   li AS (SELECT * FROM trending.entity_listings(entity_ids)),
@@ -337,6 +357,7 @@ LANGUAGE sql STABLE AS $$
            pos.position, pos.days AS position_days,
            tp.topic_id, tp.listed_on AS topic_listed_on, cfg.today - tp.listed_on AS topic_days,
            COALESCE(rp.place_value, 0) AS place_value,
+           pd.entity_id IS NOT NULL AS pushed,
            CASE WHEN pd.entity_id IS NOT NULL THEN cfg.ranking_pushdown ELSE 0 END AS pushdown
     FROM target t
     CROSS JOIN cfg
@@ -362,7 +383,7 @@ LANGUAGE sql STABLE AS $$
                 ELSE cfg.trending_topic_boost * power(cfg.trending_day_factor, x.topic_days) END AS topic_score
     FROM inputs x CROSS JOIN cfg
   )
-  SELECT x.entity_id, COALESCE(x.age_credit, 0),
+  SELECT x.entity_id, CASE WHEN x.pushed THEN 0 ELSE COALESCE(x.age_credit, 0) END,
          GREATEST(x.listing_score, x.topic_score, x.place_value) - x.pushdown,
          CASE WHEN GREATEST(x.listing_score, x.place_value) > 0
                    AND GREATEST(x.listing_score, x.place_value) >= x.topic_score THEN 'listing'
@@ -373,8 +394,23 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- The day's shadow report: Best's top 50 debates next to the top 50 under the ranking alone, and the cutover
--- bar. Replaces the day's rows if run twice.
+-- What the score reads: the terms as the switch says. Mode 2 (on) serves the ranking; 0 (off) and 1 (shadow)
+-- are exactly 0122. Its signature is 0122's.
+CREATE OR REPLACE FUNCTION trending.entity_trending_terms(entity_ids uuid[])
+RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
+               listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
+               topic_score numeric, topic_id uuid, topic_listed_on date)
+LANGUAGE sql STABLE AS $$
+  SELECT * FROM trending.entity_trending_terms_as(
+    entity_ids, (SELECT c.ranking_places_mode = 2 FROM public.entity_ranking_config c WHERE c.id))
+$$;
+--> statement-breakpoint
+
+-- The day's shadow report: every debate's rank in Best today and if mode 2 served now, its rank by place value
+-- alone, for the union of the three top 50s; and the day's overlap, violations and cutover bar. "If on" is the
+-- stored ranking_score with the trending term and age credit swapped for entity_trending_terms_as(ids, true), for
+-- every debate that carries a term, a place or a push-down (for the rest it is the same). Replaces the day's rows
+-- if run twice.
 CREATE OR REPLACE FUNCTION trending.write_ranking_shadow_report(day date DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql AS $$
@@ -385,37 +421,61 @@ BEGIN
   DELETE FROM trending.ranking_shadow_report WHERE report_on = d;
   DELETE FROM trending.ranking_shadow_days WHERE report_on = d;
 
-  WITH served AS (
-    SELECT s.entity_id, s.ranking_score,
-           row_number() OVER (ORDER BY s.ranking_score DESC, s.entity_id DESC)::integer AS rk
-    FROM (
-      SELECT s.entity_id, s.ranking_score FROM public.entity_ranking_scores s
-      WHERE EXISTS (SELECT 1 FROM public.relations ty
-                    WHERE ty.from_entity_id = s.entity_id
-                      AND ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid         -- Types
-                      AND ty.to_entity_id = 'fd51f935-2063-4617-be39-7b672b23364c'::uuid)   -- Debate
-        AND NOT EXISTS (SELECT 1 FROM public.entity_feed_blocklist b WHERE b.entity_id = s.entity_id)
-      ORDER BY s.ranking_score DESC, s.entity_id DESC
-      LIMIT 50) s
-  ),
-  pv AS (SELECT * FROM trending.ranking_place_values(ARRAY(SELECT DISTINCT entity_id FROM trending.ranking_places))),
-  alone AS (
-    SELECT pv.entity_id, pv.place_value,
-           row_number() OVER (ORDER BY pv.place_value DESC, s.ranking_score DESC NULLS LAST,
-                                       pv.entity_id DESC)::integer AS rk
-    FROM pv LEFT JOIN public.entity_ranking_scores s ON s.entity_id = pv.entity_id
-  ),
-  both_lists AS (
-    SELECT entity_id FROM served UNION SELECT entity_id FROM alone WHERE rk <= 50
-  )
+  CREATE TEMP TABLE IF NOT EXISTS shadow_debates (
+    entity_id uuid PRIMARY KEY, created_epoch bigint, ranking_score numeric, on_score numeric,
+    served_rank integer, on_rank integer, ranking_rank integer, place_value numeric,
+    pushed boolean, ranked boolean
+  ) ON COMMIT DROP;
+  TRUNCATE shadow_debates;
+  INSERT INTO shadow_debates (entity_id, created_epoch, ranking_score, on_score, pushed, ranked)
+  SELECT s.entity_id, rd.created_epoch, s.ranking_score, s.ranking_score,
+         EXISTS (SELECT 1 FROM trending.ranking_pushdowns p WHERE p.entity_id = s.entity_id),
+         EXISTS (SELECT 1 FROM ranks.ranking_scores rs
+                 WHERE rs.entity_id = s.entity_id
+                   AND rs.block_id IN (SELECT block_id FROM trending.ranking_place_sources))
+  FROM public.entity_ranking_scores s
+  JOIN trending.rankable_debates(ARRAY(
+         SELECT ty.from_entity_id FROM public.relations ty
+         WHERE ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid                    -- Types
+           AND ty.to_entity_id = 'fd51f935-2063-4617-be39-7b672b23364c'::uuid)) rd          -- Debate
+    ON rd.entity_id = s.entity_id;
+
+  -- Mode 2's terms for the debates whose terms can differ.
+  UPDATE shadow_debates sd
+  SET on_score = sd.ranking_score - s.trending_score - s.age_credit
+                 + COALESCE(t.trending_score, 0) + COALESCE(t.age_credit, 0)
+  FROM public.entity_ranking_scores s
+  LEFT JOIN trending.entity_trending_terms_as(ARRAY(
+              SELECT x.entity_id FROM shadow_debates x
+              JOIN public.entity_ranking_scores y USING (entity_id)
+              WHERE y.trending_score <> 0 OR y.age_credit <> 0 OR x.pushed
+                 OR x.entity_id IN (SELECT entity_id FROM trending.ranking_places)), true) t
+    ON t.entity_id = s.entity_id
+  WHERE s.entity_id = sd.entity_id
+    AND (s.trending_score <> 0 OR s.age_credit <> 0 OR sd.pushed
+         OR sd.entity_id IN (SELECT entity_id FROM trending.ranking_places));
+
+  UPDATE shadow_debates sd SET served_rank = r.served, on_rank = r.on_rank
+  FROM (SELECT entity_id,
+               row_number() OVER (ORDER BY ranking_score DESC, entity_id DESC)::integer AS served,
+               row_number() OVER (ORDER BY on_score DESC, entity_id DESC)::integer AS on_rank
+        FROM shadow_debates) r
+  WHERE r.entity_id = sd.entity_id;
+
+  UPDATE shadow_debates sd SET ranking_rank = a.rk, place_value = a.place_value
+  FROM (SELECT pv.entity_id, pv.place_value,
+               row_number() OVER (ORDER BY pv.place_value DESC, x.ranking_score DESC NULLS LAST,
+                                           pv.entity_id DESC)::integer AS rk
+        FROM trending.ranking_place_values(ARRAY(SELECT DISTINCT entity_id FROM trending.ranking_places)) pv
+        LEFT JOIN shadow_debates x ON x.entity_id = pv.entity_id) a
+  WHERE a.entity_id = sd.entity_id;
+
   INSERT INTO trending.ranking_shadow_report
-    (report_on, entity_id, served_rank, ranking_rank, ranking_score, place_value, pushed_down)
-  SELECT d, b.entity_id, sv.rk, CASE WHEN a.rk <= 50 THEN a.rk END, s.ranking_score, a.place_value,
-         EXISTS (SELECT 1 FROM trending.ranking_pushdowns p WHERE p.entity_id = b.entity_id)
-  FROM both_lists b
-  LEFT JOIN served sv ON sv.entity_id = b.entity_id
-  LEFT JOIN alone a ON a.entity_id = b.entity_id
-  LEFT JOIN public.entity_ranking_scores s ON s.entity_id = b.entity_id;
+    (report_on, entity_id, served_rank, on_rank, ranking_rank, ranking_score, on_score, place_value, pushed_down)
+  SELECT d, sd.entity_id, sd.served_rank, sd.on_rank, CASE WHEN sd.ranking_rank <= 50 THEN sd.ranking_rank END,
+         sd.ranking_score, sd.on_score, sd.place_value, sd.pushed
+  FROM shadow_debates sd
+  WHERE sd.served_rank <= 50 OR sd.on_rank <= 50 OR sd.ranking_rank <= 50;
   GET DIAGNOSTICS rows_written = ROW_COUNT;
 
   WITH ballots AS (SELECT * FROM trending.ranking_member_ballots()),
@@ -442,11 +502,10 @@ BEGIN
   )
   INSERT INTO trending.ranking_shadow_days
     (report_on, mode, overlap, placed, pushed_down, rankers, recent_debates, recent_ranked, all_time_top,
-     all_time_top_two_ballots)
+     all_time_top_two_ballots, pushed_above_unranked)
   SELECT d,
          (SELECT c.ranking_places_mode FROM public.entity_ranking_config c WHERE c.id),
-         (SELECT count(*) FROM trending.ranking_shadow_report r
-          WHERE r.report_on = d AND r.served_rank IS NOT NULL AND r.ranking_rank IS NOT NULL)::integer,
+         (SELECT count(*) FROM shadow_debates WHERE served_rank <= 50 AND on_rank <= 50)::integer,
          (SELECT count(DISTINCT entity_id) FROM trending.ranking_places)::integer,
          (SELECT count(*) FROM trending.ranking_pushdowns)::integer,
          (SELECT count(DISTINCT member_space_id) FROM ballots)::integer,
@@ -454,20 +513,25 @@ BEGIN
          (SELECT count(*) FROM recent WHERE entity_id IN (SELECT entity_id FROM scored))::integer,
          (SELECT count(*) FROM top)::integer,
          (SELECT count(*) FROM top t
-          WHERE (SELECT count(DISTINCT b.member_space_id) FROM ballots b WHERE b.entity_id = t.entity_id) >= 2)::integer;
+          WHERE (SELECT count(DISTINCT b.member_space_id) FROM ballots b WHERE b.entity_id = t.entity_id) >= 2)::integer,
+         (SELECT count(*) FROM shadow_debates p
+          WHERE p.pushed AND EXISTS (
+            SELECT 1 FROM shadow_debates u
+            WHERE NOT u.ranked AND NOT u.pushed AND u.on_score < p.on_score
+              AND abs(u.created_epoch - p.created_epoch) <= 30 * 86400))::integer;
 
   RETURN rows_written;
 END;
 $$;
 --> statement-breakpoint
 
--- The biggest moves of each report: a debate outside a top 50 counts as rank 51 there.
+-- The biggest moves of each report: how far each debate moves from Best today to Best if mode 2 served now.
 CREATE OR REPLACE VIEW trending.ranking_shadow_moves AS
-  SELECT r.report_on, r.entity_id, r.served_rank, r.ranking_rank,
-         COALESCE(r.served_rank, 51) - COALESCE(r.ranking_rank, 51) AS move_up,
+  SELECT r.report_on, r.entity_id, r.served_rank, r.on_rank, r.ranking_rank,
+         r.served_rank - r.on_rank AS move_up,
          r.pushed_down
   FROM trending.ranking_shadow_report r
-  ORDER BY r.report_on DESC, abs(COALESCE(r.served_rank, 51) - COALESCE(r.ranking_rank, 51)) DESC, r.entity_id;
+  ORDER BY r.report_on DESC, abs(r.served_rank - r.on_rank) DESC, r.entity_id;
 --> statement-breakpoint
 
 -- 0122's sweep, plus keeping trending.ranking_places and trending.ranking_pushdowns in step while the mode is
@@ -563,7 +627,8 @@ BEGIN
   TRUNCATE incoming_ranking_places;
   IF rmode > 0 THEN
     INSERT INTO incoming_ranking_pushdowns SELECT * FROM trending.current_ranking_pushdowns();
-    INSERT INTO incoming_ranking_places SELECT * FROM trending.current_ranking_places();
+    INSERT INTO incoming_ranking_places
+    SELECT * FROM trending.current_ranking_places(ARRAY(SELECT entity_id FROM incoming_ranking_pushdowns));
   END IF;
   -- Debates whose place or push-down came, went or changed. Only while on: in shadow they move no score.
   ranked_ids := '{}';

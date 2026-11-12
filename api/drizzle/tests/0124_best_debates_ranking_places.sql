@@ -1,4 +1,4 @@
--- Assertions for 0123: the top of Best can follow the Best debates ranking instead of agendas, behind one
+-- Assertions for 0124: the top of Best can follow the Best debates ranking instead of agendas, behind one
 -- switch, off by default (GEO-3681).
 --
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts. Expected values are written
@@ -34,6 +34,17 @@ SELECT assert((SELECT column_default FROM information_schema.columns
 SELECT assert((SELECT column_default FROM information_schema.columns
                WHERE table_name = 'entity_ranking_config' AND column_name = 'ranking_pushdown_since') = '0',
               '0: the push-down launch time defaults to 0 (counts nothing)');
+SELECT assert((SELECT column_default FROM information_schema.columns
+               WHERE table_name = 'entity_ranking_config' AND column_name = 'ranking_pushdown') = '150',
+              '0: the push-down defaults to 150');
+-- gaia#1483 (GEO-3631) and any later migration that re-creates these from 0122's bodies would silently undo the
+-- cutover: the live definitions must still read the switch.
+SELECT assert(pg_get_functiondef('trending.entity_trending_terms(uuid[])'::regprocedure) LIKE '%ranking_places_mode%'
+              AND pg_get_functiondef('trending.refresh_agenda_listings(boolean)'::regprocedure) LIKE '%ranking_places_mode%',
+              '0: entity_trending_terms and refresh_agenda_listings still read ranking_places_mode');
+SELECT assert(pg_get_functiondef('trending.refresh_agenda_listings(boolean)'::regprocedure)
+                LIKE '%current_ranking_places(ARRAY(SELECT entity_id FROM incoming_ranking_pushdowns))%',
+              '0: the sweep numbers places from the push-downs it just stored (one snapshot of the votes)');
 SELECT assert(NOT EXISTS (SELECT 1 FROM trending.ranking_place_sources), '0: the sources table ships empty');
 
 TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ranking_scores,
@@ -51,7 +62,7 @@ UPDATE entity_ranking_config
        trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 16,
        trending_position_base = 2500, trending_position_step = 100, trending_position_slots = 50,
        trending_position_day_factor = 0.3,
-       ranking_places_mode = 0, ranking_place_base = 2500, ranking_place_step = 100, ranking_pushdown = 100,
+       ranking_places_mode = 0, ranking_place_base = 2500, ranking_place_step = 100, ranking_pushdown = 150,
        ranking_pushdown_since = 0
  WHERE id;
 
@@ -79,7 +90,7 @@ CREATE TEMP TABLE ids AS
 SELECT k, ('b1230000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['UNL','A0','S1','DEB','BLK','M1','M2','M3','N1','N2',
                   'PD','R1','R2','NOTD','ROLD','BLK1','DUP','BAL','GONE','LPD','EARLY','NONMEM','ELSE','SUPER',
-                  'UNR30','UNRNEW','D1','BAL1','B1OLD','B1','B2','S2']) WITH ORDINALITY AS u(k, n)
+                  'UNR30','UNRNEW','D1','DL30','UOLD','BAL1','B1OLD','B1','B2','S2']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -155,6 +166,12 @@ CREATE OR REPLACE FUNCTION pg_temp.near(a numeric, b numeric) RETURNS boolean LA
 CREATE OR REPLACE FUNCTION pg_temp.pv(src text, place integer, age integer) RETURNS numeric LANGUAGE sql AS $$
   SELECT s.weight * (c.ranking_place_base + c.ranking_place_step * (s.slots - place + 1)) * power(s.day_factor, age)
   FROM trending.ranking_place_sources s CROSS JOIN entity_ranking_config c WHERE c.id AND s.name = src $$;
+CREATE OR REPLACE FUNCTION pg_temp.pd() RETURNS numeric LANGUAGE sql AS $$
+  SELECT ranking_pushdown FROM entity_ranking_config WHERE id $$;
+CREATE OR REPLACE FUNCTION pg_temp.credit(k text) RETURNS numeric LANGUAGE sql AS $$
+  SELECT COALESCE((SELECT age_credit FROM entity_ranking_scores WHERE entity_id = pg_temp.i(k)), 0) $$;
+CREATE OR REPLACE FUNCTION pg_temp.report(k text) RETURNS trending.ranking_shadow_report LANGUAGE sql AS $$
+  SELECT * FROM trending.ranking_shadow_report WHERE report_on = pg_temp.today() AND entity_id = pg_temp.i(k) $$;
 CREATE OR REPLACE FUNCTION pg_temp.b() RETURNS numeric LANGUAGE sql AS $$
   SELECT trending_boost FROM entity_ranking_config WHERE id $$;
 CREATE OR REPLACE FUNCTION pg_temp.p1() RETURNS numeric LANGUAGE sql AS $$
@@ -189,13 +206,14 @@ SELECT pg_temp.ent('NOTD', pg_temp.noon(2)), pg_temp.typed('NOTD', 'CLAIM');
 SELECT pg_temp.debate('PD', 1), pg_temp.debate('R1', 0), pg_temp.debate('R2', 3), pg_temp.debate('ROLD', 10),
        pg_temp.debate('BLK1', 2), pg_temp.debate('DUP', 2), pg_temp.debate('BAL', 20), pg_temp.debate('LPD', 5),
        pg_temp.debate('EARLY', 2), pg_temp.debate('NONMEM', 2), pg_temp.debate('ELSE', 2), pg_temp.debate('SUPER', 2),
-       pg_temp.debate('UNR30', 31), pg_temp.debate('UNRNEW', 0), pg_temp.debate('D1', 30);
+       pg_temp.debate('UNR30', 31), pg_temp.debate('UNRNEW', 0), pg_temp.debate('D1', 30),
+       pg_temp.debate('DL30', 30), pg_temp.debate('UOLD', 60);
 -- GONE: typed Debate but no entities row.
 SELECT pg_temp.typed('GONE', 'DEBATE');
 INSERT INTO entity_feed_blocklist (entity_id, reason) VALUES (pg_temp.i('BLK1'), 'fixture');
 
 SELECT pg_temp.agenda('A0', 'S1', 0);
-SELECT pg_temp.names('A0', 'D1', 'S1', 'a0'), pg_temp.names('A0', 'LPD', 'S1', NULL);
+SELECT pg_temp.names('A0', 'D1', 'S1', 'a0'), pg_temp.names('A0', 'LPD', 'S1', NULL), pg_temp.names('A0', 'DL30', 'S1', NULL);
 
 -- The state before anything the ranking reads exists.
 SELECT pg_temp.full_pass();
@@ -220,6 +238,7 @@ SELECT pg_temp.down('N1', 'NONMEM', 'DEB', 1), pg_temp.down('N2', 'NONMEM', 'S1'
 SELECT pg_temp.down('M3', 'ELSE', 'S2', 1);
 SELECT pg_temp.down('M2', 'SUPER', 'DEB', 1);
 SELECT pg_temp.down('M2', 'BAL', 'DEB', 1);
+SELECT pg_temp.down('M2', 'DL30', 'DEB', 1), pg_temp.down('M3', 'DL30', 'DEB', 1);
 INSERT INTO trending.ranking_place_sources (name, space_id, block_id, weight, window_days, slots, day_factor)
 VALUES ('new', pg_temp.i('DEB'), pg_temp.i('BLK'), 1, 7, 20, 0.65),
        ('all_time', pg_temp.i('DEB'), pg_temp.i('BLK'), 0.5, NULL, 30, 0.97);
@@ -256,20 +275,36 @@ SELECT assert((SELECT ranking_rank FROM trending.ranking_shadow_report
               '1: the report holds the ranking''s top (R1) and Best''s (D1, the agenda''s first place)');
 SELECT assert((SELECT count(*) FROM trending.ranking_shadow_report
                WHERE report_on = pg_temp.today() AND ranking_rank IS NOT NULL) = 5
-              AND (SELECT count(*) FROM trending.ranking_shadow_report
-                   WHERE report_on = pg_temp.today() AND served_rank IS NOT NULL)
-                  = (SELECT count(*) FROM trending.rankable_debates(ARRAY(SELECT entity_id FROM entity_ranking_scores))),
-              '1: every placed debate under the ranking alone, every scored debate in Best''s (fewer than 50 here)');
-SELECT assert((SELECT mode = 1 AND placed = 5 AND pushed_down = 4 AND rankers = 2 AND all_time_top = 6
-                      AND all_time_top_two_ballots = 1 AND overlap = 5
-                      AND recent_debates = 10 AND recent_ranked = 4
+              AND (SELECT count(*) FROM trending.ranking_shadow_report WHERE report_on = pg_temp.today())
+                  = (SELECT count(*) FROM trending.rankable_debates(ARRAY(SELECT entity_id FROM entity_ranking_scores)))
+              AND NOT EXISTS (SELECT 1 FROM trending.ranking_shadow_report
+                              WHERE report_on = pg_temp.today() AND (served_rank IS NULL OR on_rank IS NULL)),
+              '1: every placed debate under the ranking alone; every scored debate has a served and a served-if-on rank (fewer than 50 here)');
+SELECT assert((pg_temp.report('R1')).on_rank = 1 AND (pg_temp.report('D1')).on_rank > 5
+              AND (pg_temp.report('PD')).on_rank > (pg_temp.report('UNR30')).on_rank
+              AND (pg_temp.report('DL30')).on_rank > (pg_temp.report('UOLD')).on_rank,
+              '1: served-if-on: the ranking leads, the agenda''s first place drops below the placed debates, pushed-down debates sink');
+SELECT assert(abs((pg_temp.report('UNRNEW')).on_rank - (pg_temp.report('UNRNEW')).served_rank)
+                <= (SELECT count(*) FROM trending.ranking_shadow_report
+                    WHERE report_on = pg_temp.today() AND (place_value IS NOT NULL OR pushed_down)),
+              '1: an unplaced organic debate moves only by the placed and pushed debates around it, not to rank 51');
+SELECT assert((SELECT mode = 1 AND placed = 5 AND pushed_down = 5 AND rankers = 2 AND all_time_top = 6
+                      AND all_time_top_two_ballots = 1 AND overlap = (SELECT count(*) FROM trending.ranking_shadow_report
+                                                                       WHERE report_on = pg_temp.today())
+                      AND recent_debates = 10 AND recent_ranked = 4 AND pushed_above_unranked = 0
                FROM trending.ranking_shadow_days WHERE report_on = pg_temp.today()),
-              '1: the day row: overlap, places, push-downs and the cutover bar (rankers, last 7 days ranked, All time top on 2+ ballots)');
+              '1: the day row: overlap of the two top 50s, places, push-downs, violations and the cutover bar');
 SELECT assert((SELECT move_up FROM trending.ranking_shadow_moves
                WHERE report_on = pg_temp.today() AND entity_id = pg_temp.i('R1'))
-              = (SELECT served_rank - 1 FROM trending.ranking_shadow_report
-                 WHERE report_on = pg_temp.today() AND entity_id = pg_temp.i('R1')),
-              '1: and the moves view says how far each debate moves');
+              = (pg_temp.report('R1')).served_rank - 1,
+              '1: and the moves view says how far each debate moves when on');
+-- With no push-down size, a pushed-down debate stays above an unranked one of about its age: the report counts it.
+UPDATE entity_ranking_config SET ranking_pushdown = 0 WHERE id;
+SELECT trending.write_ranking_shadow_report(pg_temp.today());
+SELECT assert((SELECT pushed_above_unranked FROM trending.ranking_shadow_days WHERE report_on = pg_temp.today()) > 0,
+              '1: the report counts pushed-down debates still above an unranked debate created within 30 days');
+UPDATE entity_ranking_config SET ranking_pushdown = 150 WHERE id;
+SELECT trending.write_ranking_shadow_report(pg_temp.today());
 SELECT assert(trending.refresh_agenda_listings(false) = 0, '1: a shadow hourly run re-scores nothing');
 
 -- ---------------------------------------------------------------------------
@@ -304,11 +339,15 @@ SELECT assert(pg_temp.score('R1') > pg_temp.score('R2') AND pg_temp.score('R2') 
 -- ---------------------------------------------------------------------------
 SELECT assert(pg_temp.pushed('PD') AND pg_temp.place('new', 'PD') IS NULL AND pg_temp.place('all_time', 'PD') IS NULL
               AND pg_temp.trend('PD') = -(SELECT ranking_pushdown FROM entity_ranking_config WHERE id),
-              '3: ranked #1 by one member and downvoted by two: no place and a flat -100');
+              '3: ranked #1 by one member and downvoted by two: no place and a flat -150');
 SELECT assert((SELECT downvoters = 2 AND rankers = 1 FROM trending.ranking_pushdowns WHERE entity_id = pg_temp.i('PD')),
               '3: (two downvoters, one ranker)');
-SELECT assert(pg_temp.trend('LPD') = pg_temp.b() - 100 AND pg_temp.src('LPD') = 'listing',
-              '3: the -100 comes after the GREATEST: a listed debate keeps its boost, minus 100');
+SELECT assert(pg_temp.trend('LPD') = pg_temp.b() - pg_temp.pd() AND pg_temp.src('LPD') = 'listing',
+              '3: the push-down comes after the GREATEST: a listed debate keeps its boost, minus 150');
+SELECT assert(pg_temp.credit('LPD') = 0 AND pg_temp.credit('DL30') = 0 AND pg_temp.credit('D1') > 0,
+              '3: a pushed-down debate an agenda lists gets no age credit while on (an unpushed listed one keeps it)');
+SELECT assert(pg_temp.score('DL30') < pg_temp.score('UOLD'),
+              '3: a 30-day-old pushed-down debate listed today sits below an unranked debate created 30 days before it');
 SELECT assert(NOT pg_temp.pushed('EARLY') AND pg_temp.trend('EARLY') = 0, '3: downvotes before the launch time do not count');
 SELECT assert(NOT pg_temp.pushed('NONMEM'), '3: non-members'' downvotes do not count, even cast from the Debates space');
 SELECT assert(pg_temp.pushed('ELSE'), '3: a member''s downvote counts whatever space it was cast from (user_votes.user_id, not space_id)');
@@ -319,19 +358,25 @@ SELECT assert(pg_temp.score('PD') < pg_temp.score('UNR30') - 0 AND pg_temp.score
               AND pg_temp.score('UNR30') - pg_temp.trend('UNR30') < pg_temp.score('PD') - pg_temp.trend('PD'),
               '3: a pushed-down debate sits below unranked debates created within 30 days of it, older ones included');
 SELECT pg_temp.full_pass();
-SELECT assert(pg_temp.trend('PD') = -100, '3: a full pass keeps the push-down');
+SELECT assert(pg_temp.trend('PD') = -pg_temp.pd(), '3: a full pass keeps the push-down');
 
 -- A new member downvote: BAL goes from one ranker vs one downvoter to two downvoters.
 SELECT pg_temp.down('M3', 'BAL', 'DEB', 0);
 SELECT assert(trending.refresh_agenda_listings(false) = 1, '3: an hourly run re-scores just the debate pushed down');
-SELECT assert(pg_temp.pushed('BAL') AND pg_temp.place('all_time', 'BAL') IS NULL AND pg_temp.trend('BAL') = -100,
+SELECT assert(pg_temp.pushed('BAL') AND pg_temp.place('all_time', 'BAL') IS NULL AND pg_temp.trend('BAL') = -pg_temp.pd(),
               '3: and it loses its place within the hour');
 SELECT assert(trending.refresh_agenda_listings(false) = 0, '3: an unchanged hour re-scores nothing');
 
 -- A vote's own re-score keeps the terms.
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('R1'), pg_temp.i('PD')]);
-SELECT assert(pg_temp.trend('R1') = pg_temp.pv('new', 1, 0) AND pg_temp.trend('PD') = -100,
+SELECT assert(pg_temp.trend('R1') = pg_temp.pv('new', 1, 0) AND pg_temp.trend('PD') = -pg_temp.pd(),
               '3: a vote''s re-score keeps the place and the push-down');
+
+-- Places come from the push-downs passed in: with none passed, PD would take New's first place.
+SELECT assert(EXISTS (SELECT 1 FROM trending.current_ranking_places(ARRAY[]::uuid[]) p
+                      WHERE p.source = 'new' AND p.entity_id = pg_temp.i('PD') AND p.place = 1)
+              AND NOT EXISTS (SELECT 1 FROM trending.current_ranking_places() p WHERE p.entity_id = pg_temp.i('PD')),
+              '3: current_ranking_places takes the push-downs as an argument (default: the current ones)');
 
 -- A weight change waits for the full pass.
 UPDATE trending.ranking_place_sources SET weight = 0 WHERE name = 'new';
