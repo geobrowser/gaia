@@ -1,0 +1,4 @@
+testnet.knowledge.edits:0:2000
+testnet.knowledge.edits:1:800
+testnet.knowledge.edits:2:600
+testnet.hermes.blocks:0:9500

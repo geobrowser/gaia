@@ -2301,6 +2301,57 @@ Not covered, each named in `_uncompared_total`: which proposals a Space has and 
 the records), the list's status filter (the status shadow covers status) and vote counts (records are keyed by voter),
 UpdateVotingSettings fields of an action, and the active checks' Space scope and vote tallies.
 
+### Rewinding a consumer group after a writer off-switch (`geodb/kafka-rewind.sh`)
+
+With `KG_INDEXER_PG_WRITES`, `VOTE_INDEXER_PG_WRITES` or `TOPOLOGY_INDEXER_PG_WRITES` set to `0` the consumer still commits its
+offsets (`kg-indexer/src/storage.rs:24`, `main.rs:1738`), so flipping the flag back does not restore the window Postgres missed.
+The fix is to rewind the consumer group to the flip time and let the consumer replay it. The writes are idempotent per block.
+Kafka keeps the topics for 7 days; a timestamp older than retention is clamped to the earliest retained offset and the script says so.
+
+The three groups, read from the v2 manifests (`KAFKA_GROUP_ID`) and confirmed live on 11-12:
+
+| Group | Deployment | Manifest | Topics (prefix `testnet.`) |
+| -- | -- | -- | -- |
+| `kg-indexer-v8-testnet` | `kg-indexer` | `kg-indexer/k8s/v2/kg-indexer.yaml:97` | `hermes.blocks`, `knowledge.edits`, `space.creations`, `space.membership`, `space.trust.extensions`, `space.topics`, `space.governance` (`kg-indexer/src/consumer.rs`) |
+| `vote-indexer-testnet` | `vote-indexer` | `scoring-service/deployment/v2/vote-indexer.yaml:155` | `curation.votes` |
+| `topology-indexer-testnet` | `topology-indexer` | `scoring-service/deployment/v2/topology-indexer.yaml:147` | `topology.canonical` |
+
+Order, always this one:
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+FLIP=2026-11-12T06:30:00Z        # the time the flag went to 0, UTC; use a minute earlier, replays are idempotent
+
+# 0. First put the flag back to 1 (a manifest revert PR, then deploy). Rewinding with the writes still off replays into nothing.
+# 1. Scale the consumer to 0 and wait for its pods to go (Kafka refuses a reset while the group has members).
+$K scale deployment/kg-indexer --replicas=0
+$K wait --for=delete pod -l app=kg-indexer --timeout=120s
+
+# 2. Dry run (the default): per-partition target offsets and the exact reset command. Changes nothing.
+geodb/kafka-rewind.sh --group kg-indexer-v8-testnet --to "$FLIP"
+#    Read the table. at-end = nothing to replay on that partition; clamped-to-earliest = the window is partly past retention.
+#    Then execute. The script refuses unless the Deployment is at 0 replicas with no pods left.
+geodb/kafka-rewind.sh --group kg-indexer-v8-testnet --to "$FLIP" --yes
+
+# 3. Scale up.
+$K scale deployment/kg-indexer --replicas=1
+
+# 4. Check lag returns to 0 (the Kafka lag alerts must be quiet).
+$K rollout status deployment/kg-indexer
+```
+
+Check lag 0 with `sum(kafka_consumergroup_lag{consumergroup="<group>"})` (the metric `monitoring/k8s/kafka-consumer-lag-alerts.yaml` uses; query Prometheus through the apiserver proxy), and
+watch the consumer's log for the replayed blocks. kg-indexer replays the whole window of `knowledge.edits`, so allow time: the 06-11
+full replay of about 430k messages took 15 to 20 minutes. Do not call the rollback finished until lag is 0 and stays 0.
+
+Notes:
+
+- The dry run and the reset each start a throwaway pod (`app=kafka-rewind`, image `apache/kafka:latest`, the one the replay recipe uses) that reads the broker address and credentials from the consumer's own Secret by reference; the script never reads a Secret value, and deletes only its own pod.
+- The reset is built from the printed plan with `--reset-offsets --from-file` (`topic,partition,offset`), so every partition gets its own target. `--to-datetime` is not used because it would hide the per-partition arithmetic.
+- Rewinding moves a group backwards only on purpose. If a target is ahead of the committed offset the group would skip messages; compare against `kafka-consumer-groups.sh --describe` first if the flag was off for a short time.
+- vote-indexer also has two sweep CronJobs (`vote-indexer-comment-sweep`, `vote-indexer-new-entity-sweep`); they read Postgres and are not Kafka consumers, so they catch up on their next run.
+- Offline check of the arithmetic: `geodb/test-kafka-rewind.sh` (fixture under `geodb/testdata/kafka-rewind/`), run by the `geodb-kafka-rewind-test` workflow.
+
 ## 13. Cutover day (DRAFT)
 
 **DRAFT. Not approved, not rehearsed, and no date is set.** Patrick sets the date for D1 (the read cutover) and D2
