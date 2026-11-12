@@ -108,6 +108,7 @@ pub fn register() {
     metrics::counter!(RANKING_REFRESH_FAILURES).absolute(0);
     metrics::counter!(WRITE_RETRIES).absolute(0);
     metrics::gauge!(HALTED).set(0.0);
+    crate::votes_count_mirror::register_metrics();
 }
 
 pub fn votes_processed(count: u64) {
