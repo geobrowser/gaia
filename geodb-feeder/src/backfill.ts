@@ -77,6 +77,8 @@ export type BackfillOptions = {
 	exclude: ReadonlySet<string>
 	/** Write relation positions (GEODB_RELATION_POSITIONS). */
 	positions?: boolean
+	/** Write relation facet claims (GEODB_RELATION_FACETS). */
+	facets?: boolean
 	/** Write the legacy id map statements (GEODB_LEGACY_ID_MAP). */
 	legacyMap?: boolean
 	/** Stop after this many entities this run (0: no limit). For a measured first run. */
@@ -259,7 +261,7 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 				stats.excludedRows += r.excluded
 				ops.push(...r.ops)
 			}
-			const {intents, stats: tstats} = translateOps(ops, overlay, {positions: opts.positions, legacyMap: opts.legacyMap})
+			const {intents, stats: tstats} = translateOps(ops, overlay, {positions: opts.positions, facets: opts.facets, legacyMap: opts.legacyMap})
 			const result = await applyIntents(
 				applyDeps,
 				geoSpace,

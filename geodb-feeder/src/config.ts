@@ -55,6 +55,12 @@ export type Config = {
 	 */
 	relationPositions: boolean
 	/**
+	 * GEODB_RELATION_FACETS: write a relation's to-space, from-space, version pins and verified flag as claims on its
+	 * statement, in the same Edit (`.statement` as a subject, geo-db docs/api/10 section 5.5). Default off: it is up to
+	 * five more `add`s per relation, and the gateway's facet compare (GEODB_RELATION_FACETS_SHADOW) needs them first.
+	 */
+	relationFacets: boolean
+	/**
 	 * GEODB_ENTITY_TIMES: write each changed entity's createdAt / updatedAt (two reserved properties, from the edit's
 	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
 	 */
@@ -156,6 +162,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
+		relationFacets: flag(env.GEODB_RELATION_FACETS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		legacyIdMap: flag(env.GEODB_LEGACY_ID_MAP),
 		appliedBlock: flag(env.GEODB_APPLIED_BLOCK)
