@@ -311,8 +311,8 @@ export async function sampleIds(db: Database, pivot: string, limit: number): Pro
 		rowsOf(
 			await db.execute(
 				from === null
-					? sql`SELECT entity_id::text AS entity_id FROM entity_ranking_scores ORDER BY entity_id LIMIT ${n}`
-					: sql`SELECT entity_id::text AS entity_id FROM entity_ranking_scores WHERE entity_id >= ${from}::uuid ORDER BY entity_id LIMIT ${n}`,
+					? sql`SELECT s.entity_id::text AS entity_id FROM entity_ranking_scores s ORDER BY s.entity_id LIMIT ${n}`
+					: sql`SELECT s.entity_id::text AS entity_id FROM entity_ranking_scores s WHERE s.entity_id >= ${from}::uuid ORDER BY s.entity_id LIMIT ${n}`,
 			),
 		)
 			.map((r) => r.entity_id)

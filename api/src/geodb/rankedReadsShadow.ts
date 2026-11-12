@@ -353,7 +353,7 @@ export function createPostgresFeedsSource(db: Database): FeedsShadowSource {
 			const t = rowsOf(
 				await db.execute(sql`
 					SELECT coalesce(
-						(SELECT ranking_score::text FROM public.entity_ranking_scores ORDER BY ranking_score DESC, entity_id DESC OFFSET 199 LIMIT 1),
+						(SELECT s.ranking_score::text FROM public.entity_ranking_scores s ORDER BY s.ranking_score DESC, s.entity_id DESC OFFSET 199 LIMIT 1),
 						(SELECT min(ranking_score)::text FROM public.entity_ranking_scores)) AS threshold`),
 			)[0]?.threshold
 			if (t === null || t === undefined) return null
