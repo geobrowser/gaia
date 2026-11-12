@@ -2143,3 +2143,50 @@ async fn a_2000_row_block_is_capped_and_published() {
     .unwrap();
     assert_eq!(published, 2_000);
 }
+
+/// GEO-3676: recomputes of one block are serialized by a per-block advisory
+/// lock, so the live consumer and the hourly backfill cannot interleave (one
+/// run's old-config scores landing after another run marked the new config
+/// applied). A block id with nothing registered still takes the lock first,
+/// which keeps the test free of fixtures.
+#[tokio::test]
+async fn recompute_waits_for_the_blocks_lock() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let block = Uuid::new_v4();
+    let other_block = Uuid::new_v4();
+
+    let held = storage.lock_block_for_recompute(block).await.unwrap();
+
+    // Another block is not held up.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        recompute_block(other_block, BlockMeta::default(), Utc::now(), &storage),
+    )
+    .await
+    .expect("a different block's recompute does not wait")
+    .unwrap();
+
+    // The same block waits while the lock is held.
+    let waited = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        recompute_block(block, BlockMeta::default(), Utc::now(), &storage),
+    )
+    .await;
+    assert!(
+        waited.is_err(),
+        "recompute ran while another held the block's lock"
+    );
+
+    // Released, it runs.
+    held.commit().await.unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        recompute_block(block, BlockMeta::default(), Utc::now(), &storage),
+    )
+    .await
+    .expect("recompute runs once the lock is released")
+    .unwrap();
+}

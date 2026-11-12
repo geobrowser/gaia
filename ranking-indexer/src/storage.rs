@@ -554,6 +554,32 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// Hold `block_id`'s recompute lock until the returned transaction ends
+    /// (commit, rollback, or drop on an error path). `recompute_block` takes it
+    /// first, so the live consumer and the hourly backfill never recompute the
+    /// same block at once (GEO-3676). Without it, one run could read the old
+    /// config and write its scores after another run applied the new one, and
+    /// the applied marker would then say "applied" over old-mode scores; the
+    /// scores and the projection could also come from different runs.
+    ///
+    /// A transaction-scoped advisory lock in the two-key space, keyed by
+    /// `(hashtext('ranks.recompute_block'), hashtext(block_id))`; the two-key
+    /// space does not overlap the one-key locks other jobs take. It holds one
+    /// pooled connection idle in a transaction for the length of a recompute.
+    pub async fn lock_block_for_recompute(
+        &self,
+        block_id: Uuid,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, IndexerError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('ranks.recompute_block'), hashtext($1::text))",
+        )
+        .bind(block_id)
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
+    }
+
     /// A block's scoring shape from `ranks.ranking_block_config` (GEO-3676):
     /// its row cap and scoring mode. No row means the default every block had
     /// before: `MAX_PROJECTION_ROWS` rows, summed.

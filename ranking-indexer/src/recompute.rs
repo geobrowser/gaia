@@ -71,6 +71,11 @@ pub async fn recompute_block(
     now: DateTime<Utc>,
     storage: &Storage,
 ) -> Result<(), IndexerError> {
+    // One recompute of a block at a time (the consumer and the hourly
+    // backfill can both reach it). Released when `lock` commits below, or is
+    // dropped on any early return or error.
+    let lock = storage.lock_block_for_recompute(block_id).await?;
+
     let block = match storage.get_ranking_block(block_id).await? {
         Some(block) => block,
         None => {
@@ -154,6 +159,8 @@ pub async fn recompute_block(
     // Only once the projection is written: a config change is not applied
     // until the public graph shows it.
     storage.mark_block_scoring_applied(block_id, config).await?;
+
+    lock.commit().await?;
 
     tracing::debug!(
         block_id = %block_id,
