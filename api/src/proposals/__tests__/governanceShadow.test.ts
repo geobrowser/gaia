@@ -232,7 +232,7 @@ describe("shadow", () => {
 	const GOV = "d".repeat(32)
 	const VOTES = "e".repeat(32)
 	const settle = () => new Promise((r) => setTimeout(r, 0))
-	const cfg = {enabled: true, listMax: 2, voterMax: 3, maxInFlight: 8, escalations: false}
+	const cfg = {enabled: true, listMax: 2, voterMax: 3, maxInFlight: 8, escalations: false, rereadMs: 0}
 	const log = {warn: vi.fn()}
 
 	const VER1 = "c1".repeat(16)
@@ -301,6 +301,102 @@ describe("shadow", () => {
 			metric(renderGovernanceMetrics(), 'gaia_api_governance_shadow_total{surface="detail",result="mismatch"}'),
 		).toBe(1)
 		expect(log.warn).toHaveBeenCalledTimes(1)
+	})
+
+	describe("re-read of a mismatch", () => {
+		const reread = {...cfg, rereadMs: 1500}
+		const detail = (name: string, result: string) =>
+			metric(renderGovernanceMetrics(), `gaia_api_governance_shadow_total{surface="${name}",result="${result}"}`)
+		const sleeps: number[] = []
+		const sleep = async (ms: number) => {
+			sleeps.push(ms)
+		}
+		const executed = (p: ProposalWithVotes) => {
+			const records = votesOf(p, "1")
+			records.set(proposalStatusRecordId(P), [row(PROPOSAL_STATUS_COLUMNS.executedAt, inst(NOW))])
+			return records
+		}
+		beforeEach(() => {
+			sleeps.length = 0
+		})
+
+		it("counts mismatch_healed when Postgres catches up on the re-read, on detail and list", async () => {
+			for (const surface of ["detail", "list"] as const) {
+				const p = proposal()
+				const caughtUp = proposal({executedAt: NOW})
+				const reload = vi.fn(async () => caughtUp)
+				const shadow = createGovernanceShadow({
+					config: reread,
+					geoDb: client(executed(p)),
+					systemSpaceOf: spaces,
+					log,
+					reloadProposal: reload,
+					sleep,
+				})
+				if (surface === "detail") shadow.detail(p, NOW)
+				else shadow.list([{...p, userVote: null}], NOW)
+				await settle()
+				expect(detail(surface, "mismatch_healed")).toBe(1)
+				expect(detail(surface, "mismatch")).toBe(0)
+				expect(reload).toHaveBeenCalledWith(P)
+			}
+			expect(sleeps).toEqual([1500, 1500])
+			expect(log.warn).not.toHaveBeenCalled()
+		})
+
+		it("counts mismatch and logs the field when it persists", async () => {
+			const p = proposal()
+			const reload = vi.fn(async () => proposal())
+			createGovernanceShadow({
+				config: reread,
+				geoDb: client(executed(p)),
+				systemSpaceOf: spaces,
+				log,
+				reloadProposal: reload,
+				sleep,
+			}).detail(p, NOW)
+			await settle()
+			expect(detail("detail", "mismatch")).toBe(1)
+			expect(detail("detail", "mismatch_healed")).toBe(0)
+			expect(reload).toHaveBeenCalledTimes(1)
+			expect(log.warn).toHaveBeenCalledTimes(1)
+			expect(log.warn.mock.calls[0]?.[1]).toMatchObject({
+				proposalId: P,
+				surface: "detail",
+				fields: expect.arrayContaining(["status"]),
+			})
+		})
+
+		it("does not re-read when there is no mismatch", async () => {
+			const p = proposal()
+			const reload = vi.fn(async () => p)
+			const c = client(votesOf(p, "1"))
+			createGovernanceShadow({
+				config: reread,
+				geoDb: c,
+				systemSpaceOf: spaces,
+				log,
+				reloadProposal: reload,
+				sleep,
+			}).detail(p, NOW)
+			await settle()
+			expect(detail("detail", "match")).toBe(1)
+			expect(reload).not.toHaveBeenCalled()
+			expect(sleeps).toEqual([])
+			expect(c.reads.filter((id) => id === proposalStatusRecordId(P))).toHaveLength(1)
+		})
+
+		it("does not delay the caller while it waits", () => {
+			const p = proposal()
+			createGovernanceShadow({
+				config: reread,
+				geoDb: client(executed(p)),
+				systemSpaceOf: spaces,
+				log,
+				sleep: () => new Promise(() => {}),
+			}).detail(p, NOW)
+			expect(detail("detail", "mismatch")).toBe(0)
+		})
 	})
 
 	const unsupportedCount = (reason: string) =>

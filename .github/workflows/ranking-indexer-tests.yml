@@ -117,3 +117,33 @@ jobs:
         env:
           RUST_BACKTRACE: 1
           RANKING_INDEXER_E2E_DATABASE_URL: "postgresql://test:test@localhost:5432/ranking_indexer_test"
+
+      # The suites panic on a missing URL while CI is set, but that guard lives
+      # inside each test file and a new e2e file can forget it. This step does
+      # not trust it: it re-runs the three e2e binaries (already compiled, so
+      # cheap) with output shown and fails unless at least 13 cases ran and no
+      # case printed a "skipping" line. A case that returns early reports `ok`,
+      # so the pass count alone cannot tell a skip from a run.
+      - name: Fail if any e2e case was skipped
+        run: |
+          set -euo pipefail
+          min=13
+          cargo test -p ranking-indexer \
+            --test e2e --test topic_interest_e2e --test user_interest_shadow_e2e \
+            -- --nocapture 2>&1 | tee e2e-output.log
+          if grep -qi 'skipping' e2e-output.log; then
+            echo "::error::an e2e case printed a skip message, so it did not execute"
+            grep -i 'skipping' e2e-output.log
+            exit 1
+          fi
+          passed=$(grep -E '^test result: ok\.' e2e-output.log \
+            | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' \
+            | paste -sd+ - | bc)
+          echo "e2e cases passed: ${passed}"
+          if [ "${passed:-0}" -lt "$min" ]; then
+            echo "::error::expected at least ${min} e2e cases to run, saw ${passed:-0}"
+            exit 1
+          fi
+        env:
+          RUST_BACKTRACE: 1
+          RANKING_INDEXER_E2E_DATABASE_URL: "postgresql://test:test@localhost:5432/ranking_indexer_test"

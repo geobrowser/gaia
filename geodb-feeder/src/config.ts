@@ -51,9 +51,18 @@ export type Config = {
 	spaceAddresses: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
-	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
+	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it. It also
+	 * writes a position change (`updateRelation`) as a `set_position`, a verb the client's ZON edit reads only from geo-db
+	 * 12707558ee (ISS-587-318 "A move"); on an older image each move is refused and dead-lettered, so roll the image first.
+	 * It also keeps `known-relations.log` on the state volume (each relation's cell and open statement id).
 	 */
 	relationPositions: boolean
+	/**
+	 * GEODB_RELATION_FACETS: write a relation's to-space, from-space, version pins and verified flag as claims on its
+	 * statement, in the same Edit (`.statement` as a subject, geo-db docs/api/10 section 5.5). Default off: it is up to
+	 * five more `add`s per relation, and the gateway's facet compare (GEODB_RELATION_FACETS_SHADOW) needs them first.
+	 */
+	relationFacets: boolean
 	/**
 	 * GEODB_ENTITY_TIMES: write each changed entity's createdAt / updatedAt (two reserved properties, from the edit's
 	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
@@ -156,6 +165,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
+		relationFacets: flag(env.GEODB_RELATION_FACETS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		legacyIdMap: flag(env.GEODB_LEGACY_ID_MAP),
 		appliedBlock: flag(env.GEODB_APPLIED_BLOCK)
