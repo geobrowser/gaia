@@ -6,10 +6,13 @@
  * - `known-entities.log`, `known-statements.log`: append-only journals of what geo-db holds. They change only
  *   when a whole message has applied, so replaying a half-applied message translates to the same intents and
  *   resumes at `intentsDone`.
+ * - `known-relations.log`: append-only journal of each relation's cell and current statement id (`RelationRecord`),
+ *   one JSON line per change, the last line for a relation winning. It exists only where GEODB_RELATION_POSITIONS is
+ *   on; a position move needs it, and it is written under the same rule as the other journals.
  * - `spaces.json`: gaia Space -> geo-db Space (`geo` is null while a founding is in flight).
  */
 import {appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, writeSync} from "node:fs"
-import type {TranslateContext} from "./translate.js"
+import type {RelationRecord, TranslateContext} from "./translate.js"
 
 export type SpaceRecord = {geo: string | null; nonce: string; keyed: boolean}
 export type Inflight = {offset: number; intentsDone: number}
@@ -75,6 +78,7 @@ export class Store {
 	private offsets: OffsetsFile
 	private readonly entities: Set<string>
 	private readonly statements: Set<string>
+	private readonly relations = new Map<string, RelationRecord>()
 
 	constructor(dir: string) {
 		this.dir = dir
@@ -88,6 +92,10 @@ export class Store {
 			: {done: {}, inflight: {}}
 		this.entities = loadSet(`${dir}/known-entities.log`)
 		this.statements = loadSet(`${dir}/known-statements.log`)
+		eachLine(`${dir}/known-relations.log`, (l) => {
+			const {s, r} = JSON.parse(l) as {s: string; r: RelationRecord}
+			this.relations.set(s, r)
+		})
 	}
 
 	saveSpaces(): void {
@@ -96,6 +104,7 @@ export class Store {
 
 	hasEntity = (space: string, entity: string) => this.entities.has(`${space}|${entity}`)
 	hasStatement = (statement: string) => this.statements.has(statement)
+	relationOf = (statement: string): RelationRecord | undefined => this.relations.get(statement)
 	get entityCount(): number {
 		return this.entities.size
 	}
@@ -104,9 +113,11 @@ export class Store {
 	}
 
 	/** Journal what a fully applied message added. */
-	commitMarks(entities: string[], statements: string[]): void {
+	commitMarks(entities: string[], statements: string[], relations: ReadonlyMap<string, RelationRecord> = new Map()): void {
 		appendDurable(`${this.dir}/known-entities.log`, entities.map((e) => `${e}\n`).join(""))
 		appendDurable(`${this.dir}/known-statements.log`, statements.map((s) => `${s}\n`).join(""))
+		appendDurable(`${this.dir}/known-relations.log`, [...relations].map(([s, r]) => `${JSON.stringify({s, r})}\n`).join(""))
+		for (const [s, r] of relations) this.relations.set(s, r)
 		for (const e of entities) this.entities.add(e)
 		for (const s of statements) this.statements.add(s)
 	}
@@ -158,6 +169,7 @@ export class Store {
 export class Overlay implements TranslateContext {
 	private readonly entities = new Set<string>()
 	private readonly statements = new Set<string>()
+	private readonly relations = new Map<string, RelationRecord>()
 
 	constructor(
 		private readonly store: Store,
@@ -168,9 +180,11 @@ export class Overlay implements TranslateContext {
 	markEntity = (e: string) => void this.entities.add(e)
 	knownStmt = (s: string) => this.statements.has(s) || this.store.hasStatement(s)
 	markStmt = (s: string) => void this.statements.add(s)
+	relation = (s: string) => this.relations.get(s) ?? this.store.relationOf(s)
+	markRelation = (s: string, r: RelationRecord) => void this.relations.set(s, r)
 
 	commit(): void {
-		this.store.commitMarks([...this.entities].map((e) => `${this.space}|${e}`), [...this.statements])
+		this.store.commitMarks([...this.entities].map((e) => `${this.space}|${e}`), [...this.statements], this.relations)
 	}
 }
 
