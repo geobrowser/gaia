@@ -6,11 +6,13 @@ on:
     paths:
       - 'api/**'
       - 'api/drizzle/**'
+      - '.github/workflows/api-unit-tests.yml'
   pull_request:
     branches: [main]
     paths:
       - 'api/**'
       - 'api/drizzle/**'
+      - '.github/workflows/api-unit-tests.yml'
 
 jobs:
   test:
@@ -34,7 +36,6 @@ jobs:
       - name: Run unit tests
         run: bun run test --exclude "**/__tests__/**"
         env:
-          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           IPFS_KEY: "test-key"
           IPFS_GATEWAY_WRITE: "https://ipfs.io"
           RPC_ENDPOINT: "https://rpc.testnet.example.com"
