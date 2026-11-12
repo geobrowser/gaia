@@ -91,6 +91,12 @@ export type GeoDbCardClient = {
 	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
 	 */
+	/**
+	 * The entity's outgoing relations with their facet claims in one Space (`.args = .{ .relations = true, .claims = true }`,
+	 * docs/api/10 section 5.5): each row carries its `statement` and `claim`. Absent on a client that cannot do it; an
+	 * older serve refuses the argument by name.
+	 */
+	readRelationClaims?(args: {geoSpaceId: string; entityId: string; timeoutMs?: number}): Promise<GeoCardRow[]>
 	readCardSpaces?(args: {
 		geoSpaceIds: string[]
 		entityId: string
@@ -262,13 +268,15 @@ export function isHoldersUnknownArgument(error: unknown): boolean {
 /** The geoql document for one entity's card. Ids are 32 hex digits, so nothing needs escaping. */
 export function cardDocument(
 	entityId: string,
-	options: {names?: boolean; backlinks?: number; relations?: boolean} = {},
+	options: {names?: boolean; backlinks?: number; relations?: boolean; claims?: boolean} = {},
 ): string {
 	const names = options.names ? ", .names = true" : ""
+	// `.claims = true` adds the claim columns (docs/api/10 section 5.5); read with `.relations = true`.
+	const claims = options.claims ? ", .claims = true" : ""
 	const backlinks = options.backlinks ? `, .backlinks = ${options.backlinks}` : ""
 	// `.relations = true` reads the reference statements alone (geo-db ISS-590-263); beside `backlinks` it is refused.
 	const relations = options.relations ? ", .relations = true" : ""
-	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks}${relations} } } } }`
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks}${relations}${claims} } } } }`
 }
 
 /** The geoql document for the Spaces holding one entity (`.args.holders = true`). Ids are 32 hex digits, so nothing needs escaping. */
@@ -466,6 +474,8 @@ type Request = {
 	cards?: boolean
 	/** A legacy-id read: rows like a batch of cards, but a statement cell may be none whatever the Space scope. */
 	legacy?: boolean
+	/** The read asked `.args.claims = true`: two claim columns follow the row's four. */
+	claims?: boolean
 	/** A type scan: the answer is entity ids, one a line. */
 	ids?: boolean
 	/** A type count: the answer is rows of three integers (`members`, `scanned`, `complete`), a page each. */
@@ -693,6 +703,8 @@ export function createPipeGeoDbClient(
 													: rowsFromGeoDbOutput(payload, request.entityId, {
 															names: request.names,
 															spaces: request.spaces,
+															claims: request.claims,
+															claimCells: request.claims,
 														})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
@@ -773,6 +785,7 @@ export function createPipeGeoDbClient(
 		count = false,
 		versionAt = false,
 		versionOfEdit = false,
+		claims = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -793,6 +806,7 @@ export function createPipeGeoDbClient(
 				...(count ? {count} : {}),
 				...(versionAt ? {versionAt} : {}),
 				...(versionOfEdit ? {versionOfEdit} : {}),
+				...(claims ? {claims} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -948,6 +962,29 @@ export function createPipeGeoDbClient(
 				true,
 			)
 			return (rows[0] as unknown as GeoVersionAt | undefined) ?? null
+		},
+		readRelationClaims({geoSpaceId, entityId, timeoutMs}) {
+			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId)) {
+				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits"))
+			}
+			return submit(
+				`${geoSpaceId}\t${cardDocument(entityId, {relations: true, claims: true})}\n`,
+				entityId,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				true,
+			)
 		},
 		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

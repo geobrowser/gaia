@@ -20,6 +20,7 @@ import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderPrivateReadersShadowMetrics} from "./geodb/privateReadersShadow"
 import {renderProposalDiffShadowMetrics} from "./geodb/proposalDiffShadow"
+import {renderRankedReadsServeMetrics} from "./geodb/rankedReadsServe"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderRelationLookupShadowMetrics} from "./geodb/relationLookupShadow"
@@ -210,6 +211,7 @@ function renderPrometheusMetrics(): string {
 		renderEntityColumnsShadowMetrics(),
 		// The group B read twins against the SQL functions (GEODB_RANKED_READS_SHADOW) — see geodb/rankedReadsShadow.ts.
 		renderRankedReadsShadowMetrics(),
+		renderRankedReadsServeMetrics(),
 		// topic_feed_type_counts against geo-db's count mode (GEODB_TYPE_COUNTS_SHADOW) — see geodb/typeCountsShadow.ts.
 		renderTypeCountsShadowMetrics(),
 		renderRankTypedMetrics(),
