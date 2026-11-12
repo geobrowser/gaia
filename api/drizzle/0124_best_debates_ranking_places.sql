@@ -303,15 +303,17 @@ $$;
 
 -- 0122's terms, plus, with `ranking_on`: the ranking place inside the GREATEST, the push-down after it, no
 -- agenda position term, and no age credit for a pushed-down debate (an agenda listing it would otherwise move its
--- recency up to the listed day, enough to undo the push-down). Without it, exactly 0122's rows. The shadow report
--- calls it with true to see what mode 2 would serve; entity_trending_terms passes the mode.
-CREATE OR REPLACE FUNCTION trending.entity_trending_terms_as(entity_ids uuid[], ranking_on boolean)
+-- recency up to the listed day, enough to undo the push-down). Without it, exactly 0122's rows. NULL (the default)
+-- reads ranking_on from the switch (mode 2); the shadow report passes true to see what mode 2 would serve.
+-- entity_trending_terms passes NULL, a constant, so Postgres still inlines the whole query into its caller.
+CREATE OR REPLACE FUNCTION trending.entity_trending_terms_as(entity_ids uuid[], ranking_on boolean DEFAULT NULL)
 RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
                listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
                topic_score numeric, topic_id uuid, topic_listed_on date)
 LANGUAGE sql STABLE AS $$
   WITH cfg AS (
-    SELECT c.*, trending.today() AS today, entity_trending_terms_as.ranking_on AS ranking_on
+    SELECT c.*, trending.today() AS today,
+           COALESCE(entity_trending_terms_as.ranking_on, c.ranking_places_mode = 2) AS ranking_on
     FROM public.entity_ranking_config c WHERE c.id
   ),
   li AS (SELECT * FROM trending.entity_listings(entity_ids)),
@@ -394,15 +396,15 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- What the score reads: the terms as the switch says. Mode 2 (on) serves the ranking; 0 (off) and 1 (shadow)
--- are exactly 0122. Its signature is 0122's.
+-- What the score reads: the terms as the switch says (ranking_places_mode, read inside the core). Mode 2 (on)
+-- serves the ranking; 0 (off) and 1 (shadow) are exactly 0122. Its signature is 0122's, and it passes a constant
+-- so both functions inline into refresh_entity_ranking_scores as 0122's did (a sub-select argument would not).
 CREATE OR REPLACE FUNCTION trending.entity_trending_terms(entity_ids uuid[])
 RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
                listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
                topic_score numeric, topic_id uuid, topic_listed_on date)
 LANGUAGE sql STABLE AS $$
-  SELECT * FROM trending.entity_trending_terms_as(
-    entity_ids, (SELECT c.ranking_places_mode = 2 FROM public.entity_ranking_config c WHERE c.id))
+  SELECT * FROM trending.entity_trending_terms_as(entity_ids, NULL)
 $$;
 --> statement-breakpoint
 

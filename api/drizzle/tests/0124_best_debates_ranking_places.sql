@@ -39,12 +39,25 @@ SELECT assert((SELECT column_default FROM information_schema.columns
               '0: the push-down defaults to 150');
 -- gaia#1483 (GEO-3631) and any later migration that re-creates these from 0122's bodies would silently undo the
 -- cutover: the live definitions must still read the switch.
-SELECT assert(pg_get_functiondef('trending.entity_trending_terms(uuid[])'::regprocedure) LIKE '%ranking_places_mode%'
+SELECT assert(pg_get_functiondef('trending.entity_trending_terms(uuid[])'::regprocedure) LIKE '%entity_trending_terms_as(%'
+              AND pg_get_functiondef('trending.entity_trending_terms_as(uuid[], boolean)'::regprocedure)
+                    LIKE '%ranking_places_mode%'
               AND pg_get_functiondef('trending.refresh_agenda_listings(boolean)'::regprocedure) LIKE '%ranking_places_mode%',
-              '0: entity_trending_terms and refresh_agenda_listings still read ranking_places_mode');
+              '0: entity_trending_terms (through its core) and refresh_agenda_listings still read ranking_places_mode');
 SELECT assert(pg_get_functiondef('trending.refresh_agenda_listings(boolean)'::regprocedure)
                 LIKE '%current_ranking_places(ARRAY(SELECT entity_id FROM incoming_ranking_pushdowns))%',
               '0: the sweep numbers places from the push-downs it just stored (one snapshot of the votes)');
+-- The terms query must stay inlinable into refresh_entity_ranking_scores, as 0122's was: a wrapper that passes a
+-- sub-select (or anything Postgres can't inline) turns it into an opaque Function Scan in every mode.
+CREATE OR REPLACE FUNCTION pg_temp.plan(q text) RETURNS text LANGUAGE plpgsql AS $$
+DECLARE line text; out text := '';
+BEGIN
+  FOR line IN EXECUTE 'EXPLAIN ' || q LOOP out := out || line || E'\n'; END LOOP;
+  RETURN out;
+END $$;
+SELECT assert(pg_temp.plan('SELECT * FROM trending.entity_trending_terms(''{00000000-0000-4000-8000-000000000001}''::uuid[])')
+                NOT LIKE '%Function Scan on entity_trending_terms%',
+              '0: entity_trending_terms inlines (no Function Scan on it or its core)');
 SELECT assert(NOT EXISTS (SELECT 1 FROM trending.ranking_place_sources), '0: the sources table ships empty');
 
 TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ranking_scores,
