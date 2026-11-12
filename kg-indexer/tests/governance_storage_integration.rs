@@ -213,7 +213,7 @@ async fn test_upsert_space_voting_settings_overwrites_on_conflict() {
     tx.commit().await.unwrap();
 
     let row: (i64, i64) = sqlx::query_as(
-        r#"SELECT partial_percentage_support_threshold, updated_at_block::bigint
+        r#"SELECT partial_percentage_support_threshold, updated_at::bigint
            FROM space_voting_settings WHERE space_id = $1"#,
     )
     .bind(space_id)
@@ -225,7 +225,7 @@ async fn test_upsert_space_voting_settings_overwrites_on_conflict() {
         row.0, 999_999,
         "partial threshold must reflect latest upsert"
     );
-    assert_eq!(row.1, 2_000, "updated_at_block must reflect latest upsert");
+    assert_eq!(row.1, 2_000, "updated_at must reflect latest upsert");
 
     cleanup_space_voting_settings(&pool, space_id).await;
 }
