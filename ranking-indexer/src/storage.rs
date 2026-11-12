@@ -964,17 +964,24 @@ impl Storage {
             .bind(block_id)
             .execute(&mut *tx)
             .await?;
-        for r in rows {
+        // One statement for the whole block: a 2,000-row block (GEO-3676) would
+        // otherwise be 2,000 round trips inside this transaction.
+        if !rows.is_empty() {
+            let entity_ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+            let space_ids: Vec<Uuid> = rows.iter().map(|r| r.space_id).collect();
+            let scores: Vec<f64> = rows.iter().map(|r| r.score).collect();
+            let positions: Vec<i32> = rows.iter().map(|r| r.position).collect();
+            let ballots: Vec<i32> = rows.iter().map(|r| r.ballots).collect();
             sqlx::query(
                 "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position, ballots) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 SELECT $1, * FROM UNNEST($2::uuid[], $3::uuid[], $4::float8[], $5::int4[], $6::int4[])",
             )
             .bind(block_id)
-            .bind(r.entity_id)
-            .bind(r.space_id)
-            .bind(r.score)
-            .bind(r.position)
-            .bind(r.ballots)
+            .bind(&entity_ids)
+            .bind(&space_ids)
+            .bind(&scores)
+            .bind(&positions)
+            .bind(&ballots)
             .execute(&mut *tx)
             .await?;
         }
@@ -1093,68 +1100,84 @@ impl Storage {
             .await?;
         }
 
-        // 4. Insert the ordered RANK_POSITION relations + their value rows.
-        for r in rows {
+        // 4. Insert the ordered RANK_POSITION relations + their value rows, one
+        //    statement each for the whole block (a 2,000-row block would
+        //    otherwise be 4,000 round trips holding this transaction's locks).
+        //    Every id derives from (block, entity, space), unique per row, so
+        //    no statement can touch the same row twice.
+        if !rows.is_empty() {
+            let relation_ids: Vec<Uuid> = rows.iter().map(|r| r.relation_id).collect();
+            let reified_ids: Vec<Uuid> = rows.iter().map(|r| r.reified_entity_id).collect();
+            let to_entity_ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+            let to_space_ids: Vec<Uuid> = rows.iter().map(|r| r.space_id).collect();
+            let positions: Vec<String> = rows.iter().map(|r| r.position.clone()).collect();
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, to_space_id, space_id, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 SELECT u.id, u.entity_id, $3, $4, $5, u.to_entity_id, u.to_space_id, $5, u.position \
+                 FROM UNNEST($1::uuid[], $2::uuid[], $6::uuid[], $7::uuid[], $8::text[]) \
+                   AS u(id, entity_id, to_entity_id, to_space_id, position) \
                  ON CONFLICT (id) DO UPDATE SET \
                    entity_id = EXCLUDED.entity_id, \
                    to_entity_id = EXCLUDED.to_entity_id, \
                    to_space_id = EXCLUDED.to_space_id, \
                    position = EXCLUDED.position",
             )
-            .bind(r.relation_id)
-            .bind(r.reified_entity_id)
+            .bind(&relation_ids)
+            .bind(&reified_ids)
             .bind(rank_position)
             .bind(block_id)
             .bind(block_space_id)
-            .bind(r.entity_id)
-            .bind(r.space_id)
-            .bind(block_space_id)
-            .bind(&r.position)
+            .bind(&to_entity_ids)
+            .bind(&to_space_ids)
+            .bind(&positions)
             .execute(&mut *tx)
             .await?;
 
             // `values.id` is a text column — serialize the UUID at the bind boundary.
+            let value_ids: Vec<String> = rows.iter().map(|r| r.value_row_id.to_string()).collect();
+            let values: Vec<i64> = rows.iter().map(|r| r.value).collect();
             sqlx::query(
                 "INSERT INTO values (id, entity_id, space_id, property_id, integer) \
-                 VALUES ($1, $2, $3, $4, $5) \
+                 SELECT u.id, u.entity_id, $3, $4, u.value \
+                 FROM UNNEST($1::text[], $2::uuid[], $5::int8[]) AS u(id, entity_id, value) \
                  ON CONFLICT (id) DO UPDATE SET \
                    entity_id = EXCLUDED.entity_id, \
                    space_id = EXCLUDED.space_id, \
                    property_id = EXCLUDED.property_id, \
                    integer = EXCLUDED.integer",
             )
-            .bind(r.value_row_id.to_string())
-            .bind(r.reified_entity_id)
+            .bind(&value_ids)
+            .bind(&reified_ids)
             .bind(block_space_id)
             .bind(value_prop)
-            .bind(r.value)
+            .bind(&values)
             .execute(&mut *tx)
             .await?;
         }
 
         // 5. Insert Aggregated rankings provenance relations (block -> submission).
-        for ranking_id in contributing_rankings {
-            let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
-            // Provenance is a deterministic block -> submission mapping; on a
-            // recompute the same ids re-resolve to the same row, so a conflict
-            // just means it's already present.
+        //    Provenance is a deterministic block -> submission mapping; on a
+        //    recompute the same ids re-resolve to the same row, so a conflict
+        //    just means it's already present.
+        if !contributing_rankings.is_empty() {
+            let (relation_ids, reified_ids): (Vec<Uuid>, Vec<Uuid>) = contributing_rankings
+                .iter()
+                .map(|ranking_id| provenance_ids(block_id, *ranking_id))
+                .unzip();
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, space_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 SELECT u.id, u.entity_id, $3, $4, $5, u.to_entity_id, $5 \
+                 FROM UNNEST($1::uuid[], $2::uuid[], $6::uuid[]) AS u(id, entity_id, to_entity_id) \
                  ON CONFLICT (id) DO NOTHING",
             )
-            .bind(relation_id)
-            .bind(reified)
+            .bind(&relation_ids)
+            .bind(&reified_ids)
             .bind(aggregated)
             .bind(block_id)
             .bind(block_space_id)
-            .bind(ranking_id)
-            .bind(block_space_id)
+            .bind(contributing_rankings)
             .execute(&mut *tx)
             .await?;
         }

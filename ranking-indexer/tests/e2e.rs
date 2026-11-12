@@ -1983,3 +1983,163 @@ async fn block_config_switches_scoring_and_recomputes_without_a_ballot_edit() {
     .unwrap();
     assert_eq!(applied, (Some(200), Some("sum".to_string())));
 }
+
+/// GEO-3676: a 2,000-row average-mode block end to end, and how long one
+/// recompute of it takes (printed; run with `--nocapture` to read it). A
+/// 2,100-item ballot is cut to the configured 2,000 rows, positions stay
+/// contiguous, and the projection publishes exactly 2,000 relations.
+#[tokio::test]
+async fn a_2000_row_block_is_capped_and_published() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const SPACE: u128 = 0xE2E5_3676_1001;
+    const MEMBER: u128 = 0xE2E5_3676_1011;
+    const BLOCK: u128 = 0xE2E5_3676_1021;
+    const RANK: u128 = 0xE2E5_3676_1041;
+    const FIRST_ENTITY: u128 = 0xE2E5_3676_2000_0000;
+    const ITEMS: usize = 2_100;
+
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = $1",
+        "DELETE FROM ranks.rankings WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(RANK)).execute(pool).await.unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_scores WHERE block_id = $1",
+        "DELETE FROM ranks.ranking_blocks WHERE id = $1",
+        "DELETE FROM ranks.ranking_block_config WHERE block_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(BLOCK)).execute(pool).await.unwrap();
+    }
+
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3676b')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(MEMBER))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO ranks.ranking_block_config (block_id, max_rows, scoring_mode) \
+         VALUES ($1, 2000, 'average')",
+    )
+    .bind(u(BLOCK))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let block_edit = EditBuilder::new(gid(0x3676_1001))
+        .create_relation(|r| {
+            r.id(gid(0x3676_1100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Best debates (2,000-row e2e)", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    // Fixed-width keys sort in ballot order. The builder borrows them for the
+    // edit's lifetime, so they are leaked (once, in a test).
+    let positions: Vec<&'static str> = (0..ITEMS)
+        .map(|i| &*Box::leak(format!("a{i:05}").into_boxed_str()))
+        .collect();
+    let mut ballot = EditBuilder::new(gid(RANK ^ 0xED17))
+        .create_relation(|r| {
+            r.id(gid(0x3676_1200))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(sid(RANK_TYPE_ID))
+        })
+        .create_entity(gid(RANK), |e| {
+            e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+        })
+        .create_relation(|r| {
+            r.id(gid(0x3676_1201))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(BLOCK))
+        });
+    for (i, position) in positions.iter().copied().enumerate() {
+        ballot = ballot.create_relation(|r| {
+            r.id(gid(0x3676_3000_0000 + i as u128))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(FIRST_ENTITY + i as u128))
+                .to_space(gid(SPACE))
+                .position(position)
+        });
+    }
+    apply_detected_edit(
+        &detect(&ballot.build(), u(MEMBER), 2, 0),
+        u(MEMBER),
+        &storage,
+    )
+    .await
+    .unwrap();
+
+    // Time recomputes of the full block (what every ballot edit costs).
+    let mut times = Vec::new();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        recompute_block(u(BLOCK), BlockMeta::default(), Utc::now(), &storage)
+            .await
+            .unwrap();
+        times.push(started.elapsed());
+    }
+    eprintln!("2,000-row recompute_block timings: {times:?}");
+
+    let (rows, min_pos, max_pos): (i64, i32, i32) = sqlx::query_as(
+        "SELECT count(*), min(position), max(position) FROM ranks.ranking_scores \
+         WHERE block_id = $1",
+    )
+    .bind(u(BLOCK))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((rows, min_pos, max_pos), (2_000, 1, 2_000));
+    let first: (Uuid, i32) = sqlx::query_as(
+        "SELECT entity_id, ballots FROM ranks.ranking_scores WHERE block_id = $1 AND position = 1",
+    )
+    .bind(u(BLOCK))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(first, (u(FIRST_ENTITY), 1));
+
+    let rank_position = Uuid::parse_str(RANK_POSITION_RELATION_TYPE_ID).unwrap();
+    let value_prop = Uuid::parse_str(RANK_POSITION_VALUE_PROPERTY_ID).unwrap();
+    let published: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations r \
+         JOIN values v ON v.entity_id = r.entity_id AND v.property_id = $3 \
+         WHERE r.from_entity_id = $1 AND r.type_id = $2",
+    )
+    .bind(u(BLOCK))
+    .bind(rank_position)
+    .bind(value_prop)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(published, 2_000);
+}
