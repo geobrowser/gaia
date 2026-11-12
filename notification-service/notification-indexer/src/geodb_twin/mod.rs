@@ -26,11 +26,16 @@
 //!   `unsupported` (`values_not_stored`), never a mismatch.
 //! - `expired_proposals` (`find_expired_proposals`): for each row Postgres returned, whether the
 //!   proposal's latest version record and status record also say "ended, not executed".
+//! - `expired_proposals_reverse`: the other direction, a proposal geo-db lists as ending inside the
+//!   expiry window that Postgres does not hold at all. geo-db's `value_page` read lists the
+//!   `proposalVersion` records of the governance Space by `endTime` over the same window (resumed
+//!   with `.value_after`); each proposal they name that is not in Postgres's `proposals_current`
+//!   for that window is judged like a listed row, and one that geo-db still says ended unexecuted
+//!   at that time is `mismatch` / `listed_by_geodb_only`. Needs a geodb client at or after
+//!   geo-db `67b6974a5e`; an older node refuses the read, which counts as `failed`.
 //!
 //! Left on Postgres only, each for a reason:
-//! - the reverse of the expiry scan (a proposal geo-db says expired that Postgres did not list):
-//!   geo-db has no read that lists proposals, so it cannot be enumerated; the twin only judges rows
-//!   Postgres listed. The outbox anti-join half of the query is a table geo-db mirrors elsewhere.
+//! - the outbox anti-join half of the expiry query is a table geo-db mirrors elsewhere.
 //! - a proposal with a settings-escalation record: the end time in force depends on the escalation,
 //!   so it is `unsupported` (`escalation_pending`).
 //! - `proposal_name` (`lookup_proposal_name`, `proposals_current.name`): the `name` of the proposal's
@@ -89,6 +94,7 @@ pub const VOTERS: &str = "voters";
 pub const PROPOSER: &str = "proposer";
 pub const PROPOSER_AND_SPACE: &str = "proposer_and_space";
 pub const EXPIRED_PROPOSALS: &str = "expired_proposals";
+pub const EXPIRED_PROPOSALS_REVERSE: &str = "expired_proposals_reverse";
 pub const PROPOSAL_NAME: &str = "proposal_name";
 pub const VOTE_TALLIES: &str = "vote_tallies";
 pub const LATEST_BLOCK: &str = "latest_block";
@@ -701,12 +707,12 @@ fn single<'a>(card: &'a [CardRow], property: &str) -> Result<Option<&'a str>, ()
 async fn judge_expired(
     reader: &dyn GeoDbReader,
     governance: &str,
-    proposal: &Uuid,
+    proposal: &str,
     sql_end_time: i64,
     now: i64,
     floor: i64,
 ) -> Result<Verdict, TwinError> {
-    let links = read_backlinks(reader, governance, &entity_ref(proposal)).await?;
+    let links = read_backlinks(reader, governance, proposal).await?;
     if links.len() >= MAX_BACKLINKS {
         return Ok(Verdict::Unsupported("too_many_links"));
     }
@@ -782,7 +788,7 @@ pub async fn compare_expired_proposals(
     };
     let mut out = Vec::with_capacity(sql_rows.len());
     for (proposal, end) in sql_rows {
-        match judge_expired(reader, governance, proposal, *end, now, floor).await {
+        match judge_expired(reader, governance, &entity_ref(proposal), *end, now, floor).await {
             Ok(v) => out.push(v),
             Err(_) => {
                 // One failed read ends the run: the pipe is cooling down.
@@ -790,6 +796,139 @@ pub async fn compare_expired_proposals(
                 break;
             }
         }
+    }
+    out
+}
+
+/// Most `proposalVersion` rows the reverse scan reads before it gives up on the window.
+const MAX_REVERSE_ROWS: usize = 2048;
+/// Most proposals geo-db lists that Postgres lacks that one reverse scan judges.
+const MAX_REVERSE_JUDGED: usize = 32;
+/// Most Postgres ids the reverse scan is handed (one more than this means the set is cut).
+pub const MAX_REVERSE_SQL_IDS: usize = 4096;
+
+/// `value_page` over the proposal versions' `endTime` in `[floor, to]`, resumed past `after`.
+fn value_page_doc(floor: i64, to: i64, after: Option<i64>) -> String {
+    let after = after.map_or(String::new(), |v| format!(", .value_after = {v}"));
+    format!(
+        ".{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", .args = .{{ \
+         .value_page = 512, .value_property = \"{VERSION_END_TIME}\", .value_from = {floor}, \
+         .value_to = {to}{after} }} }} }} }}"
+    )
+}
+
+/// Every `(endTime, proposalVersion)` geo-db lists in `[floor, to]`, page by page. `None` when the
+/// window holds more than [`MAX_REVERSE_ROWS`] rows.
+async fn read_end_time_window(
+    reader: &dyn GeoDbReader,
+    governance: &str,
+    floor: i64,
+    to: i64,
+) -> Result<Option<Vec<(i64, String)>>, TwinError> {
+    let mut out: Vec<(i64, String)> = Vec::new();
+    let mut after: Option<i64> = None;
+    loop {
+        let body = reader
+            .query(&[governance.to_string()], &value_page_doc(floor, to, after))
+            .await?;
+        let mut last: Option<i64> = None;
+        for c in rows(&body) {
+            let (Some(value), Some(entity)) = (c.get(1), c.get(3)) else {
+                continue;
+            };
+            let Some(end) = whole_number(value) else {
+                return Err(TwinError::Refused("unreadable endTime".into()));
+            };
+            if is_hex32(entity) {
+                out.push((end, (*entity).to_string()));
+                last = Some(end);
+            }
+        }
+        // An empty page is the end of the window.
+        let Some(last) = last else {
+            return Ok(Some(out));
+        };
+        if after.is_some_and(|a| last <= a) {
+            return Err(TwinError::Refused("value_page did not advance".into()));
+        }
+        if out.len() > MAX_REVERSE_ROWS {
+            return Ok(None);
+        }
+        after = Some(last);
+    }
+}
+
+/// Reverse twin of `find_expired_proposals`: the proposals geo-db lists as ending in
+/// `[floor, now)` that Postgres does not hold (`sql_ids`: every `proposals_current` id whose
+/// `end_time` is in that window, any state; `None` when that set could not be read whole).
+/// Compare only: nothing here reaches the poller.
+pub async fn compare_expired_reverse(
+    reader: &dyn GeoDbReader,
+    spaces: &Spaces,
+    now: i64,
+    floor: i64,
+    sql_ids: Option<&[Uuid]>,
+) -> Vec<Verdict> {
+    let Some(governance) = spaces.system("governance") else {
+        return vec![Verdict::Unsupported("system_space_missing")];
+    };
+    let Some(sql_ids) = sql_ids else {
+        return vec![Verdict::Unsupported("sql_window_too_large")];
+    };
+    if floor >= now {
+        return vec![Verdict::Match];
+    }
+    let listed = match read_end_time_window(reader, governance, floor, now - 1).await {
+        Ok(Some(rows)) => rows,
+        Ok(None) => return vec![Verdict::Unsupported("window_too_large")],
+        Err(_) => return vec![Verdict::Failed],
+    };
+    let held: BTreeSet<String> = sql_ids.iter().map(entity_ref).collect();
+    let versions: Vec<String> = listed
+        .iter()
+        .map(|(_, v)| v.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let cards = match read_cards(reader, governance, &versions).await {
+        Ok(c) => c,
+        Err(_) => return vec![Verdict::Failed],
+    };
+    // Proposal entity -> the end time one of its versions was listed at (the first, lowest).
+    let mut candidates: std::collections::BTreeMap<String, i64> = Default::default();
+    let mut out = Vec::new();
+    for (end, version) in &listed {
+        let card = cards.get(version).map_or(&[][..], Vec::as_slice);
+        let named = refs(card, VERSION_PROPOSAL);
+        let mut named = named.into_iter();
+        match (named.next(), named.next()) {
+            (Some(proposal), None) => {
+                if !held.contains(&proposal) {
+                    candidates.entry(proposal).or_insert(*end);
+                }
+            }
+            _ => out.push(Verdict::Unsupported("ambiguous_record")),
+        }
+    }
+    for (i, (proposal, end)) in candidates.iter().enumerate() {
+        if i >= MAX_REVERSE_JUDGED {
+            out.push(Verdict::Unsupported("too_many_candidates"));
+            break;
+        }
+        match judge_expired(reader, governance, proposal, *end, now, floor).await {
+            // geo-db still says it ended unexecuted in the window, and Postgres has no such row.
+            Ok(Verdict::Match) => out.push(Verdict::Mismatch("listed_by_geodb_only")),
+            Ok(Verdict::Unsupported(why)) => out.push(Verdict::Unsupported(why)),
+            // A superseded version, or an executed proposal: Postgres is right not to list it.
+            Ok(Verdict::Mismatch(_)) => out.push(Verdict::Unsupported("superseded_or_executed")),
+            Ok(Verdict::Failed) | Err(_) => {
+                out.push(Verdict::Failed);
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(Verdict::Match);
     }
     out
 }
@@ -973,10 +1112,14 @@ pub struct GeoDbTwin {
     cursors: Option<Arc<dyn CursorReader>>,
     /// When the last `latest_block` comparison started: the read polls in a loop, so it is sampled.
     last_block_check: std::sync::Mutex<Option<std::time::Instant>>,
+    last_reverse_check: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 /// At most one `latest_block` comparison this often.
 const LATEST_BLOCK_EVERY: Duration = Duration::from_secs(30);
+
+/// At most one reverse expiry scan this often (it pages geo-db and reads Postgres).
+const REVERSE_EVERY: Duration = Duration::from_secs(60);
 
 /// Most rows of one expiry scan the twin judges (the scan returns up to its batch limit).
 const EXPIRED_SAMPLE: usize = 8;
@@ -989,6 +1132,7 @@ impl GeoDbTwin {
             gate: Arc::new(Semaphore::new(1)),
             cursors: None,
             last_block_check: std::sync::Mutex::new(None),
+            last_reverse_check: std::sync::Mutex::new(None),
         }
     }
 
@@ -1153,6 +1297,33 @@ impl GeoDbTwin {
             .map_or(0, |d| d.as_secs() as i64);
         self.launch(EXPIRED_PROPOSALS, move |r, s| async move {
             compare_expired_proposals(r.as_ref(), &s, now, floor, &rows).await
+        });
+    }
+
+    /// True at most once a [`REVERSE_EVERY`]: the caller then reads Postgres's ids for the window
+    /// and hands them to [`Self::observe_expired_reverse`].
+    pub fn reverse_due(&self) -> bool {
+        let mut last = self
+            .last_reverse_check
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| t.elapsed() < REVERSE_EVERY) {
+            return false;
+        }
+        *last = Some(std::time::Instant::now());
+        true
+    }
+
+    /// After the expiry scan's window `[floor, now)` (epoch seconds) was read from Postgres whole (`sql_ids`, every
+    /// `proposals_current` id ending in it; `None` when it was cut).
+    pub fn observe_expired_reverse(
+        self: &Arc<Self>,
+        floor: i64,
+        now: i64,
+        sql_ids: Option<Vec<Uuid>>,
+    ) {
+        self.launch(EXPIRED_PROPOSALS_REVERSE, move |r, s| async move {
+            compare_expired_reverse(r.as_ref(), &s, now, floor, sql_ids.as_deref()).await
         });
     }
 }

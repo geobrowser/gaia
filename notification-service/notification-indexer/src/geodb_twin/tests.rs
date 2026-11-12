@@ -1020,3 +1020,167 @@ fn applied_block_key_matches_the_feeder() {
     assert!(text.contains(&format!("APPLIED_BLOCK_KEY = \"{APPLIED_BLOCK_KEY}\"")));
     assert!(text.contains(&format!("CURSORS_COLLECTION = {CURSORS_COLLECTION}")));
 }
+
+// ---- the reverse of the expiry scan ------------------------------------------------------------
+
+/// One proposal geo-db lists by end time: its gaia id, the end time of its one version record, and
+/// that record's id (32 hex digits).
+struct Listed {
+    proposal: Uuid,
+    end: i64,
+    version: u128,
+    executed: bool,
+}
+
+fn listed(n: u128, end: i64) -> Listed {
+    Listed {
+        proposal: u(n),
+        end,
+        version: 0x5000 + n,
+        executed: false,
+    }
+}
+
+fn hex(n: u128) -> String {
+    format!("{n:032x}")
+}
+
+/// A fake holding a `value_page` answer per page of `pages` (each a list of rows, the page after
+/// the last empty), the version cards that name each proposal, and each proposal's own records.
+fn reverse_fixture(entries: &[Listed], pages: &[Vec<usize>]) -> Fake {
+    let fake = Fake::default();
+    let put = |space: &str, doc: String, body: String| {
+        fake.answers
+            .lock()
+            .unwrap()
+            .insert((space.into(), doc), body);
+    };
+    let mut after: Option<i64> = None;
+    for page in pages {
+        let mut body = String::new();
+        let mut last = 0;
+        for &i in page {
+            let e = &entries[i];
+            body += &format!(
+                "{VERSION_END_TIME}\t{}.0\tstmt\t{}\n",
+                e.end,
+                hex(e.version)
+            );
+            last = e.end;
+        }
+        put(GOV, value_page_doc(FLOOR, NOW - 1, after), body);
+        after = Some(last);
+    }
+    let mut ids: Vec<String> = entries.iter().map(|e| hex(e.version)).collect();
+    ids.sort();
+    ids.dedup();
+    let mut naming = String::new();
+    for e in entries {
+        naming += &row(VERSION_PROPOSAL, &ent(&e.proposal), &hex(e.version));
+    }
+    for chunk in ids.chunks(MAX_CARD_IDS) {
+        put(GOV, cards_doc(chunk), naming.clone());
+    }
+    for e in entries {
+        let pe = ent(&e.proposal);
+        let status = hex(0x6000 + e.version);
+        let mut links = link(VERSION_PROPOSAL, &pe, &hex(e.version));
+        links += &link(STATUS_PROPOSAL, &pe, &status);
+        let mut cards = row(VERSION_BLOCK, "1", &hex(e.version));
+        cards += &row(VERSION_END_TIME, &format!("{}.0", e.end), &hex(e.version));
+        if e.executed {
+            cards += &row(STATUS_EXECUTED_AT, "1900", &status);
+        }
+        let mut wanted = vec![hex(e.version), status];
+        wanted.sort();
+        put(GOV, card_doc(&pe, Some(MAX_BACKLINKS)), links);
+        put(GOV, cards_doc(&wanted), cards);
+    }
+    fake
+}
+
+async fn reverse(fake: &Fake, sql: Option<&[Uuid]>) -> Vec<Verdict> {
+    compare_expired_reverse(fake, &spaces(&u(1)), NOW, FLOOR, sql).await
+}
+
+#[tokio::test]
+async fn reverse_matches_when_postgres_holds_everything_geodb_lists() {
+    let e = vec![listed(10, 1100), listed(11, 1200)];
+    let fake = reverse_fixture(&e, &[vec![0, 1]]);
+    let sql = [u(10), u(11)];
+    assert_eq!(reverse(&fake, Some(&sql)).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn reverse_counts_a_proposal_only_geodb_lists() {
+    let e = vec![listed(10, 1100), listed(11, 1200)];
+    let fake = reverse_fixture(&e, &[vec![0, 1]]);
+    assert_eq!(
+        reverse(&fake, Some(&[u(10)])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_resumes_through_a_tie_and_across_pages() {
+    // Two proposals tie at 1100 (one page, never split); the next page holds 1300.
+    let e = vec![listed(10, 1100), listed(11, 1100), listed(12, 1300)];
+    let fake = reverse_fixture(&e, &[vec![0, 1], vec![2]]);
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only"); 3]
+    );
+    // Held by Postgres: only the proposal on the resumed page is missing.
+    assert_eq!(
+        reverse(&fake, Some(&[u(10), u(11)])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_empty_page_is_a_match() {
+    let fake = Fake::default();
+    assert_eq!(reverse(&fake, Some(&[])).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn reverse_ignores_an_executed_proposal() {
+    let mut x = listed(10, 1100);
+    x.executed = true;
+    let fake = reverse_fixture(&[x], &[vec![0]]);
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Unsupported("superseded_or_executed")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_refusal_and_unreadable_sql_side() {
+    // An old node refuses the read: failed, never a mismatch.
+    assert_eq!(
+        reverse(&Fake::failing(), Some(&[])).await,
+        vec![Verdict::Failed]
+    );
+    assert_eq!(
+        reverse(&Fake::default(), None).await,
+        vec![Verdict::Unsupported("sql_window_too_large")]
+    );
+    let no_gov = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_expired_reverse(&Fake::default(), &no_gov, NOW, FLOOR, Some(&[])).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+}
+
+#[test]
+fn reverse_has_its_own_kind_label_and_the_value_page_call_text() {
+    assert_eq!(EXPIRED_PROPOSALS_REVERSE, "expired_proposals_reverse");
+    assert_eq!(
+        value_page_doc(10, 20, Some(15)),
+        format!(
+            ".{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", .args = .{{ \
+             .value_page = 512, .value_property = \"{VERSION_END_TIME}\", .value_from = 10, \
+             .value_to = 20, .value_after = 15 }} }} }} }}"
+        )
+    );
+}
