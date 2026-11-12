@@ -78,13 +78,15 @@ export const RELATION_FACET_PROPERTY = {
 	toVersion: conformingId("reserved-property", "relationToVersion"),
 	fromVersion: conformingId("reserved-property", "relationFromVersion"),
 	verified: conformingId("reserved-property", "relationVerified"),
+	/** The relation's own entity: a reference-valued claim (an entity id, conformed as every reference is). */
+	entity: conformingId("reserved-property", "relationEntity"),
 } as const
 
 /**
  * The facet claims of one relation, as `add` intents on its statement. Each claim's id is derived from the relation
  * and the facet, so a replay of the edit names the same statements.
  */
-function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: number} {
+function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: number; entity: string | null} {
 	const intents: string[] = []
 	let present = 0
 	const claim = (facet: keyof typeof RELATION_FACET_PROPERTY, value: string) => {
@@ -101,7 +103,14 @@ function facetIntents(sid: string, op: GrcOp): {intents: string[]; present: numb
 		present++
 		if (op.verified === true) claim("verified", ".{ .boolean = true }")
 	}
-	return {intents, present}
+	// The relation's own entity is no facet to drop with the rest: it is counted apart (`relation-entity-*`).
+	let entity: string | null = null
+	if (op.entity != null && (typeof op.entity === "string" || op.entity instanceof Uint8Array)) {
+		const before = intents.length
+		claim("entity", `.{ .reference = "${cid("entity", op.entity)}" }`)
+		entity = intents.splice(before, 1)[0] ?? null
+	}
+	return {intents, present, entity}
 }
 
 /** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
@@ -324,7 +333,13 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 						if (facets.intents.length > 0) bump("relation-facet-claims", facets.intents.length)
 					} else bump("relation-facets-dropped")
 				}
-				if (op.entity != null) bump("relation-entity-dropped")
+				// The relation's own entity is a reference-valued claim under the facets flag; off, it is dropped as before.
+				if (op.entity != null) {
+					if (opts.facets && facets.entity) {
+						intents.push(facets.entity)
+						bump("relation-entity-claims")
+					} else bump("relation-entity-dropped")
+				}
 				changed.add(from)
 				touched.push(from)
 				bump("createRelation")

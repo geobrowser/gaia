@@ -194,7 +194,37 @@ describe("translateOps", () => {
 			toVersion: conformingId("reserved-property", "relationToVersion"),
 			fromVersion: conformingId("reserved-property", "relationFromVersion"),
 			verified: conformingId("reserved-property", "relationVerified"),
+			entity: conformingId("reserved-property", "relationEntity"),
 		})
+	})
+
+	it("writes a relation's own entity as a reference claim on its statement under the facets flag", () => {
+		const sid = conformingId("statement", hex(30))
+		const base: GrcOp = {type: "createRelation", id: id(30), from: id(1), to: id(7), relationType: id(8)}
+		const withEntity: GrcOp = {...base, entity: id(50)}
+		const claim = `.{ .add = .{ .id = "${conformingId("relation-facet", `${sid}entity`)}", .statement = "${sid}", .property = "${conformingId("reserved-property", "relationEntity")}", .value = .{ .reference = "${hex(50)}" } } }`
+
+		const on = translateOps([withEntity], context().ctx, {facets: true})
+		expect(on.intents.slice(2)).toEqual([claim])
+		expect(on.stats["relation-entity-claims"]).toBe(1)
+		expect(on.stats["relation-entity-dropped"]).toBeUndefined()
+		expect(on.stats["relation-facet-claims"]).toBeUndefined()
+		expect(translateOps([withEntity], context().ctx, {facets: true}).intents).toEqual(on.intents)
+
+		// beside other facets, each is written and counted apart
+		const both = translateOps([{...withEntity, toSpace: id(40)}], context().ctx, {facets: true})
+		expect(both.intents).toHaveLength(4)
+		expect(both.intents[3]).toBe(claim)
+		expect(both.stats["relation-facet-claims"]).toBe(1)
+
+		// off: exactly as before, dropped and counted
+		const off = translateOps([withEntity], context().ctx)
+		expect(off.intents).toEqual(translateOps([base], context().ctx).intents)
+		expect(off.stats["relation-entity-dropped"]).toBe(1)
+		expect(off.stats["relation-entity-claims"]).toBeUndefined()
+
+		// a relation with no own entity writes none
+		expect(translateOps([base], context().ctx, {facets: true}).intents).toHaveLength(2)
 	})
 
 	it("sets a text with a known language with its tag, and one with an unknown language without", () => {

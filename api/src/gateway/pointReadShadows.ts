@@ -178,7 +178,7 @@ export type RelationPlan = {
 	typeId: IdPath | null
 	toEntityId: IdPath | null
 	entityIdKey: string | null
-	/** The response keys of `toSpaceId` / `verified`, where selected. */
+	/** The response keys of `toSpaceId` / `verified` / `entityId` (the relation's own entity), where selected. */
 	facetKeys: Partial<Record<(typeof RELATION_FACET_FIELDS)[number], string>>
 	/** The relation's own entity, when it is selected as a card. */
 	entity: {key: string; card: EntityCardPlan} | null
@@ -188,7 +188,7 @@ export type RelationPlan = {
 const RELATION_COLUMNS = ["id", "spaceId", "entityId", "fromEntityId", "toEntityId", "typeId"] as const
 const RELATION_IGNORED = ["position", "__typename"] as const
 /** Selected beside the columns: compared to geo-db's facet claims when the facets shadow is on, else ignored. */
-const RELATION_FACET_FIELDS = ["toSpaceId", "verified"] as const
+const RELATION_FACET_FIELDS = ["toSpaceId", "verified", "entityId"] as const
 const RELATION_OBJECTS = {type: "typeId", toEntity: "toEntityId", fromEntity: "fromEntityId"} as const
 
 function planRelation(
@@ -210,6 +210,8 @@ function planRelation(
 		if ((RELATION_FACET_FIELDS as readonly string[]).includes(name)) {
 			if (!isPlain(field)) return refuse(field.selectionSet ? "selection" : "args")
 			facetKeys[name as (typeof RELATION_FACET_FIELDS)[number]] ??= key
+			// The own entity is also a column: it names the card of the relation's `entity` object.
+			if (name === "entityId") columns.entityId ??= key
 		} else if ((RELATION_COLUMNS as readonly string[]).includes(name)) {
 			if (!isPlain(field)) return refuse(field.selectionSet ? "selection" : "args")
 			columns[name as (typeof RELATION_COLUMNS)[number]] ??= key
@@ -418,7 +420,12 @@ type Item =
 	  }
 
 /** The relation's own statement id in geo-db and what Postgres answered for its facets (a facet not selected is absent). */
-type EdgeFacets = {statementId: string | null; toSpace?: string | null; verified?: boolean | null}
+type EdgeFacets = {
+	statementId: string | null
+	toSpace?: string | null
+	verified?: boolean | null
+	entity?: string | null
+}
 
 /** A Space id as geo-db holds it: 32 lowercase hex digits. Null for anything else. */
 const compactSpaceId = (v: unknown): string | null => {
@@ -426,6 +433,10 @@ const compactSpaceId = (v: unknown): string | null => {
 	const compact = v.replaceAll("-", "").toLowerCase()
 	return /^[0-9a-f]{32}$/.test(compact) ? compact : null
 }
+
+/** The relation's own entity as geo-db holds it (a conformed entity id), null for anything that is not an id. */
+const entityFacet = (v: unknown): string | null =>
+	typeof v === "string" && isValidUuid(v) ? conformingId("entity", normalizeUuid(v)) : null
 
 const pathValue = (node: Record<string, unknown>, path: IdPath | null): string | null => {
 	if (!path) return null
@@ -455,7 +466,9 @@ function itemsOfRelation(raw: unknown, plan: RelationPlan): {items: Item[]; trun
 		if (!spaceId || !fromEntityId || !typeId || !toEntityId) return null
 		const idValue = plan.idKey ? node[plan.idKey] : null
 		const facets: EdgeFacets | null =
-			plan.facetKeys.toSpaceId !== undefined || plan.facetKeys.verified !== undefined
+			plan.facetKeys.toSpaceId !== undefined ||
+			plan.facetKeys.verified !== undefined ||
+			plan.facetKeys.entityId !== undefined
 				? {
 						statementId:
 							typeof idValue === "string" && isValidUuid(idValue)
@@ -463,6 +476,9 @@ function itemsOfRelation(raw: unknown, plan: RelationPlan): {items: Item[]; trun
 								: null,
 						...(plan.facetKeys.toSpaceId !== undefined
 							? {toSpace: compactSpaceId(node[plan.facetKeys.toSpaceId])}
+							: {}),
+						...(plan.facetKeys.entityId !== undefined
+							? {entity: entityFacet(node[plan.facetKeys.entityId])}
 							: {}),
 						...(plan.facetKeys.verified !== undefined
 							? {
@@ -535,6 +551,8 @@ export function facetDiff(
 	const diff: Record<string, unknown> = {}
 	if (expected.toSpace !== undefined && (expected.toSpace ?? undefined) !== held.toSpace)
 		diff.toSpace = {postgres: expected.toSpace, geoDb: held.toSpace ?? null}
+	if (expected.entity !== undefined && (expected.entity ?? undefined) !== held.entity)
+		diff.entity = {postgres: expected.entity, geoDb: held.entity ?? null}
 	if (expected.verified !== undefined) {
 		const geoDb = held.verified === "true"
 		if ((expected.verified === true) !== geoDb || (held.verified !== undefined && held.verified !== "true"))
