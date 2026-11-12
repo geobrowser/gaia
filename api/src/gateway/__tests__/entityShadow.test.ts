@@ -1,6 +1,6 @@
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {rowsFromGeoDbOutput} from "../../geodb/card"
+import {RELATION_FACET_PROPERTIES, rowsFromGeoDbOutput} from "../../geodb/card"
 import {GeoDbError} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
 import {analyzeEntityOperation, createEntityShadow, extractPostgresCard} from "../entityShadow"
@@ -313,6 +313,100 @@ describe("entity shadow", () => {
 	it("exports every series at zero once registered", () => {
 		setup()
 		expect(renderGatewayMetrics()).toContain('gaia_api_gateway_shadow_total{field="entity",result="mismatch"} 0')
+	})
+})
+
+describe("entity shadow: relation facets (GEODB_RELATION_FACETS_SHADOW)", () => {
+	const STATEMENT = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+	const TO_SPACE = "33333333-3333-4333-8333-333333333333"
+	const hex = (id: string) => id.replaceAll("-", "")
+	const FACET_QUERY = QUERY.replace("typeId toEntityId toSpaceId position", "id typeId toEntityId toSpaceId verified")
+	const body = (relation: Record<string, unknown> = {}) => ({
+		data: {
+			entity: {
+				...POSTGRAPHILE.data.entity,
+				relationsList: [
+					{
+						id: STATEMENT,
+						typeId: TYPES,
+						toEntityId: PERSON,
+						toSpaceId: TO_SPACE,
+						verified: true,
+						...relation,
+					},
+				],
+			},
+		},
+	})
+	const heldBoth: [string, string][] = [
+		[RELATION_FACET_PROPERTIES.toSpace, hex(TO_SPACE)],
+		[RELATION_FACET_PROPERTIES.verified, "true"],
+	]
+	const claimOutput = (claims: [string, string][]) =>
+		claims
+			.map(([prop, raw]) => `${TYPES}\t${PERSON}\t${hex(STATEMENT)}\t${ENTITY_HEX}\t${prop}\t${raw}\t1`)
+			.join("\n")
+
+	function facetSetup(claims: [string, string][], on: boolean) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const readCard = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
+			rowsFromGeoDbOutput(GEODB_OUTPUT, entityId),
+		)
+		const readRelationClaims = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
+			rowsFromGeoDbOutput(claimOutput(claims), entityId, {claims: true, claimCells: true}),
+		)
+		const shadow = createEntityShadow({
+			geoDb: {readCard, readRelationClaims},
+			geoSpaceOf: async (space) => (space === SPACE.replaceAll("-", "") ? GEO_SPACE : null),
+			log,
+			...(on ? {relationFacets: true} : {}),
+		})
+		return {shadow, log, readRelationClaims}
+	}
+
+	it("flag off: a facet difference is not looked at and claims are not read", async () => {
+		const {shadow, readRelationClaims, log} = facetSetup([], false)
+		await run(shadow, FACET_QUERY, body())
+		expect(counts()).toEqual({match: 1})
+		expect(readRelationClaims).not.toHaveBeenCalled()
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+
+	it("flag on: matches when geo-db holds the to-space and verified claims", async () => {
+		const {shadow, readRelationClaims} = facetSetup(heldBoth, true)
+		await run(shadow, FACET_QUERY, body())
+		expect(counts()).toEqual({match: 1})
+		expect(readRelationClaims).toHaveBeenCalledWith(expect.objectContaining({entityId: ENTITY_HEX}))
+	})
+
+	it("flag on: a facet difference is a mismatch, labelled relationFacets, and names what differs", async () => {
+		const {shadow, log} = facetSetup([[RELATION_FACET_PROPERTIES.verified, "true"]], true)
+		await run(shadow, FACET_QUERY, body())
+		expect(counts()).toEqual({mismatch: 1})
+		expect(log.warn).toHaveBeenCalledWith(
+			"gateway entity shadow mismatch",
+			expect.objectContaining({
+				derivedMismatches: ["relationFacets"],
+				relationFacets: [
+					{statementId: hex(STATEMENT), diff: {toSpace: {postgres: hex(TO_SPACE), geoDb: null}}},
+				],
+			}),
+		)
+	})
+
+	it("flag on: a relation list that selects no facet (or no id) reads no claims", async () => {
+		const {shadow, readRelationClaims} = facetSetup([], true)
+		await run(shadow)
+		expect(counts()).toEqual({match: 1})
+		expect(readRelationClaims).not.toHaveBeenCalled()
+	})
+
+	it("flag on: a row whose id is not a uuid is left uncompared, not judged", async () => {
+		const {shadow, readRelationClaims} = facetSetup([], true)
+		await run(shadow, FACET_QUERY, body({id: "not-a-uuid"}))
+		expect(counts()).toEqual({match: 1})
+		expect(readRelationClaims).not.toHaveBeenCalled()
+		expect(renderGatewayMetrics()).toContain('reason="relation_facets"')
 	})
 })
 

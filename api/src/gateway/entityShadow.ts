@@ -49,19 +49,23 @@ import {
 } from "graphql"
 
 import {
+	compactSpaceId,
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
+	type EdgeFacets,
 	entityTimesOf,
+	facetDiff,
 	type GeoCardRow,
 	isEmptyDiff,
 	type RelationRow,
+	relationFacetsOf,
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
 import {GeoDbError, isHoldersUnknownArgument, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
-import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
+import {askGeoDb, askGeoDbRelationClaims, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {analyzeBacklinks, type BacklinkRowsPlan, readBacklinkFilter, runBacklinks} from "./backlinksShadow"
 import type {FieldShadow} from "./gateway"
@@ -202,7 +206,12 @@ export type ListPlan = {
 	nestedEntities?: NestedEntityPlans
 	/** Where the property_info fields of the rows' `property` object sit (`GEODB_PROPERTY_INFO_SHADOW`); absent when none is selected. */
 	propertyInfo?: PropertyInfoPlan
+	/** Response keys of a relation row's `id`, `toSpaceId` and `verified` (`GEODB_RELATION_FACETS_SHADOW`); absent when neither facet is selected. */
+	facets?: RelationFacetKeys
 }
+
+/** The response keys of a relation row's own id and its two facets. */
+export type RelationFacetKeys = {id?: string; toSpaceId?: string; verified?: string}
 
 /** What a card comparison needs of an entity selection: where its answers sit in an entity object. */
 export type EntityCardPlan = {
@@ -336,6 +345,7 @@ export type PlannedColumns = {
 	nested: Record<string, string>
 	names: ListPlan["names"]
 	propertyInfo?: PropertyInfoPlan
+	facets?: RelationFacetKeys
 }
 
 const NESTED_OBJECT_NAMES = ["toEntity", "fromEntity", "entity"]
@@ -343,13 +353,20 @@ const NESTED_OBJECT_NAMES = ["toEntity", "fromEntity", "entity"]
 export function planColumns(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
-	spec: {columns: readonly string[]; objects: Record<string, ObjectSpec>; ignored: readonly string[]},
+	spec: {
+		columns: readonly string[]
+		objects: Record<string, ObjectSpec>
+		ignored: readonly string[]
+		/** Record a relation row's `id`, `toSpaceId` and `verified` keys (the card's relations lists). */
+		facets?: boolean
+	},
 	uncompared: Set<UncomparedReason>,
 	nestedOut?: NestedCollector,
 ): PlannedColumns {
 	const columns: Record<string, string> = {}
 	const nested: Record<string, string> = {}
 	const names: PlannedColumns["names"] = {}
+	const facets: RelationFacetKeys = {}
 	let propertyInfo: PropertyInfoPlan | undefined
 	const seen = new Set<string>()
 	for (const child of fieldsOf(set, fragments)) {
@@ -389,8 +406,11 @@ export function planColumns(
 		if (!isPlainField(child)) refuse(child.selectionSet ? "selection" : "args")
 		if (spec.columns.includes(name)) columns[name] ??= key
 		else if (!spec.ignored.includes(name)) refuse("selection")
+		else if (spec.facets && (name === "id" || name === "toSpaceId" || name === "verified")) facets[name] ??= key
 	}
-	return {columns, nested, names, ...(propertyInfo ? {propertyInfo} : {})}
+	// Judged against a statement, so the row's `id` must be selected with a facet; else they stay ignored, as before.
+	const faceted = facets.id !== undefined && (facets.toSpaceId !== undefined || facets.verified !== undefined)
+	return {columns, nested, names, ...(propertyInfo ? {propertyInfo} : {}), ...(faceted ? {facets} : {})}
 }
 
 type PlannedList = {list: ListPlan; spaceId: string | null}
@@ -400,7 +420,13 @@ function planList(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	variables: Record<string, unknown>,
-	spec: {columns: readonly string[]; objects: Record<string, ObjectSpec>; ignored: readonly string[]},
+	spec: {
+		columns: readonly string[]
+		objects: Record<string, ObjectSpec>
+		ignored: readonly string[]
+		/** Record a relation row's `id`, `toSpaceId` and `verified` keys (the card's relations lists). */
+		facets?: boolean
+	},
 	uncompared: Set<UncomparedReason>,
 	connection: boolean,
 ): PlannedList {
@@ -419,7 +445,7 @@ function planList(
 			? {...list, nestedEntities: {plans: collector.plans, residual: collector.residual}}
 			: list
 	if (!connection) {
-		const {columns, nested, names, propertyInfo} = planColumns(
+		const {columns, nested, names, propertyInfo, facets} = planColumns(
 			field.selectionSet as SelectionSetNode,
 			fragments,
 			spec,
@@ -436,6 +462,7 @@ function planList(
 				nodesKey: null,
 				hasNext: null,
 				...(propertyInfo ? {propertyInfo} : {}),
+				...(facets ? {facets} : {}),
 			}),
 			spaceId,
 		}
@@ -470,6 +497,7 @@ function planList(
 			nodesKey,
 			hasNext,
 			...(rows.propertyInfo ? {propertyInfo: rows.propertyInfo} : {}),
+			...(rows.facets ? {facets: rows.facets} : {}),
 		}),
 		spaceId,
 	}
@@ -645,6 +673,7 @@ export function planEntitySelection(
 		columns: ["typeId", "toEntityId"],
 		objects: RELATION_OBJECTS,
 		ignored: RELATION_IGNORED,
+		facets: true,
 	}
 	for (const field of fieldsOf(selectionSet, fragments)) {
 		const key = responseKeyOf(field)
@@ -870,6 +899,18 @@ export function secondsOrNull(v: unknown): number | null {
 
 const isFull = (count: number, first: number) => count >= Math.min(first, PAGE_CAP)
 
+/** What PostGraphile answered for a relation row's statement id and the facets selected (a facet not selected is absent). */
+function facetsOfNode(node: Record<string, unknown>, keys: RelationFacetKeys): EdgeFacets {
+	const id = keys.id !== undefined ? node[keys.id] : undefined
+	return {
+		statementId: typeof id === "string" && isValidUuid(id) ? conformingId("statement", normalizeUuid(id)) : null,
+		...(keys.toSpaceId !== undefined ? {toSpace: compactSpaceId(node[keys.toSpaceId])} : {}),
+		...(keys.verified !== undefined
+			? {verified: typeof node[keys.verified] === "boolean" ? (node[keys.verified] as boolean) : null}
+			: {}),
+	}
+}
+
 /**
  * Reads the answer out of PostGraphile's response. Null when it is not a plain successful answer for this
  * plan (errors, no data, an unexpected shape): that is not a verdict on geo-db, so nothing is counted.
@@ -950,7 +991,8 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 		if (typeof typeId !== "string" || typeof toEntityId !== "string") return null
 		if (plan.relations.nestedEntities)
 			collectNestedEntities(node, toEntityId, plan.relations.nestedEntities, nestedEntities)
-		relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
+		const facets = plan.relations.facets ? facetsOfNode(node, plan.relations.facets) : null
+		relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null, ...(facets ? {facets} : {})})
 		nested.type?.push({id: typeId, name: readName(node, plan.relations.names.type) ?? null})
 		nested.toEntity?.push({id: toEntityId, name: readName(node, plan.relations.names.toEntity) ?? null})
 		nested.fromEntity?.push(readName(node, plan.relations.names.fromEntity) ?? null)
@@ -1707,6 +1749,37 @@ export async function widenCrossSpace(
 }
 
 /**
+ * The card's relation rows that selected `toSpaceId` / `verified` against the facet claims geo-db holds on their
+ * statements. Settled in the one Space the lists are filtered to; a card read across Spaces, a row whose id is not a
+ * uuid and a client that cannot read claims are `uncompared`. Never throws: a failed claims read is `uncompared` too.
+ */
+async function compareRelationFacets(
+	deps: EntityShadowDeps,
+	spaceId: string | null,
+	postgres: NonNullable<PostgresCard>,
+	entityId: string,
+): Promise<{uncompared: boolean; mismatches: {statementId: string; diff: Record<string, unknown>}[]}> {
+	const rows = postgres.relations.filter((r) => r.facets)
+	if (rows.length === 0) return {uncompared: false, mismatches: []}
+	if (!spaceId || !deps.geoDb.readRelationClaims || rows.some((r) => r.facets?.statementId === null))
+		return {uncompared: true, mismatches: []}
+	let claims: GeoCardRow[]
+	try {
+		claims = await askGeoDbRelationClaims(deps, conformingId("entity", entityId), spaceId)
+	} catch (error) {
+		deps.log.warn("entity shadow relation claims read failed", {entityId, spaceId, error: String(error)})
+		return {uncompared: true, mismatches: []}
+	}
+	const mismatches: {statementId: string; diff: Record<string, unknown>}[] = []
+	for (const row of rows) {
+		const facets = row.facets as EdgeFacets & {statementId: string}
+		const diff = facetDiff(facets, relationFacetsOf(claims, facets.statementId))
+		if (diff) mismatches.push({statementId: facets.statementId, diff})
+	}
+	return {uncompared: false, mismatches}
+}
+
+/**
  * Asks geo-db for one entity's card (with names) and judges PostGraphile's card against it: the statement diff
  * plus the derived checks. When the plan has no space the entity's own spaces are all read and their cards are
  * compared as one. Never throws; a failed read is logged and reported as `failed`. The caller counts.
@@ -1768,13 +1841,20 @@ export async function checkCard(
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
+	// The relations' `toSpaceId` / `verified` against geo-db's facet claims (`GEODB_RELATION_FACETS_SHADOW`).
+	const facets =
+		deps.relationFacets === true ? await compareRelationFacets(deps, plan.spaceId, postgres, entityId) : null
+	const uncompared = [...derived.uncompared]
+	if (facets?.uncompared && !uncompared.includes("relation_facets")) uncompared.push("relation_facets")
+	if (facets?.mismatches.length) wrong.push("relationFacets")
 	return {
 		result: isEmptyDiff(diff) && wrong.length === 0 ? "match" : "mismatch",
-		uncompared: derived.uncompared,
+		uncompared,
 		detail: {
 			entityId,
 			spaceId: plan.spaceId,
 			spaces: spaces.length,
+			...(facets?.mismatches.length ? {relationFacets: facets.mismatches.slice(0, SAMPLE)} : {}),
 			onlyPostgres: diff.onlyPostgres.length,
 			onlyGeoDb: diff.onlyGeoDb.length,
 			skipped: diff.skipped,
