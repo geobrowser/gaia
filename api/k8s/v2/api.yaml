@@ -327,6 +327,10 @@ spec:
             # Typed relations lists that select no type (#1150).
             - name: GEODB_RELATIONS_TYPE_FILTER_SHADOW
               value: "on"
+            # Compare a relation's toSpaceId / verified against geo-db's facet claims (relation / relations point
+            # reads). Off until the feeder writes them (GEODB_RELATION_FACETS) and a backfill has run.
+            - name: GEODB_RELATION_FACETS_SHADOW
+              value: "off"
             # Accept the Postgres vote-score fields, counted `derived_fields`, uncompared (#1151).
             - name: GEODB_DERIVED_FIELDS_SHADOW
               value: "on"

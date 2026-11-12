@@ -4,6 +4,7 @@ import {genesisLanguageId as languageIdOf} from "../languages.js"
 import {
 	type GrcOp,
 	type TranslateContext,
+	RELATION_FACET_PROPERTY,
 	floatToDecimal,
 	translateOps,
 	valueZon,
@@ -142,6 +143,58 @@ describe("translateOps", () => {
 		expect(off.intents.slice(1)).toEqual([add(20), add(21), add(22), add(23), add(24), add(25)])
 		expect(off.stats["relation-position-kept"]).toBeUndefined()
 		expect(off.stats["relation-position-dropped"]).toBe(5)
+	})
+
+	it("writes a relation's facets as claims on its statement only when asked", () => {
+		const sid = conformingId("statement", hex(30))
+		const claimId = (facet: string) => conformingId("relation-facet", `${sid}${facet}`)
+		const prop = (name: string) => conformingId("reserved-property", name)
+		const base: GrcOp = {type: "createRelation", id: id(30), from: id(1), to: id(7), relationType: id(8)}
+		const claim = (facet: string, name: string, value: string) =>
+			`.{ .add = .{ .id = "${claimId(facet)}", .statement = "${sid}", .property = "${prop(name)}", .value = ${value} } }`
+		const space = hex(40)
+		const withFacets: GrcOp = {
+			...base,
+			toSpace: id(40),
+			fromSpace: space.toUpperCase().replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5"),
+			toVersion: id(41),
+			fromVersion: id(42),
+			verified: true,
+		}
+
+		const on = translateOps([withFacets], context().ctx, {facets: true})
+		expect(on.intents.slice(2)).toEqual([
+			claim("toSpace", "relationToSpace", `.{ .text = "${hex(40)}" }`),
+			claim("fromSpace", "relationFromSpace", `.{ .text = "${space}" }`),
+			claim("toVersion", "relationToVersion", `.{ .text = "${hex(41)}" }`),
+			claim("fromVersion", "relationFromVersion", `.{ .text = "${hex(42)}" }`),
+			claim("verified", "relationVerified", ".{ .boolean = true }"),
+		])
+		expect(on.stats["relation-facet-claims"]).toBe(5)
+
+		// the same relation again names the same claim statements
+		expect(translateOps([withFacets], context().ctx, {facets: true}).intents).toEqual(on.intents)
+
+		// off: the relation is added exactly as before, and the dropped facets are counted
+		const off = translateOps([withFacets], context().ctx)
+		expect(off.intents).toEqual(translateOps([base], context().ctx).intents)
+		expect(off.stats["relation-facet-claims"]).toBeUndefined()
+		expect(off.stats["relation-facets-dropped"]).toBe(1)
+
+		// a facet at its default writes no claim: none given, or verified false
+		const bare = translateOps([base, {...base, id: id(31), verified: false}], context().ctx, {facets: true})
+		expect(bare.intents).toHaveLength(3)
+		expect(bare.stats["relation-facet-claims"]).toBeUndefined()
+	})
+
+	it("pins the reserved relation-facet property ids", () => {
+		expect(RELATION_FACET_PROPERTY).toEqual({
+			toSpace: conformingId("reserved-property", "relationToSpace"),
+			fromSpace: conformingId("reserved-property", "relationFromSpace"),
+			toVersion: conformingId("reserved-property", "relationToVersion"),
+			fromVersion: conformingId("reserved-property", "relationFromVersion"),
+			verified: conformingId("reserved-property", "relationVerified"),
+		})
 	})
 
 	it("sets a text with a known language with its tag, and one with an unknown language without", () => {
