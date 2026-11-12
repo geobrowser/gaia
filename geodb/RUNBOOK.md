@@ -233,7 +233,8 @@ writes no relation, creates no entity (one geo-db lacks is left to the Space bac
 `/data/feeder/held-repair/`, apart from the Space backfill's. Logs carry counts only, never ids or text.
 
 - `DRY_RUN=1`: reads Postgres and geo-db, logs counts, writes nothing (no geo-db, journal, cursor or space-map write) and
-  skips the Kafka check, so it needs no stopped feeder. Final line `held-repair done`: `candidatePairs`, `entitiesToRepair`,
+  skips the Kafka check, so it needs no stopped feeder, but it still mounts the feeder's ReadWriteOnce state volume
+  (`geodb-feeder-state`), so see "Where the Job runs" below. Final line `held-repair done`: `candidatePairs`, `entitiesToRepair`,
   `valuesToWrite` (the number a real run writes), `valuesAlreadyHeld`, `entitiesAbsent`, `spacesUnmapped`.
 - `DRY_RUN=0`: the same, and writes. Needs the feeder at 0 and the ordering precondition (as §2b). Knobs:
   `BACKFILL_BATCH` (100), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all; the batch cap, for a staged run).
@@ -242,7 +243,8 @@ writes no relation, creates no entity (one geo-db lacks is left to the Space bac
 
 ```bash
 TAG=<the feeder tag deployed now, built from a main that contains this mode>
-# dry run: the feeder may keep running. Expect valuesToWrite close to 1,562 less what geo-db already got.
+# dry run: the feeder may keep running, but the Job must land on the feeder's node (RWO volume; see "Where the Job runs").
+# Expect valuesToWrite close to 1,562 less what geo-db already got.
 sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
   geodb/k8s/v2/geodb-held-repair-job.yaml | $K apply -f -
 $K logs -f job/geodb-held-repair        # "held-repair plan", then "held-repair done"
@@ -260,6 +262,25 @@ $K rollout status deployment/geodb-feeder
 # verify: rerun with __DRY_RUN__ -> 1 (feeder may run): valuesToWrite 0.
 ```
 
+**Where the Job runs (both `geodb-held-repair` and `geodb-relation-seed`).** Both Jobs mount the claim
+`geodb-feeder-state`, a ReadWriteOnce volume, even with `DRY_RUN=1`. An RWO volume attaches to one node, so the Job pod can
+only run on the node the feeder pod is on (seen 11-12: both on the same node). Consequences:
+
+- The dry run needs no stopped feeder, but it does need room on the feeder's node. If that node has no free CPU or memory
+  for the Job's requests (the main container asks 512Mi and 200m, limit 3Gi; the init container 16Mi and 10m), the pod stays
+  `Pending`. Check with `$K get pod -l app=geodb-feeder -o wide` and `$K get pod -l app=<job name> -o wide` (same NODE
+  column), and `$K describe pod -l app=<job name>` (Events: `didn't match`/`Insufficient`; a `Multi-Attach` or
+  `volume node affinity conflict` event means it landed elsewhere). Compare the requests with the node's free capacity
+  (`$K describe node <node>`, "Allocated resources").
+- To place the Job yourself, add `nodeName: <the feeder's node>` to its `spec.template.spec` (it skips the scheduler, so a
+  full node then fails the pod instead of leaving it pending). Any feeder restart while the Job runs must also stay on that
+  node: pin the Deployment with a temporary `nodeSelector` on `kubernetes.io/hostname` and remove it when the Job is done.
+- A real run needs more: the feeder at 0 (it appends to the journal the feeder holds in memory, and refuses to start while
+  the consumer group has members), and then the volume is free, so the Job can land on any node that has room.
+- Do not restart `geodb` (serve) while either Job runs. Its client pipe dies with
+  `geodb-client pipe did not start (... connect: IoError)` and the Job fails. A failed Job resumes from its cursor when
+  deleted and applied again.
+
 ### 2b-quater. Relation-seed (records for relations that predate GEODB_RELATION_POSITIONS)
 
 With `GEODB_RELATION_POSITIONS` on, the feeder moves a relation's position with `set_position`, which names the relation's
@@ -273,10 +294,16 @@ replaces a record the feeder holds, and it writes nothing to geo-db: its only wr
 `known-statements.log` for a statement geo-db holds that the journal lacked). Cursor: `/data/feeder/relation-seed/`.
 
 - `DRY_RUN=1` (required to be set, no default): reads, logs counts, writes no journal line and no cursor, needs no stopped
-  feeder. Final line `relation-seed done`: `relations`, `toSeed` (what a real run records), `alreadyRecorded`, `notOpen`
+  feeder, but it mounts the same RWO volume, so see "Where the Job runs" above. Final line `relation-seed done`: `relations`, `toSeed` (what a real run records), `alreadyRecorded`, `notOpen`
   (geo-db does not hold the statement open: not applied yet, or absent), `withFacets`, `statementsMarked`, `facetsUnreadable`.
 - `DRY_RUN=0`: writes. Needs the feeder at 0 (it appends to the journal the feeder keeps in memory; start the feeder after).
   Knobs: `BACKFILL_BATCH` (100 entities), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all).
+- Progress: the Job logs `relation-seed plan` once (`spaces` is the plan size), then `relation-seed progress` when each Space
+  finishes and at most every 30 s inside a long one. Fields: `spacesDone`/`spacesTotal` (an unmapped or finished Space counts
+  as done), `entities`, `relations`, `toSeed`, `seeded`, `notOpen`, `elapsedSeconds`, `entitiesPerSecond`. Estimate the
+  finish from `entitiesPerSecond` and the entities left (about 2.2M entities across about 1,601 Spaces on testnet); Spaces
+  differ greatly in size, so `spacesDone` alone is a poor clock. Jobs from an image before this logging stay silent until
+  `relation-seed done`.
 - Memory: every record is a line the feeder holds in a map for good. Count `toSeed` first and check the
   feeder's memory limit against it before the real run (not measured here).
 - Idempotent: a rerun reports the seeded relations as `alreadyRecorded`.
@@ -289,6 +316,8 @@ sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
   geodb/k8s/v2/geodb-relation-seed-job.yaml | $K apply -f -
 $K logs -f job/geodb-relation-seed      # "relation-seed plan", then "relation-seed done"
 $K delete job geodb-relation-seed
+$K logs job/geodb-relation-seed | grep '"relation-seed progress"' | tail -1   # spacesDone/spacesTotal, entitiesPerSecond
+# dry run: the Job shares the feeder's RWO volume, so it runs on the feeder's node ($K get pod -o wide; see "Where the Job runs").
 # real run: stop the feeder first (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder back to 1.
 ```
 

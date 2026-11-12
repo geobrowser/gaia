@@ -97,6 +97,21 @@ describe("runRelationSeed", () => {
 		expect(new Store(s.dir).relationOf(sidOf(2))?.facets).toEqual({toSpace: hex(40), verified: "true"})
 	})
 
+	it("logs progress when each Space finishes and at most every 30s inside one", async () => {
+		const lines: Record<string, unknown>[] = []
+		let clock = 0
+		const w = world()
+		const deps: RelationSeedDeps = {...mk(store(), w), now: () => (clock += 20_000), onProgress: (f) => lines.push(f)}
+		await runRelationSeed(deps, OPTS)
+		// the fake clock moves 20s per read, so a mid-Space line appears, plus one for the finished Space
+		const done = lines.filter((l) => l.spaceDone)
+		expect(done).toHaveLength(1)
+		expect(done[0]!).toMatchObject({space: SPACE, spacesTotal: 2, entities: 3, relations: 5, toSeed: 3, seeded: 3})
+		expect(done[0]!.spacesDone).toBe(1)
+		expect(typeof done[0]!.entitiesPerSecond).toBe("number")
+		expect(lines.some((l) => !l.spaceDone)).toBe(true)
+	})
+
 	it("a dry run counts what a real run records and writes no journal line and no cursor", async () => {
 		const s = store()
 		const before = readFileSync(`${s.dir}/known-relations.log`, "utf8")
