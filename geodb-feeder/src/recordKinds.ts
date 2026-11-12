@@ -421,6 +421,13 @@ export const RECORD_COLUMNS = {
 		name: "a76bbfa24cfa43708b89326ae5f72e18",
 		/** Mutable: number, `version_created_at` (unix seconds, 0 when the event has no metadata). */
 		createdAt: "6c74f4f248d249368e1002b4c393a59e",
+		/**
+		 * Mutable: reference to the proposer's entity, `cid("entity", proposer_id)` (the proposer is a Space), written only
+		 * with GEODB_PROPOSAL_VERSION_PROPOSER_SPACE (`proposals.proposed_by`).
+		 */
+		proposer: "e95e27260a364e95877b3973746a9ca6",
+		/** Mutable: reference to the entity of the Space that owns the proposal, `cid("entity", space_id)` (`proposals.space_id`); same flag. */
+		space: "e35197b9528d4b04a7e8583d0c20a5b9",
 	},
 	editMeta: {
 		/** Key: text, the sealing edit id (`HermesEdit.id`, 32 lowercase hex). */

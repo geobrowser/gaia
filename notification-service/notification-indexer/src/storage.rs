@@ -588,10 +588,13 @@ impl Storage {
                 .fetch_optional(&self.pool)
                 .await?;
         if let Some(twin) = &self.twin {
-            twin.observe_proposal_exists(
+            twin.observe_proposal(
                 crate::geodb_twin::PROPOSER,
                 proposal_id,
-                result.is_some(),
+                result.map(|proposer| crate::geodb_twin::ProposalValues {
+                    proposer,
+                    space: None,
+                }),
             );
         }
         Ok(result)
@@ -643,10 +646,13 @@ impl Storage {
             .fetch_optional(&self.pool)
             .await?;
         if let Some(twin) = &self.twin {
-            twin.observe_proposal_exists(
+            twin.observe_proposal(
                 crate::geodb_twin::PROPOSER_AND_SPACE,
                 proposal_id,
-                row.is_some(),
+                row.as_ref().map(|r| crate::geodb_twin::ProposalValues {
+                    proposer: r.get("proposed_by"),
+                    space: Some(r.get("space_id")),
+                }),
             );
         }
         Ok(row.map(|r| (r.get("proposed_by"), r.get("space_id"))))

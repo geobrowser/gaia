@@ -933,6 +933,14 @@ Activation order, each step only after the one before it is live:
 
 Rollback: unset `GEODB_PROPOSAL_VERSIONS`. The records stay in the Space, unread; nothing reads them yet.
 
+Proposer and owning Space (`GEODB_PROPOSAL_VERSION_PROPOSER_SPACE`, default off, shipped as "0" in the feeder manifest and
+the backfill Job): when on, each version record also gets the `proposer` and `space` references (`proposed_by`,
+`space_id`), so the notification-indexer twin can compare values instead of only existence. Order: rerun the backfill Job
+with the flag "1" (it is idempotent and adds the references to records already written; it fails a row whose proposal
+lacks a proposer or space), then set the flag "1" on the feeder. The Job writes the proposal-level proposer to every
+version of a proposal, while the feeder writes the event's own proposer. Until the flag is on the twin reports
+`values_not_stored` as Unsupported, not as a mismatch.
+
 ### 2c-novies. Keyed proposal status facts (GEODB_PROPOSAL_STATUS)
 
 Read this first: **gaia stores no proposal status, so this does not mirror one.** `proposals` has no status column. The

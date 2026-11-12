@@ -40,7 +40,7 @@ export type Config = {
 	/** GEODB_ENTITY_FEED_CONFIG (with GEODB_RECORD_KEYS): entity_type_weights, entity_type_exclusions and entity_feed_blocklist as keyed records, by backfill only (entityFeedConfigKeyed.ts). */
 	entityFeedConfig: {enabled: boolean}
 	/** GEODB_PROPOSAL_VERSIONS (with GEODB_RECORD_KEYS): keyed proposal versions from `space.governance` (proposalVersionsKeyed.ts). */
-	proposalVersions: {enabled: boolean; topic: string; groupId: string}
+	proposalVersions: {enabled: boolean; topic: string; groupId: string; storeProposerSpace: boolean}
 	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
 	proposalStatus: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_RANKS (with GEODB_RECORD_KEYS): keyed ranking blocks, rankings and ranking items from `knowledge.edits` (ranksKeyed.ts). */
@@ -266,6 +266,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_VERSIONS),
 			topic: env.KAFKA_PROPOSAL_VERSIONS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSAL_VERSIONS_GROUP_ID ?? `geodb-feeder-proposal-versions-keyed-v1-${environment}`,
+			/**
+			 * GEODB_PROPOSAL_VERSION_PROPOSER_SPACE: also write the event's proposer and owning Space onto each version
+			 * record (proposalVersionsKeyed.ts), for the notification-indexer twin to compare. Read by the consumer and by
+			 * the proposal-versions backfill Job. Only meaningful with GEODB_PROPOSAL_VERSIONS. Default off.
+			 */
+			storeProposerSpace: flag(env.GEODB_PROPOSAL_VERSION_PROPOSER_SPACE),
 		},
 		proposalStatus: {
 			/**

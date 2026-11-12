@@ -18,15 +18,16 @@
 //! - `member_or_editor` (`is_member_or_editor`): the same card, editor and member edges.
 //! - `voters` (`find_voters_for_proposal`): the proposal's vote records in the `votes` system Space,
 //!   found by backlinks to the proposal entity, each read for its voter.
-//! - `proposer`, `proposer_and_space` (existence only): whether the proposal has a version record
-//!   in the `governance` system Space.
+//! - `proposer`, `proposer_and_space` (`find_proposer_for_proposal`, `find_proposal_proposer_and_space`):
+//!   whether the proposal has a version record in the `governance` system Space and, when Postgres
+//!   returned a row, whether the version records' `proposer` (and `space`) references name the same
+//!   proposer (and owning Space). Those references are written only when the feeder runs with
+//!   `GEODB_PROPOSAL_VERSION_PROPOSER_SPACE`; a proposal whose version records hold none is
+//!   `unsupported` (`values_not_stored`), never a mismatch.
 //! - `expired_proposals` (`find_expired_proposals`): for each row Postgres returned, whether the
 //!   proposal's latest version record and status record also say "ended, not executed".
 //!
 //! Left on Postgres only, each for a reason:
-//! - the proposer (`proposed_by`) and owning Space (`proposals.space_id`) values: no record holds
-//!   them (a version record carries settings and times, a vote record the voting Space but not the
-//!   proposal's owner), so only existence can be twinned.
 //! - the reverse of the expiry scan (a proposal geo-db says expired that Postgres did not list):
 //!   geo-db has no read that lists proposals, so it cannot be enumerated; the twin only judges rows
 //!   Postgres listed. The outbox anti-join half of the query is a table geo-db mirrors elsewhere.
@@ -85,10 +86,13 @@ pub mod pinned {
     /// `ROLE_PROPERTY.editor` and `.member`: `conformingId("membership-property", role)`.
     pub const EDITOR_PROPERTY: &str = "79c3a498486641bc930f3b973de4b4d3";
     pub const MEMBER_PROPERTY: &str = "dbe3bdf637a5458d9206d737fb104793";
-    /// `RECORD_COLUMNS.proposalVersion`: `proposal` (key reference), `block` (key), `endTime`.
+    /// `RECORD_COLUMNS.proposalVersion`: `proposal` (key reference), `block` (key), `endTime`, and the
+    /// flag-gated `proposer` and `space` references.
     pub const VERSION_PROPOSAL: &str = "c42be9e340d14566b2b9f084004c748b";
     pub const VERSION_BLOCK: &str = "bccb84d7017849b0babfa7444789068f";
     pub const VERSION_END_TIME: &str = "72d87497d7ed49db81e31675a31c5da7";
+    pub const VERSION_PROPOSER: &str = "e95e27260a364e95877b3973746a9ca6";
+    pub const VERSION_SPACE: &str = "e35197b9528d4b04a7e8583d0c20a5b9";
     /// `proposalStatus`: `proposal` (key reference), `executedAt`.
     pub const STATUS_PROPOSAL: &str = "4f742a5f821a469c9c0be0b352ae5b67";
     pub const STATUS_EXECUTED_AT: &str = "ed3855a3c41b4f749651bf049dabac0b";
@@ -505,9 +509,88 @@ async fn proposal_has_version(
     Ok(links.iter().any(|(p, _)| p == VERSION_PROPOSAL))
 }
 
-/// Twin of `find_proposer_for_proposal` and `find_proposal_proposer_and_space`, existence only:
-/// Postgres answered a row (`Some`) or none (`None`); geo-db says whether the proposal has a
-/// version record. The proposer and Space values are not in any record (see the module doc).
+/// What Postgres answered for a proposer lookup that found a row: `proposals.proposed_by`, and
+/// `proposals.space_id` when the lookup also read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProposalValues {
+    pub proposer: Uuid,
+    pub space: Option<Uuid>,
+}
+
+/// Twin of `find_proposer_for_proposal` and `find_proposal_proposer_and_space`. With no row from
+/// Postgres, geo-db must hold no version record either. With a row, geo-db must hold a version
+/// record and its `proposer` (and, when `sql.space` is set, `space`) references must name the
+/// values Postgres returned. A proposal whose records hold no such reference (written only with the
+/// feeder's `GEODB_PROPOSAL_VERSION_PROPOSER_SPACE`) is `unsupported`, not a mismatch.
+pub async fn compare_proposal_values(
+    reader: &dyn GeoDbReader,
+    spaces: &Spaces,
+    proposal: &Uuid,
+    sql: Option<ProposalValues>,
+) -> Vec<Verdict> {
+    let Some(sql) = sql else {
+        return compare_proposal_exists(reader, spaces, proposal, false).await;
+    };
+    let Some(governance) = spaces.system("governance") else {
+        return vec![Verdict::Unsupported("system_space_missing")];
+    };
+    let result = async {
+        let links = read_backlinks(reader, governance, &entity_ref(proposal)).await?;
+        if links.len() >= MAX_BACKLINKS {
+            return Ok(Verdict::Unsupported("too_many_links"));
+        }
+        let versions: Vec<String> = links
+            .iter()
+            .filter(|(p, _)| p == VERSION_PROPOSAL)
+            .map(|(_, f)| f.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if versions.is_empty() {
+            return Ok(Verdict::Mismatch("missing_in_geodb"));
+        }
+        let cards = read_cards(reader, governance, &versions).await?;
+        let held = |property: &str| -> BTreeSet<String> {
+            versions
+                .iter()
+                .flat_map(|id| refs(cards.get(id).map_or(&[][..], Vec::as_slice), property))
+                .collect()
+        };
+        let mut checks = vec![(
+            VERSION_PROPOSER,
+            entity_ref(&sql.proposer),
+            "proposer_differs",
+        )];
+        if let Some(space) = &sql.space {
+            checks.push((VERSION_SPACE, entity_ref(space), "space_differs"));
+        }
+        let mut verdict = Verdict::Match;
+        for (property, expected, why) in checks {
+            let got = held(property);
+            let one = if got.is_empty() {
+                Verdict::Unsupported("values_not_stored")
+            } else if got.len() == 1 && got.contains(&expected) {
+                Verdict::Match
+            } else {
+                Verdict::Mismatch(why)
+            };
+            // A mismatch outranks an unsupported check, which outranks a match; the first of a kind wins.
+            verdict = match (verdict, one) {
+                (Verdict::Mismatch(w), _) => Verdict::Mismatch(w),
+                (_, Verdict::Mismatch(w)) => Verdict::Mismatch(w),
+                (Verdict::Unsupported(w), _) => Verdict::Unsupported(w),
+                (Verdict::Match, other) => other,
+                (other, _) => other,
+            };
+        }
+        Ok::<_, TwinError>(verdict)
+    }
+    .await;
+    vec![result.unwrap_or(Verdict::Failed)]
+}
+
+/// Existence only: Postgres answered a row (`sql_exists`) or none; geo-db says whether the
+/// proposal has a version record. Also the no-row half of [`compare_proposal_values`].
 pub async fn compare_proposal_exists(
     reader: &dyn GeoDbReader,
     spaces: &Spaces,
@@ -749,15 +832,16 @@ impl GeoDbTwin {
         });
     }
 
-    /// After a proposer lookup (`read` is [`PROPOSER`] or [`PROPOSER_AND_SPACE`]) found a row or not.
-    pub fn observe_proposal_exists(
+    /// After a proposer lookup (`read` is [`PROPOSER`] or [`PROPOSER_AND_SPACE`]) answered `sql`
+    /// (`None`: no row).
+    pub fn observe_proposal(
         self: &Arc<Self>,
         read: &'static str,
         proposal: Uuid,
-        exists: bool,
+        sql: Option<ProposalValues>,
     ) {
         self.launch(read, move |r, s| async move {
-            compare_proposal_exists(r.as_ref(), &s, &proposal, exists).await
+            compare_proposal_values(r.as_ref(), &s, &proposal, sql).await
         });
     }
 
