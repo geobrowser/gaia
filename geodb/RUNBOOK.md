@@ -1032,19 +1032,6 @@ same ids).
 
 Rollback: unset `GEODB_RANKS`. The records stay in the Space, unread; nothing reads them yet.
 
-### 2c-duodecies. Keyed edit meta (GEODB_EDIT_META)
-
-`GEODB_EDIT_META` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `edit_versions.block_number`,
-`sequence` and `name` as one natural-key record per edit in the `governance` system Space
-(`geodb-feeder/src/editMetaKeyed.ts`; the pinned `editMeta` kind). It is its own consumer group on `<env>.knowledge.edits`
-(`geodb-feeder-edit-meta-keyed-v1-<env>`, override `KAFKA_EDIT_META_GROUP_ID`), which needs the same Kafka ACL as the edits
-consumer's group, and reads the envelope only. An edit with no `meta` writes no record, as kg-indexer writes no row. Design:
-geo-db plan 10.22 section 22.
-
-Check: `gaia_api_edit_meta_shadow_total{result}` with `GEODB_EDIT_META_SHADOW=on` on the api once the consumer has caught up.
-
-Rollback: unset `GEODB_EDIT_META`. The records stay in the Space, unread; nothing reads them yet.
-
 ### 2c-undecies. Keyed space topics (GEODB_SPACE_TOPICS)
 
 `GEODB_SPACE_TOPICS` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `spaces.topic_id`, the column

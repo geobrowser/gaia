@@ -70,8 +70,6 @@ export const RECORD_KINDS = {
 	entityTypeExclusion: {id: "b3d4c18e3754433c95d3e31f628dca75", family: "config", table: "entity_type_exclusions"},
 	/** `entity_feed_blocklist`: one record per blocked `entity_id` (uuid key); a presence record with an optional `reason`. */
 	entityFeedBlock: {id: "1f351a8ff80c4a8c9c6c01b830d60a6f", family: "config", table: "entity_feed_blocklist"},
-	/** `edit_versions` (block_number, sequence, name): a record keyed by the sealing edit id; mutable columns written by `put`. */
-	editMeta: {id: "cc660587787041049babf9da7f029485", family: "governance", table: "edit_versions (block_number, sequence, name)"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -421,15 +419,5 @@ export const RECORD_COLUMNS = {
 		name: "a76bbfa24cfa43708b89326ae5f72e18",
 		/** Mutable: number, `version_created_at` (unix seconds, 0 when the event has no metadata). */
 		createdAt: "6c74f4f248d249368e1002b4c393a59e",
-	},
-	editMeta: {
-		/** Key: text, the sealing edit id (`HermesEdit.id`, 32 lowercase hex). */
-		editId: "6f0f639e8505469fa4b789751a4e5c43",
-		/** Mutable: number, `block_number` (the chain block, `meta.block_number`). */
-		block: "27bd10d8489e4299a244afdfcbf079ed",
-		/** Mutable: number, `sequence` (order within the block, `meta.sequence`). */
-		sequence: "991fc3cc35a34d1393bbbecb613672cb",
-		/** Mutable: text, `name` (kg-indexer's cut: at most 256 bytes); absent when the edit has no name. */
-		name: "7f65c9f311f346a984cb125e7d9db946",
 	},
 } as const satisfies Record<string, Record<string, string>>
