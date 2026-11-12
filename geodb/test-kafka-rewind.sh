@@ -3,7 +3,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 fx="$here/testdata/kafka-rewind"
-# shellcheck source=kafka-rewind.sh
+# shellcheck disable=SC1091
 source "$here/kafka-rewind.sh"
 fail=0
 check() { if [[ "$2" == "$3" ]]; then echo "ok   $1"; else echo "FAIL $1"; echo "  want: $3"; echo "  got:  $2"; fail=1; fi; }
@@ -32,8 +32,8 @@ if group_info kg-indexer >/dev/null 2>&1; then check "unknown group rejected" ac
 
 # 6. the CLI: offline dry run prints the plan and the command and never executes; --yes offline is refused
 out=$("$here/kafka-rewind.sh" --group kg-indexer-v8-testnet --to 2026-11-12T06:30:00Z --plan-from "$fx")
-grep -q 'DRY RUN: nothing was changed' <<<"$out" && grep -q -- '--reset-offsets --from-file /tmp/plan.csv --execute' <<<"$out" \
-  && check "dry run output" ok ok || check "dry run output" bad ok
+if grep -q 'DRY RUN: nothing was changed' <<<"$out" && grep -q -- '--reset-offsets --from-file /tmp/plan.csv --execute' <<<"$out"; then
+  check "dry run output" ok ok; else check "dry run output" bad ok; fi
 if "$here/kafka-rewind.sh" --group kg-indexer-v8-testnet --to 2026-11-12T06:30:00Z --plan-from "$fx" --yes >/dev/null 2>&1; then
   check "--yes refused offline" accepted refused; else check "--yes refused offline" refused refused; fi
 
