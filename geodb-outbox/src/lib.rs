@@ -174,6 +174,14 @@ pub enum MirrorError {
 }
 
 impl MirrorError {
+    /// Whether this is a refusal the client answered with a `code=<Token> ...` body (geo-db
+    /// 28d9d7501f and later). Such a refusal is a per-request answer and the work pipe stays
+    /// open after it; an older client's refusal has no code and is followed by the child
+    /// exiting.
+    fn is_coded_refusal(&self) -> bool {
+        matches!(self, MirrorError::Refused(body) if body.starts_with("code="))
+    }
+
     /// Whether a refused `has` means the probe does not exist on this client or node, as opposed
     /// to a real refusal (no access, class off). An older client answers an unknown pipe verb
     /// with its `want ...` list, which does not name `has`; an older node answers the opcode
@@ -436,7 +444,9 @@ impl Worker {
     ) -> Result<String, MirrorError> {
         let reused = self.pipe.is_some();
         match self.call(line, max_body).await {
-            Err(e) if reused && !matches!(e, MirrorError::CoolingDown) => {
+            // A coded refusal is the node's answer on a live pipe: replaying would send the line
+            // twice to get the same answer.
+            Err(e) if reused && !matches!(e, MirrorError::CoolingDown) && !e.is_coded_refusal() => {
                 metrics::counter!("geodb_outbox_mirror_reconnects_total").increment(1);
                 info!(
                     event = "geodb_outbox.pipe_lost",
@@ -451,7 +461,8 @@ impl Worker {
     }
 
     /// One request line (ending in `\n`) and its `+` frame's body, at most `max_body` bytes.
-    /// Starts the child on first use; a failure drops it and cools down.
+    /// Starts the child on first use; a failure drops it and cools down, except a coded refusal
+    /// (`code=` body), which keeps the child.
     pub(crate) async fn call(
         &mut self,
         line: &str,
@@ -493,9 +504,16 @@ impl Worker {
                 self.failed_at = None;
                 Ok(body)
             }
+            Err(e) if e.is_coded_refusal() => {
+                // The client answered `-code=<Token> ...` and is still serving the pipe: keep the
+                // child, with no cool-down. The caller sees the refusal.
+                self.failed_at = None;
+                Err(e)
+            }
             Err(e) => {
-                // A refusal or error leaves the tool exiting; drop it (kill on drop) and respawn
-                // after the cool-down.
+                // Any other error, or a refusal without a code (an older client, which then
+                // exits), leaves the pipe unusable; drop it (kill on drop) and respawn after the
+                // cool-down.
                 self.pipe = None;
                 self.failed_at = Some(Instant::now());
                 Err(e)
@@ -1073,6 +1091,72 @@ mod tests {
             w.enter(&unit()).await,
             Err(MirrorError::CoolingDown)
         ));
+    }
+
+    // A client that answers every line with `+8 entered` unless the line is the second, which it
+    // refuses with `body`; it logs each line it reads.
+    fn refusing_second(log: &std::path::Path, body: &str) -> String {
+        format!(
+            "echo ready; n=0; while IFS= read -r l; do printf '%s\\n' \"$l\" >> {log}; n=$((n+1)); \
+             if [ $n -eq 2 ]; then printf -- '-{len}\\n%s' '{body}'; else printf '+8\\nentered\\n'; fi; done",
+            log = log.display(),
+            len = body.len(),
+        )
+    }
+
+    fn lines(log: &std::path::Path) -> usize {
+        std::fs::read_to_string(log).map_or(0, |s| s.lines().count())
+    }
+
+    #[tokio::test]
+    async fn a_coded_refusal_keeps_the_child_without_cooldown_or_replay() {
+        let log = tmp("coded-log");
+        let mut w = worker(
+            &refusing_second(&log, "code=NotFoundOrRestricted no access"),
+            Duration::from_secs(60),
+        );
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        // The second enter is refused with a code on the reused pipe: no replay (one more line
+        // read, not two), and the child is still there.
+        assert!(matches!(
+            w.enter(&unit()).await,
+            Err(MirrorError::Refused(b)) if b.starts_with("code=")
+        ));
+        assert_eq!(lines(&log), 2);
+        assert!(w.pipe.is_some());
+        // The third goes straight to the same child despite a minute-long cool-down.
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        assert_eq!(lines(&log), 3);
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn a_long_coded_refusal_is_a_refusal_not_a_bad_frame() {
+        let log = tmp("long-coded-log");
+        let body = format!("code=Busy {}", "x".repeat(3000));
+        let mut w = worker(&refusing_second(&log, &body), Duration::from_secs(60));
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        assert!(matches!(
+            w.enter(&unit()).await,
+            Err(MirrorError::Refused(b)) if b == body
+        ));
+        assert!(w.pipe.is_some());
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn an_uncoded_refusal_on_a_reused_pipe_still_drops_the_child() {
+        let log = tmp("uncoded-log");
+        let mut w = worker(
+            &refusing_second(&log, "NotFoundOrRestricted"),
+            Duration::from_secs(60),
+        );
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        // Old behaviour: the reused pipe's failure is replayed once on a fresh child, which
+        // answers its own first line `entered`, so the unit lands.
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        assert_eq!(lines(&log), 3);
+        let _ = std::fs::remove_file(&log);
     }
 
     // The first child answers one enter, then dies; the second answers every enter.
