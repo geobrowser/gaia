@@ -2165,6 +2165,43 @@ geodb image whose `geodb-client work pipe` knows `claim` and `complete` (geo-db 
 pipe takes claim, complete, retry and fail"); bump the pinned tag in `delivery-worker.yaml` to it first.
 Turn it on after the indexer's mirror has been running, as a separate change.
 
+### Claiming deliveries from the work class (delivery-worker, `DELIVERY_WORKER_CLAIM_SOURCE=geodb`)
+
+Off by default. When it is `geodb` the worker claims, delivers and settles units over the held `work pipe`
+and never claims from Postgres (plan 10.16, GAP-15; plan 22 section 28 for the two homes below).
+
+- **Webhook url and secret** come from the mounted `app-webhooks` Secret (`APP_WEBHOOKS_FILE`, live since
+  2026-11-06) and nowhere else: a unit carries only the webhook id. The worker refuses to start in this mode
+  if `APP_WEBHOOKS_FILE` is unset, so there is no `app_webhooks` read to forget. After any webhook change
+  re-run `notification-service/scripts/export-app-webhooks.sh`. A webhook missing from the file fails its unit.
+- **`last_error`** is not stored (W6). Each non-2xx answer or network error is one `warn` line from the worker
+  (`Webhook answered non-success` with `status`, or `Webhook request failed` with `error`, both with `webhook_id`
+  and `attempts`). Nothing reads the old column.
+- **Do the history check first, before the flag is ever set.** Units are claimed whatever their history, so a
+  geo-db pending count above Postgres's undelivered count means the flip redelivers notifications Postgres
+  already delivered (the `outbox-replay` above enters rows regardless of delivery state). Both reads are
+  read-only and start no pod or Job.
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+# geo-db side: counts of the work class, over the delivery-worker's own key and binding (exec into the
+# running pod; it has the geodb-client and the work=* principal). pending + in_progress is the undelivered side.
+$K exec deploy/delivery-worker -- /geodb/geodb-client --key /etc/geodb/key/outbox.key \
+  --binding /geodb/binding.txt work counts
+# the same numbers without a key, from serve's metrics: geodb_work_pending, geodb_work_open_rows,
+# geodb_work_failed (apiserver proxy to the geodb-0 metrics port, as for the other geodb_* gauges)
+
+# Postgres side: read-only, from a psql session or the DO console with a read-only user (never a new pod):
+#   SELECT status, count(*) FROM notification_deliveries GROUP BY status ORDER BY status;
+# undelivered = pending + in_progress
+```
+
+  Go only when geo-db `pending + in_progress` equals Postgres `pending + in_progress` (a difference of the few
+  units in flight is fine; a difference of hundreds is not) and `delivery_worker_shadow_total{result="miss"}`
+  has been flat since the last `outbox-replay`. If geo-db is higher, do not flip: find which side holds the
+  extra rows (`extra` in the shadow counter) and retire them with `work expire` or a replay of only the
+  undelivered window. Roll back by unsetting the flag; units claimed meanwhile are acknowledged in geo-db only.
+
 ## 12. The score writers' key (derived collections 0, 1, 11): enabling GEODB_DERIVED_MIRROR
 
 The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-indexer carry the `geodb-setup` init

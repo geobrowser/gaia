@@ -161,6 +161,11 @@ async fn async_main() -> Result<(), WorkerError> {
         match geodb_claim::claim_source_from(env::var(geodb_claim::ENV_VAR).ok().as_deref()) {
             ClaimSource::Postgres => None,
             ClaimSource::GeoDb => {
+                geodb_claim::require_webhooks_file(
+                    ClaimSource::GeoDb,
+                    storage.uses_webhooks_file(),
+                )
+                .map_err(|m| WorkerError::Config(m.into()))?;
                 let cfg = geodb_claim::config_from(|k| env::var(k).ok()).ok_or_else(|| {
                 WorkerError::Config(
                     "DELIVERY_WORKER_CLAIM_SOURCE=geodb needs GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
@@ -386,6 +391,16 @@ async fn process_geodb_unit(
         }
         (Some(bytes), Some((url, secret))) => {
             let result = deliver_webhook(client, &url, &secret, &bytes).await;
+            // last_error is not stored by the work class (plan 10.16 W6); this line is its home.
+            match &result {
+                Ok(status) if !is_success(*status) => {
+                    warn!(%webhook_id, status, attempts = unit.attempts, "Webhook answered non-success")
+                }
+                Err(e) => {
+                    warn!(%webhook_id, error = %e, attempts = unit.attempts, "Webhook request failed")
+                }
+                _ => {}
+            }
             let d = geodb_claim::decide(unit.attempts, max_retries, &result.map_err(|_| ()));
             let o = match d {
                 Decision::Delivered => DeliveryOutcome::Delivered,

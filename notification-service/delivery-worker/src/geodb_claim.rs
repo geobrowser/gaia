@@ -14,9 +14,11 @@
 //!
 //! There is no reaper: a unit whose worker died is claimed again once its lease lapses, with a
 //! new epoch, and the dead worker's `retry` or `fail` then answers `lease_lost` and changes
-//! nothing. The webhook url and secret still come from `app_webhooks` (or the mounted file) by
-//! the webhook id in the unit's key; a webhook that is gone fails the unit. `last_error` is not
-//! stored by the work class (W6) and goes to the log line only.
+//! nothing. The webhook url and secret come from the mounted `app-webhooks` file by the webhook
+//! id in the unit's key (the worker refuses to start in this mode without `APP_WEBHOOKS_FILE`,
+//! so there is no `app_webhooks` read); a webhook that is gone fails the unit. `last_error` is
+//! not stored by the work class (W6) and goes to the log line only (`delivery_worker::geodb`
+//! warn lines carry the HTTP status or the network error).
 //!
 //! The shadow reader (`GEODB_OUTBOX_SHADOW_READ`) completes units from the same class, so the
 //! two must not run together: `main` turns the shadow off when this is on.
@@ -52,6 +54,19 @@ pub fn claim_source_from(value: Option<&str>) -> ClaimSource {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("geodb") => ClaimSource::GeoDb,
         _ => ClaimSource::Postgres,
+    }
+}
+
+/// In geo-db claim mode the webhook url and secret come from the mounted `app-webhooks` file and
+/// nowhere else (plan 22, section 28): the unit carries only the webhook id, and a fallback to
+/// the `app_webhooks` table would keep a Postgres read the cutover is meant to remove. `Err`
+/// names what is missing, so the worker stops at startup instead of failing every unit later.
+pub fn require_webhooks_file(source: ClaimSource, file_in_use: bool) -> Result<(), &'static str> {
+    match (source, file_in_use) {
+        (ClaimSource::GeoDb, false) => Err(
+            "DELIVERY_WORKER_CLAIM_SOURCE=geodb needs APP_WEBHOOKS_FILE (the app-webhooks Secret); it does not read app_webhooks",
+        ),
+        _ => Ok(()),
     }
 }
 
@@ -221,6 +236,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn geodb_mode_requires_the_webhooks_file() {
+        assert!(require_webhooks_file(ClaimSource::GeoDb, false).is_err());
+        assert!(require_webhooks_file(ClaimSource::GeoDb, true).is_ok());
+        assert!(require_webhooks_file(ClaimSource::Postgres, false).is_ok());
+        assert!(require_webhooks_file(ClaimSource::Postgres, true).is_ok());
+    }
 
     type Rows = BTreeMap<[u8; KEY_BYTES], (State, u32)>;
 
