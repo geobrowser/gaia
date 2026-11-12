@@ -25,8 +25,10 @@ import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointRead
 import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
 import {
 	createBestOrderResolver,
+	createEntityColumnsResolver,
 	createTypeCountsResolver,
 	ENTITIES_IN_BEST_ORDER_FIELD,
+	entityColumnsFirst,
 	TOPIC_FEED_TYPE_COUNTS_FIELD,
 } from "./src/gateway/rankedReadsServe"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
@@ -297,6 +299,8 @@ const gatewayServeTypeCounts =
 	gatewayConfig.mode === "on" &&
 	fieldModeOf(gatewayConfig, TOPIC_FEED_TYPE_COUNTS_FIELD) === "on" &&
 	rankedReadsListed.has("typeCounts")
+// `entity(id) { upvotes ... }` shares the entity root, so it needs entity=on in GRAPHQL_GATEWAY_FIELDS and `entityColumns` listed.
+const gatewayServeEntityColumns = gatewayServeEntity && rankedReadsListed.has("entityColumns")
 
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
 const geoDbCardConfig = readGeoDbCardConfig(process.env)
@@ -686,17 +690,26 @@ const rankTypedObserver =
 const gatewayResolvers = new Map<string, FieldResolver>()
 if (sharedGeoDb) {
 	if (gatewayServeEntity) {
+		const entityResolver = createEntityResolver({
+			...sharedGeoDb,
+			// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
+			gaiaIdsOf: withIdMapTwin(createGaiaIdMap(idMapQuery(db)), {
+				client: sharedGeoDb.geoDb,
+				config: readIdMapTwinConfig(process.env),
+				log,
+			}),
+		})
 		gatewayResolvers.set(
 			ENTITY_FIELD,
-			createEntityResolver({
-				...sharedGeoDb,
-				// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
-				gaiaIdsOf: withIdMapTwin(createGaiaIdMap(idMapQuery(db)), {
-					client: sharedGeoDb.geoDb,
-					config: readIdMapTwinConfig(process.env),
-					log,
-				}),
-			}),
+			gatewayServeEntityColumns
+				? entityColumnsFirst(
+						createEntityColumnsResolver(
+							rankedReadsServe,
+							createPostgresScoresPorts(db, createDerivedReader(geoDbCardConfig)),
+						),
+						entityResolver,
+					)
+				: entityResolver,
 		)
 	}
 	if (gatewayServeBestOrder) {
