@@ -353,6 +353,15 @@ spec:
             items:
               - key: key
                 path: writer.key
+        # The CURSOR key for the applied-block mirror (GEODB_APPLIED_BLOCK). optional: absent or unread while the flag is off.
+        - name: cursor-key
+          secret:
+            secretName: geodb-cursor-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: cursor.key
       initContainers:
         # Copies geodb-client from the pinned geodb image and writes the client binding: a TCP listener
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
@@ -500,6 +509,13 @@ spec:
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES
               value: "1"
+            # Applied-block mirror (appliedBlock.ts): off. Unset already reads as off; explicit so turning it on is a
+            # one-value diff. With "1" the feeder writes the geo-db cursors row geodb-feeder-applied using the
+            # geodb-cursor-key mounted below (derived=10 only); the path is read only when the flag is on.
+            - name: GEODB_APPLIED_BLOCK
+              value: "0"
+            - name: GEODB_APPLIED_BLOCK_KEY_PATH
+              value: /etc/geodb/cursor-key/cursor.key
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
@@ -546,6 +562,9 @@ spec:
               readOnly: true
             - name: writer-key
               mountPath: /etc/geodb/writer-key
+              readOnly: true
+            - name: cursor-key
+              mountPath: /etc/geodb/cursor-key
               readOnly: true
           livenessProbe:
             httpGet:

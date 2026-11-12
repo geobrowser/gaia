@@ -129,6 +129,9 @@ spec:
               mountPath: /etc/geodb/key
               readOnly: true
           env:
+            # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+            - name: HERMES_PIPELINE_PG_WRITES
+              value: "1"
             # Object-store home for the Postgres blob tables (zero-Postgres, plan 10.22 section 6). Every flag is
             # "0": nothing reads or writes the bucket until one is flipped to "1". Credentials come only from the
             # geodb-blob-key Secret (optional, so a pod starts without it while the flags are off).

@@ -137,6 +137,9 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
+                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+                - name: RANKING_INDEXER_PG_WRITES
+                  value: "1"
                 # Copy the day's claim_overlap_samples row into geo-db derived collection 14 (RUNBOOK section
                 # 2f-primer), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
