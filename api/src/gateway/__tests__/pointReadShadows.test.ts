@@ -1,7 +1,8 @@
+import {createHash} from "node:crypto"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {rowsFromGeoDbOutput} from "../../geodb/card"
-import {GeoDbError} from "../../geodb/client"
+import {facetDiff, RELATION_FACET_PROPERTIES, relationFacetsOf, rowsFromGeoDbOutput} from "../../geodb/card"
+import {cardDocument, GeoDbError} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
 import {createGateway} from "../gateway"
 import {
@@ -631,5 +632,174 @@ describe("unsupported shape metric", () => {
 		expect(lines).toContain(
 			'gaia_api_gateway_shadow_unsupported_shape_total{field="entities",reason="args",shape="other"} 7',
 		)
+	})
+})
+
+describe("relation facets shadow", () => {
+	const vars = {id: A, spaceId: SPACE}
+	const FACETS = `query One($id: UUID!, $spaceId: UUID) { relation(id: $id) { id spaceId fromEntityId typeId toEntityId toSpaceId verified } }`
+	const FACETED_LIST = `query Some($ids: [UUID!]) { relations(filter: {id: {in: $ids}}) { id spaceId fromEntityId typeId toEntityId toSpaceId verified } }`
+	const TO_SPACE = "33333333-3333-4333-8333-333333333333"
+	const node = (over: Record<string, unknown> = {}) => ({
+		id: A,
+		spaceId: SPACE,
+		fromEntityId: B,
+		typeId: REL_TYPE,
+		toEntityId: PERSON,
+		toSpaceId: TO_SPACE,
+		verified: true,
+		...over,
+	})
+	const edgeRows = [`${REL_TYPE}\t${PERSON}\t${hex(A)}\t${hex(B)}\t1`]
+	/** A relations-with-claims read: the relation's row once per claim, `none` where it has none. */
+	const claimRows = (claims: [string, string][]) =>
+		(claims.length ? claims : [["-", "-"] as [string, string]])
+			.map(([prop, raw]) => `${REL_TYPE}\t${PERSON}\t${hex(A)}\t${hex(B)}\t${prop}\t${raw}\t1`)
+			.join("\n")
+	const both: [string, string][] = [
+		[RELATION_FACET_PROPERTIES.toSpace, hex(TO_SPACE)],
+		[RELATION_FACET_PROPERTIES.verified, "true"],
+	]
+
+	function facetSetup(claims: [string, string][], on = true) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const readCard = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
+			rowsFromGeoDbOutput(entityId === hex(B) ? edgeRows.join("\n") : "", entityId),
+		)
+		const readRelationClaims = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
+			rowsFromGeoDbOutput(claimRows(claims), entityId, {claims: true, claimCells: true}),
+		)
+		const shadows = createPointReadShadows({
+			geoDb: {readCard, readRelationClaims},
+			geoSpaceOf: async (space) => (space === hex(SPACE) ? GEO_SPACE : null),
+			log,
+			...(on ? {relationFacets: true} : {}),
+		})
+		return {shadows, log, readRelationClaims}
+	}
+
+	it("matches when geo-db holds the to-space and verified claims", async () => {
+		const {shadows, readRelationClaims} = facetSetup(both)
+		await run(shadows, "relation", FACETS, {data: {relation: node()}}, vars)
+		expect(totals("relation")).toEqual({match: 1})
+		expect(readRelationClaims).toHaveBeenCalledWith(expect.objectContaining({entityId: hex(B)}))
+	})
+
+	it("reads a Postgres Space id with dashes against geo-db's compact one", async () => {
+		const {shadows} = facetSetup(both)
+		await run(shadows, "relation", FACETS, {data: {relation: node({toSpaceId: TO_SPACE.toUpperCase()})}}, vars)
+		expect(totals("relation")).toEqual({match: 1})
+	})
+
+	it("matches a relation with the default facets and no claims", async () => {
+		const {shadows} = facetSetup([])
+		await run(shadows, "relation", FACETS, {data: {relation: node({toSpaceId: null, verified: false})}}, vars)
+		expect(totals("relation")).toEqual({match: 1})
+	})
+
+	it("is a mismatch when geo-db lacks the claims, and names what differs", async () => {
+		const {shadows, log} = facetSetup([])
+		await run(shadows, "relation", FACETS, {data: {relation: node()}}, vars)
+		expect(totals("relation")).toEqual({mismatch: 1})
+		expect(log.warn).toHaveBeenCalledWith(
+			"gateway relation shadow mismatch",
+			expect.objectContaining({
+				first: {
+					facets: expect.objectContaining({
+						diff: {
+							toSpace: {postgres: hex(TO_SPACE), geoDb: null},
+							verified: {postgres: true, geoDb: null},
+						},
+					}),
+				},
+			}),
+		)
+	})
+
+	it("is a mismatch when geo-db holds another Space, or a verified Postgres lacks", async () => {
+		const other: [string, string][] = [[RELATION_FACET_PROPERTIES.toSpace, hex(SPACE)]]
+		const {shadows} = facetSetup(other)
+		await run(shadows, "relation", FACETS, {data: {relation: node({verified: false})}}, vars)
+		expect(totals("relation")).toEqual({mismatch: 1})
+		__resetGatewayMetricsForTests()
+		const extra = facetSetup([...both, [RELATION_FACET_PROPERTIES.verified, "true"]])
+		await run(
+			extra.shadows,
+			"relation",
+			FACETS,
+			{data: {relation: node({verified: false, toSpaceId: TO_SPACE})}},
+			vars,
+		)
+		expect(totals("relation")).toEqual({mismatch: 1})
+	})
+
+	it("leaves the facets alone when the shadow is off", async () => {
+		const {shadows, readRelationClaims} = facetSetup([], false)
+		await run(shadows, "relation", FACETS, {data: {relation: node()}}, vars)
+		expect(totals("relation")).toEqual({match: 1})
+		expect(readRelationClaims).not.toHaveBeenCalled()
+	})
+
+	it("checks a relations list row by row", async () => {
+		const {shadows} = facetSetup([])
+		await run(shadows, "relations", FACETED_LIST, {data: {relations: [node()]}}, {ids: [A], spaceId: SPACE})
+		expect(totals("relations")).toEqual({mismatch: 1})
+	})
+
+	it("compares only the facets the answer selected", () => {
+		expect(facetDiff({statementId: hex(A), toSpace: null}, {})).toBeNull()
+		expect(facetDiff({statementId: hex(A), toSpace: "ab"}, {})).toEqual({toSpace: {postgres: "ab", geoDb: null}})
+		expect(facetDiff({statementId: hex(A), verified: false}, {})).toBeNull()
+		expect(facetDiff({statementId: hex(A)}, {verified: "true", toSpace: "ab"})).toBeNull()
+	})
+})
+
+describe("relation facet claims on the wire", () => {
+	it("asks for the relations with their claims", () => {
+		expect(cardDocument(hex(A), {relations: true, claims: true})).toBe(
+			`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${hex(A)}", .relations = true, .claims = true } } } }`,
+		)
+		expect(cardDocument(hex(A))).not.toContain("claims")
+	})
+
+	it("reads the claim columns, one row a claim, `-` where a statement has no claim", () => {
+		const out = [
+			`${REL_TYPE}\t${PERSON}\t${hex(A)}\t${hex(B)}\t${RELATION_FACET_PROPERTIES.toSpace}\t${hex(C)}\t1`,
+			`${REL_TYPE}\t${PERSON}\t${hex(A)}\t${hex(B)}\t${RELATION_FACET_PROPERTIES.verified}\ttrue\t1`,
+			`${REL_TYPE}\t${B}\t${hex(C)}\t${hex(B)}\t-\t-\t1`,
+		].join("\n")
+		const rows = rowsFromGeoDbOutput(out, hex(B), {claims: true, claimCells: true})
+		expect(rows.map((r) => [r.statement, r.claim?.prop ?? null])).toEqual([
+			[hex(A), RELATION_FACET_PROPERTIES.toSpace],
+			[hex(A), RELATION_FACET_PROPERTIES.verified],
+			[hex(C), null],
+		])
+		expect(relationFacetsOf(rows, hex(A))).toEqual({toSpace: hex(C), verified: "true"})
+		expect(relationFacetsOf(rows, hex(C))).toEqual({})
+		// without the option a row is as it was
+		expect(rowsFromGeoDbOutput(out, hex(B))[0]).toEqual({prop: REL_TYPE, raw: PERSON})
+	})
+
+	it("pins the facet property ids to geodb-feeder's derivation (RELATION_FACET_PROPERTY, translate.ts)", () => {
+		// The feeder's conformingId("reserved-property", name): sha256 of the tagged name, forced to a v4 shape.
+		const derive = (name: string) => {
+			const bytes = Buffer.from(
+				createHash("sha256")
+					.update(`geo:legacy-reserved-property:v1\0${name.toLowerCase()}`)
+					.digest("hex")
+					.slice(0, 32),
+				"hex",
+			)
+			bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40
+			bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
+			return bytes.toString("hex")
+		}
+		expect(RELATION_FACET_PROPERTIES).toEqual({
+			toSpace: derive("relationToSpace"),
+			fromSpace: derive("relationFromSpace"),
+			toVersion: derive("relationToVersion"),
+			fromVersion: derive("relationFromVersion"),
+			verified: derive("relationVerified"),
+		})
 	})
 })

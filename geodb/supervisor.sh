@@ -111,6 +111,9 @@ TAIL_PID=$!
 node=
 sealer=
 published=0
+# Poll fast until serve's ids appear (each tick saves up to that much off the roll), then slow down: the only
+# remaining work is retrying a failed ConfigMap publish, which should not hit the apiserver ten times a second.
+POLL=0.1
 while kill -0 "$SERVE_PID" 2>/dev/null; do
 	if [ -z "$node" ] || [ -z "$sealer" ]; then
 		node="$(sed -n 's/^node: \([0-9a-f]\{64\}\).*/\1/p' "$RUN/serve.log" | head -n 1)"
@@ -119,12 +122,13 @@ while kill -0 "$SERVE_PID" 2>/dev/null; do
 			printf '%s\n' "$node" > "$CTL/node-id"
 			printf '%s\n' "$sealer" > "$CTL/sealer-id"
 			: > "$CTL/serving"
+			POLL=0.5
 		fi
 	fi
 	if [ -n "$node" ] && [ -n "$sealer" ] && [ "$published" = 0 ]; then
 		publish_ids "$node" "$sealer" && published=1
 	fi
-	sleep 0.5
+	sleep "$POLL"
 done
 
 wait "$SERVE_PID"

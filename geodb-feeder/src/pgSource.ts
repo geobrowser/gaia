@@ -99,6 +99,36 @@ export type HeldRepairSource = Pick<BackfillSource, "readBatch"> & {
 	listCandidates(): Promise<{space: string; entity: string}[]>
 }
 
+/**
+ * The relation seed's view of Postgres: the entities with an outgoing relation in a Space, and those relations
+ * (id, cell, type). Ids go in and come out as Postgres prints uuids.
+ */
+export type RelationSeedSource = {
+	listRelationEntities(space: string): Promise<string[]>
+	readRelations(space: string, entities: string[]): Promise<PgRelationRow[]>
+}
+
+export function pgRelationSeedSource(db: ReadOnlyPg): RelationSeedSource {
+	return {
+		async listRelationEntities(space) {
+			const rows = await db.read<{id: string}>(
+				`SELECT DISTINCT from_entity_id::text AS id FROM relations WHERE space_id = $1::uuid`,
+				[dashed(space)],
+				300_000,
+			)
+			return rows.map((r) => r.id).sort()
+		},
+		readRelations(space, entities) {
+			return db.read<PgRelationRow>(
+				`SELECT id::text AS id, from_entity_id::text AS from_entity_id, to_entity_id::text AS to_entity_id,
+				        type_id::text AS type_id, position
+				 FROM relations WHERE space_id = $1::uuid AND from_entity_id = ANY($2::uuid[])`,
+				[dashed(space), entities.map(dashed)],
+			)
+		},
+	}
+}
+
 export function pgHeldRepairSource(db: ReadOnlyPg): HeldRepairSource {
 	return {
 		readBatch: pgBackfillSource(db).readBatch,

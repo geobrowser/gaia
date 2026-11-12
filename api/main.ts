@@ -1,4 +1,5 @@
 import {swaggerUI} from "@hono/swagger-ui"
+import {Effect} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
@@ -43,6 +44,7 @@ import {
 	readConfigRevisionShadowConfig,
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
+import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {
 	createEntityAtVersionShadow,
@@ -85,6 +87,7 @@ import {
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
 import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
+import {createReplayPairsRouter} from "./src/geodb/replayPairs"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -108,10 +111,13 @@ import {createUserVotesShadow, readUserVotesShadowConfig} from "./src/pairFit/us
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
+import {createFastPathFacts} from "./src/proposals/fastPathFact"
 import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
+import {getProposalWithVotes} from "./src/proposals/queries"
+import {isFastPathFactReadEnabled} from "./src/proposals/status"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
@@ -237,6 +243,8 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
+// The same page's edit block, sequence and name against geo-db's edit_meta records (GEODB_EDIT_META_SHADOW; off by default).
+const editMetaShadowRef: {current: EditMetaShadow | null} = {current: null}
 // GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
 // statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
 const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
@@ -249,7 +257,10 @@ const entityDiffShadowRef: {current: EntityDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
-		versions: (served) => entityVersionsShadowRef.current?.versions(served),
+		versions: (served) => {
+			entityVersionsShadowRef.current?.versions(served)
+			editMetaShadowRef.current?.versions(served)
+		},
 		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
 		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
@@ -317,6 +328,11 @@ const sharedGeoDb =
 if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
+	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
+	if (process.env.GEODB_REPLAY_PAIRS === "on") {
+		app.route("/geodb", createReplayPairsRouter(db))
+		log.info("GeoDB replay pairs route enabled")
+	}
 }
 
 const entityVersionsShadowConfig = readEntityVersionsShadowConfig(process.env)
@@ -326,6 +342,16 @@ if (entityVersionsShadowConfig.enabled) {
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
 		hasLiveStatements: (entityId) => entityHasLiveStatements(db, entityId),
+	})
+}
+
+const editMetaShadowConfig = readEditMetaShadowConfig(process.env)
+if (editMetaShadowConfig.enabled) {
+	editMetaShadowRef.current = createEditMetaShadow({
+		config: editMetaShadowConfig,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
 	})
 }
 
@@ -394,6 +420,7 @@ const governanceShadow = governanceShadowConfig.enabled
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
 			log,
+			reloadProposal: (id) => Effect.runPromise(getProposalWithVotes(db, id)),
 		})
 	: null
 // GEODB_GOVERNANCE_SHADOW_SAMPLER (off by default) also feeds that shadow proposals sampled from Postgres on a timer, so it
@@ -413,7 +440,12 @@ const queriesShadow = queriesShadowConfig.enabled
 			log,
 		})
 	: null
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow))
+// PROPOSAL_EXECUTED_AT_FROM_GEODB (off by default) fills a Fast proposal's missing executedAt from geo-db's fast-path
+// execution fact (collection 31). Postgres' value always wins and a failed read keeps it.
+const fastPathFacts = isFastPathFactReadEnabled()
+	? createFastPathFacts(createDerivedReader(geoDbCardConfig), {warn: (message, fields) => log.warn(message, fields)})
+	: null
+app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow, fastPathFacts))
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
@@ -777,6 +809,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							orderPick: geoDbCardConfig.orderPick === true,
 							typeScan: geoDbCardConfig.typeScan === true,
 							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+							relationFacets: geoDbCardConfig.relationFacets === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {
 										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
@@ -812,6 +845,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 										derivedFields: geoDbCardConfig.derivedFields === true,
 										orderPick: geoDbCardConfig.orderPick === true,
 										relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+										relationFacets: geoDbCardConfig.relationFacets === true,
 										...(geoDbCardConfig.everySpaceReads === true &&
 										geoDbCardConfig.everySpaceEntities === true
 											? {

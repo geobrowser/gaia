@@ -5,18 +5,17 @@
 //! ```text
 //! outbox-replay --from <rfc3339> --to <rfc3339> [--apply] [--batch N] [--rate N] [--max-units N]
 //! ```
-//! `--to` is exclusive. Postgres is opened read-only.
+//! `--to` is exclusive. Postgres is opened read-only. A dry run asks geo-db which of the window's
+//! keys it already holds with the read-only `has` verb when the geodb client and node have it, and
+//! otherwise reports `present unknown`.
 
 use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
 use notification_indexer::outbox_replay::{
-    interval_for, run, Cursor, Options, Row, RowSource, BATCH_DEFAULT, BATCH_MAX, RATE_DEFAULT,
-    RATE_MAX,
+    interval_for, read_only_pool, run, Options, PgSource, Probe, BATCH_DEFAULT, BATCH_MAX,
+    RATE_DEFAULT, RATE_MAX,
 };
-use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row as _};
-use uuid::Uuid;
 
 struct Args {
     from: DateTime<Utc>,
@@ -80,51 +79,6 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     })
 }
 
-struct Pg {
-    pool: PgPool,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-}
-
-impl RowSource for Pg {
-    async fn page(&mut self, after: Option<Cursor>, limit: usize) -> Result<Vec<Row>, String> {
-        let (at, id) = after.unzip();
-        let rows = sqlx::query(
-            r#"
-            SELECT o.created_at, o.id, o.idempotency_key, o.event_type, o.payload,
-                   ARRAY(SELECT d.webhook_id FROM notification_deliveries d
-                         WHERE d.outbox_id = o.id ORDER BY d.webhook_id) AS webhooks
-            FROM notification_outbox o
-            WHERE o.created_at >= $1 AND o.created_at < $2
-              AND ($3::timestamptz IS NULL OR (o.created_at, o.id) > ($3, $4))
-            ORDER BY o.created_at, o.id
-            LIMIT $5
-            "#,
-        )
-        .bind(self.from)
-        .bind(self.to)
-        .bind(at)
-        .bind(id)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        rows.iter()
-            .map(|r| {
-                Ok(Row {
-                    created_at: r.try_get("created_at")?,
-                    id: r.try_get("id")?,
-                    idempotency_key: r.try_get("idempotency_key")?,
-                    event_type: r.try_get("event_type")?,
-                    payload: r.try_get("payload")?,
-                    webhooks: r.try_get::<Vec<Uuid>, _>("webhooks")?,
-                })
-            })
-            .collect::<Result<_, sqlx::Error>>()
-            .map_err(|e| e.to_string())
-    }
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -139,38 +93,23 @@ async fn main() -> ExitCode {
         eprintln!("outbox-replay: DATABASE_URL is not set");
         return ExitCode::from(2);
     };
-    let mut enterer = None;
-    if args.apply {
-        match geodb_outbox::Config::from_env() {
-            Some(cfg) => enterer = Some(geodb_outbox::Enterer::new(cfg)),
-            None => {
-                eprintln!(
-                    "outbox-replay: --apply needs GEODB_OUTBOX_MIRROR=1, GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
-                );
-                return ExitCode::from(2);
-            }
-        }
+    // An apply needs the geo-db connection. A dry run uses it only for the read-only `has` probe,
+    // so without it the dry run still works and says `present unknown`.
+    let mut enterer = geodb_outbox::Config::from_env().map(geodb_outbox::Enterer::new);
+    if args.apply && enterer.is_none() {
+        eprintln!(
+            "outbox-replay: --apply needs GEODB_OUTBOX_MIRROR=1, GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
+        );
+        return ExitCode::from(2);
     }
-    let pool = match PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|c, _| {
-            Box::pin(async move {
-                sqlx::query("SET default_transaction_read_only = on")
-                    .execute(c)
-                    .await
-                    .map(|_| ())
-            })
-        })
-        .connect(&url)
-        .await
-    {
+    let pool = match read_only_pool(&url).await {
         Ok(p) => p,
         Err(e) => {
             eprintln!("outbox-replay: postgres: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let mut src = Pg {
+    let mut src = PgSource {
         pool,
         from: args.from,
         to: args.to,
@@ -215,8 +154,16 @@ fn print_report(r: &notification_indexer::outbox_replay::Report, apply: bool) {
     if apply {
         println!("present     {} (geo-db already held the key)", r.present);
         println!("entered     {}", r.entered);
+    } else if r.probe == Probe::Used {
+        println!("present     {} (geo-db already holds the key)", r.held);
+        println!("missing     {} (an apply enters these)", r.missing);
+        println!("would-enter {} (the missing ones)", r.missing);
     } else {
-        println!("present     unknown (a dry run never touches geo-db; --apply reports it)");
+        let why = match &r.probe {
+            Probe::Unavailable(why) => format!("the has probe is unavailable: {why}"),
+            _ => "nothing to probe".to_string(),
+        };
+        println!("present     unknown ({why}; --apply reports it)");
         println!(
             "would-enter {} (at most; an apply skips the ones geo-db holds)",
             r.would_enter
@@ -227,7 +174,7 @@ fn print_report(r: &notification_indexer::outbox_replay::Report, apply: bool) {
     }
 }
 
-/// A dry run never calls its sink.
+/// A dry run with no geo-db connection: it never enters, and `has` is its default, unsupported.
 struct NoSink;
 impl notification_indexer::outbox_replay::Sink for NoSink {
     async fn enter(
