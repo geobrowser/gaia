@@ -78,6 +78,30 @@ export async function askGeoDb(
 }
 
 /**
+ * One geo-db read of an entity's relations with their facet claims in one gaia space (`readRelationClaims`). Throws
+ * `bad_request` on a client that cannot do it.
+ */
+export async function askGeoDbRelationClaims(
+	deps: Pick<CardDeps, "geoDb" | "geoSpaceOf">,
+	entityId: string,
+	spaceId: string,
+) {
+	const read = deps.geoDb.readRelationClaims?.bind(deps.geoDb)
+	if (!read) throw new GeoDbError("bad_request", "the geo-db client cannot read relation claims")
+	const geoSpaceId = await deps.geoSpaceOf(spaceId)
+	if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${spaceId} is not loaded in geo-db`)
+	const started = performance.now()
+	try {
+		const rows = await read({geoSpaceId, entityId})
+		observeGeoDbRead((performance.now() - started) / 1000, "ok")
+		return rows
+	} catch (error) {
+		observeGeoDbRead((performance.now() - started) / 1000, "error")
+		throw error
+	}
+}
+
+/**
  * One geo-db read of an entity's card across `spaceIds` (gaia ids, two or more), as one pipe line. Every Space
  * is mapped first, and one geo-db has not loaded throws `unmapped_space` before anything is sent: a Space the
  * node does not hold would refuse the whole line and cost the worker its connection. Returns the rows by gaia
