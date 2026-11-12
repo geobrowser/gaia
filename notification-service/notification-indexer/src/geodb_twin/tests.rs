@@ -715,6 +715,9 @@ fn pinned_columns_match_the_feeders_record_kinds_when_it_is_in_the_checkout() {
         ESCALATION_PROPOSAL,
         VOTE_PROPOSAL,
         VOTE_VOTER,
+        VERSION_NAME,
+        VOTE_VERSION,
+        VOTE_VOTE,
     ] {
         assert!(
             text.contains(id),
@@ -744,4 +747,276 @@ async fn editors_granted_by_the_keyed_writer_live_in_the_governance_space() {
         compare_member_or_editor(&fake, &sp, &s, &b, true).await,
         vec![Verdict::Match]
     );
+}
+
+// ---- proposal name, vote tallies, latest block ----------------------------------------------
+
+/// Version records `(record, block, name)` of the proposal in the governance Space.
+fn named_versions(p: &Uuid, versions: &[(&str, i64, Option<&str>)]) -> Fake {
+    let pe = ent(p);
+    let mut links = String::new();
+    let mut cards = String::new();
+    let mut ids: Vec<String> = vec![];
+    for (rec, block, name) in versions {
+        links += &link(VERSION_PROPOSAL, &pe, rec);
+        cards += &row(VERSION_BLOCK, &block.to_string(), rec);
+        if let Some(n) = name {
+            cards += &row(VERSION_NAME, n, rec);
+        }
+        ids.push((*rec).to_string());
+    }
+    ids.sort();
+    Fake::default()
+        .backlinks(GOV, &pe, links)
+        .cards(GOV, &ids, cards)
+}
+
+async fn name_of(fake: &Fake, sql: Option<&str>) -> Vec<Verdict> {
+    compare_proposal_name(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn proposal_name_follows_the_latest_version() {
+    let p = u(10);
+    // The older block's name is stale; only the latest block's counts.
+    let fake = named_versions(&p, &[(R1, 100, Some("Old")), (R2, 200, Some("New"))]);
+    assert_eq!(name_of(&fake, Some("New")).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&fake, Some("Old")).await,
+        vec![Verdict::Mismatch("name_differs")]
+    );
+}
+
+#[tokio::test]
+async fn proposal_name_absent_cases() {
+    let p = u(10);
+    // No version record at all: Postgres with no row matches, Postgres with a name does not.
+    let none = Fake::default();
+    assert_eq!(name_of(&none, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&none, Some("x")).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // A version with no name: Postgres's NULL matches, a name does not.
+    let unnamed = named_versions(&p, &[(R1, 100, None)]);
+    assert_eq!(name_of(&unnamed, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&unnamed, Some("x")).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // A name geo-db holds that Postgres does not.
+    let named = named_versions(&p, &[(R1, 100, Some("x"))]);
+    assert_eq!(
+        name_of(&named, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+}
+
+#[tokio::test]
+async fn proposal_name_unsupported_and_failed() {
+    let p = u(10);
+    let no_sys = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_proposal_name(&Fake::default(), &no_sys, &p, None).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    // A version record with no block key cannot be ordered.
+    let pe = ent(&p);
+    let broken = Fake::default()
+        .backlinks(GOV, &pe, link(VERSION_PROPOSAL, &pe, R1))
+        .cards(GOV, &[R1.to_string()], row(VERSION_NAME, "x", R1));
+    assert_eq!(
+        name_of(&broken, Some("x")).await,
+        vec![Verdict::Unsupported("ambiguous_record")]
+    );
+    assert_eq!(
+        name_of(&Fake::failing(), Some("x")).await,
+        vec![Verdict::Failed]
+    );
+}
+
+/// Version records for blocks `1..=versions` plus one vote record per `(version, voter, vote)`.
+fn tally_fixture(p: &Uuid, versions: usize, votes: &[(i64, i64)]) -> Fake {
+    let pe = ent(p);
+    let blocks: Vec<(String, i64)> = (0..versions)
+        .map(|i| (format!("{:032x}", 0x2000 + i as u128), 100 + i as i64))
+        .collect();
+    let spec: Vec<(&str, i64, Option<&str>)> =
+        blocks.iter().map(|(r, b)| (r.as_str(), *b, None)).collect();
+    let gov = named_versions(p, &spec);
+    let records: Vec<String> = (0..votes.len())
+        .map(|i| format!("{:032x}", 0x3000 + i as u128))
+        .collect();
+    let mut links = String::new();
+    let mut cards = String::new();
+    for (rec, (version, vote)) in records.iter().zip(votes) {
+        links += &link(VOTE_PROPOSAL, &pe, rec);
+        cards += &row(VOTE_PROPOSAL, &pe, rec);
+        cards += &row(VOTE_VERSION, &format!("{version}.0"), rec);
+        cards += &row(VOTE_VOTE, &vote.to_string(), rec);
+    }
+    let mut sorted = records.clone();
+    sorted.sort();
+    gov.backlinks(VOTES, &pe, links)
+        .cards(VOTES, &sorted, cards)
+}
+
+async fn tallies(fake: &Fake, sql: Option<(i64, i64, i64)>) -> Vec<Verdict> {
+    compare_vote_tallies(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn vote_tallies_count_the_current_version_only() {
+    let p = u(10);
+    // Two versions: the version-1 votes are history. Current (2): yes, yes, no, abstain.
+    let fake = tally_fixture(&p, 2, &[(1, 1), (1, 2), (2, 1), (2, 1), (2, 2), (2, 3)]);
+    assert_eq!(tallies(&fake, Some((2, 1, 1))).await, vec![Verdict::Match]);
+    assert_eq!(
+        tallies(&fake, Some((3, 2, 1))).await,
+        vec![Verdict::Mismatch("tally_differs")]
+    );
+    assert_eq!(
+        tallies(&fake, Some((2, 1, 0))).await,
+        vec![Verdict::Mismatch("tally_differs")]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_zero_votes_match_zero() {
+    let p = u(10);
+    let fake = tally_fixture(&p, 1, &[]);
+    assert_eq!(tallies(&fake, Some((0, 0, 0))).await, vec![Verdict::Match]);
+    // After a version bump the earlier votes no longer count.
+    let bumped = tally_fixture(&p, 2, &[(1, 1)]);
+    assert_eq!(
+        tallies(&bumped, Some((0, 0, 0))).await,
+        vec![Verdict::Match]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_absent_rows() {
+    let p = u(10);
+    // Nothing in geo-db: no Postgres row matches; a Postgres row is missing in geo-db.
+    let empty = Fake::default();
+    assert_eq!(tallies(&empty, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        tallies(&empty, Some((1, 0, 0))).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // geo-db holds the proposal but Postgres has no row.
+    let held = tally_fixture(&p, 1, &[(1, 1)]);
+    assert_eq!(
+        tallies(&held, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_unsupported_and_failed() {
+    let p = u(10);
+    let no_sys = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_vote_tallies(&Fake::default(), &no_sys, &p, None).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    // An unknown vote option is not guessed at.
+    let odd = tally_fixture(&p, 1, &[(1, 9)]);
+    assert_eq!(
+        tallies(&odd, Some((0, 0, 0))).await,
+        vec![Verdict::Unsupported("ambiguous_record")]
+    );
+    assert_eq!(
+        tallies(&Fake::failing(), Some((0, 0, 0))).await,
+        vec![Verdict::Failed]
+    );
+}
+
+#[derive(Default)]
+struct FakeCursors {
+    rows: HashMap<String, Vec<u8>>,
+    fail: bool,
+}
+
+#[async_trait]
+impl CursorReader for FakeCursors {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, TwinError> {
+        if self.fail {
+            return Err(TwinError::Cursors("fixture".into()));
+        }
+        Ok(self.rows.get(key).cloned())
+    }
+}
+
+fn applied(value: &str) -> FakeCursors {
+    let mut c = FakeCursors::default();
+    c.rows
+        .insert(APPLIED_BLOCK_KEY.to_string(), value.as_bytes().to_vec());
+    c
+}
+
+#[tokio::test]
+async fn latest_block_absent_row_is_unsupported_not_a_mismatch() {
+    // GEODB_APPLIED_BLOCK is off: the feeder has written no row.
+    assert_eq!(
+        compare_latest_block(&FakeCursors::default(), Some(500)).await,
+        vec![Verdict::Unsupported("row_absent")]
+    );
+}
+
+#[tokio::test]
+async fn latest_block_checks_the_watermark_is_not_behind() {
+    let json = r#"4000:{"0":4000,"1":4100}"#;
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(4000)).await,
+        vec![Verdict::Match]
+    );
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(3000)).await,
+        vec![Verdict::Match]
+    );
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(4001)).await,
+        vec![Verdict::Mismatch("behind_sql")]
+    );
+}
+
+#[tokio::test]
+async fn latest_block_other_shapes() {
+    assert_eq!(
+        compare_latest_block(&applied("not a block"), Some(1)).await,
+        vec![Verdict::Unsupported("row_unparsable")]
+    );
+    assert_eq!(
+        compare_latest_block(&applied("10:{}"), None).await,
+        vec![Verdict::Unsupported("no_sql_block")]
+    );
+    let failing = FakeCursors {
+        fail: true,
+        ..FakeCursors::default()
+    };
+    assert_eq!(
+        compare_latest_block(&failing, Some(1)).await,
+        vec![Verdict::Failed]
+    );
+}
+
+#[test]
+fn the_new_reads_have_their_own_kind_labels() {
+    assert_eq!(
+        [PROPOSAL_NAME, VOTE_TALLIES, LATEST_BLOCK],
+        ["proposal_name", "vote_tallies", "latest_block"]
+    );
+    assert_eq!(APPLIED_BLOCK_KEY, "geodb-feeder-applied");
+}
+
+#[test]
+fn applied_block_key_matches_the_feeder() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../geodb-feeder/src/appliedBlock.ts");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return; // built outside the monorepo
+    };
+    assert!(text.contains(&format!("APPLIED_BLOCK_KEY = \"{APPLIED_BLOCK_KEY}\"")));
+    assert!(text.contains(&format!("CURSORS_COLLECTION = {CURSORS_COLLECTION}")));
 }

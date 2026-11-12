@@ -1056,14 +1056,18 @@ impl Storage {
     /// with `.ok()` the failure was invisible — names just silently stopped
     /// appearing in notification payloads.
     pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
+        let name = sqlx::query_scalar::<_, String>(
             "SELECT name FROM proposals_current WHERE id = $1 AND name IS NOT NULL",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
-        .flatten()
+        .flatten();
+        if let Some(twin) = &self.twin {
+            twin.observe_proposal_name(proposal_id, name.as_deref());
+        }
+        name
     }
 
     /// Look up current vote tallies for a proposal.
@@ -1072,14 +1076,18 @@ impl Storage {
     /// the tallies are version-scoped under governance-v2, and this call also
     /// swallows errors, so the old query degraded to "no tallies" in silence.
     pub async fn lookup_vote_tallies(&self, proposal_id: Uuid) -> Option<(i64, i64, i64)> {
-        sqlx::query_as::<_, (i64, i64, i64)>(
+        let tallies = sqlx::query_as::<_, (i64, i64, i64)>(
             "SELECT yes_count, no_count, abstain_count FROM proposals_current WHERE id = $1",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
-        .flatten()
+        .flatten();
+        if let Some(twin) = &self.twin {
+            twin.observe_vote_tallies(proposal_id, tallies);
+        }
+        tallies
     }
 
     /// Get the latest block number written by the kg-indexer.
@@ -1087,14 +1095,18 @@ impl Storage {
     /// Used by the block delay logic to wait for the kg-indexer to catch up
     /// before processing notifications (so names/metadata are populated).
     pub async fn lookup_latest_block(&self) -> Option<u64> {
-        sqlx::query_scalar::<_, i64>(
+        let block = sqlx::query_scalar::<_, i64>(
             "SELECT MAX(created_at_block::bigint) FROM proposals WHERE created_at_block != '0'",
         )
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten()
-        .map(|b| b as u64)
+        .map(|b| b as u64);
+        if let Some(twin) = &self.twin {
+            twin.observe_latest_block(block);
+        }
+        block
     }
 
     // -----------------------------------------------------------------------
