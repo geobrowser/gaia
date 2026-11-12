@@ -187,6 +187,104 @@ describe("translateOps", () => {
 		expect(bare.stats["relation-facet-claims"]).toBeUndefined()
 	})
 
+	describe("updateRelation", () => {
+		const sid = conformingId("statement", hex(50))
+		const prop = (name: string) => conformingId("reserved-property", name)
+		const known = () => {
+			const c = context()
+			c.statements.add(sid)
+			return c
+		}
+		const upd = (extra: Record<string, unknown> = {}): GrcOp => ({type: "updateRelation", id: id(50), unset: [], ...extra})
+		const set = (name: string, value: string) =>
+			`.{ .set = .{ .statement = "${sid}", .property = "${prop(name)}", .value = .{ .text = "${value}" } } }`
+		const unset = (name: string) => `.{ .unset = .{ .statement = "${sid}", .property = "${prop(name)}" } }`
+		const both = {positions: true, facets: true}
+
+		it("is still skipped and counted with both flags off", () => {
+			const r = translateOps([upd({position: "zz", toSpace: id(40), unset: ["fromSpace"]})], known().ctx)
+			expect(r.intents).toEqual([])
+			expect(r.touched).toEqual([])
+			expect(r.stats).toEqual({"skip:op-updateRelation": 1})
+		})
+
+		it("a position set or change sends nothing and is counted, whichever flag is on", () => {
+			for (const opts of [{positions: true}, both]) {
+				const r = translateOps([upd({position: "zz"})], known().ctx, opts)
+				expect(r.intents).toEqual([])
+				expect(r.stats["relation-position-update-dropped"]).toBe(1)
+			}
+			const unsetPos = translateOps([upd({unset: ["position"]})], known().ctx, {positions: true})
+			expect(unsetPos.intents).toEqual([])
+			expect(unsetPos.stats["relation-position-update-dropped"]).toBe(1)
+		})
+
+		it("each facet set or change replaces the facet's claim on the relation's statement", () => {
+			const cases: [string, string, string, Uint8Array][] = [
+				["toSpace", "relationToSpace", hex(40), id(40)],
+				["fromSpace", "relationFromSpace", hex(41), id(41)],
+				["toVersion", "relationToVersion", hex(42), id(42)],
+				["fromVersion", "relationFromVersion", hex(43), id(43)],
+			]
+			for (const [field, name, value, v] of cases) {
+				const r = translateOps([upd({[field]: v})], known().ctx, {facets: true})
+				expect(r.intents).toEqual([set(name, value)])
+				expect(r.stats["relation-facet-claims-set"]).toBe(1)
+				// a second change is the same cell, so it replaces the first rather than adding beside it
+				const again = translateOps([upd({[field]: id(60)}), upd({[field]: v})], known().ctx, {facets: true})
+				expect(again.intents).toEqual([set(name, hex(60)), set(name, value)])
+			}
+		})
+
+		it("each facet unset retracts the facet's claim", () => {
+			for (const [field, name] of [
+				["toSpace", "relationToSpace"],
+				["fromSpace", "relationFromSpace"],
+				["toVersion", "relationToVersion"],
+				["fromVersion", "relationFromVersion"],
+			] as const) {
+				const r = translateOps([upd({unset: [field]})], known().ctx, {facets: true})
+				expect(r.intents).toEqual([unset(name)])
+				expect(r.stats["relation-facet-claims-unset"]).toBe(1)
+			}
+		})
+
+		it("a mixed update writes its facets and counts its position; a set beats an unset of the same field", () => {
+			const r = translateOps(
+				[upd({position: "zz", toSpace: id(40), fromVersion: id(43), unset: ["fromSpace", "toSpace"]})],
+				known().ctx,
+				both,
+			)
+			expect(r.intents).toEqual([set("relationToSpace", hex(40)), set("relationFromVersion", hex(43)), unset("relationFromSpace")])
+			expect(r.stats).toMatchObject({"relation-position-update-dropped": 1, "relation-facet-claims-set": 2, "relation-facet-claims-unset": 1, updateRelation: 1})
+		})
+
+		it("an update with nothing in it is a counted no-op", () => {
+			const r = translateOps([upd()], known().ctx, both)
+			expect(r.intents).toEqual([])
+			expect(r.stats).toEqual({"updateRelation-noop": 1})
+		})
+
+		it("facets off, positions on: facet changes are dropped and counted", () => {
+			const r = translateOps([upd({toSpace: id(40), unset: ["fromSpace"]})], known().ctx, {positions: true})
+			expect(r.intents).toEqual([])
+			expect(r.stats["relation-facets-dropped"]).toBe(1)
+		})
+
+		it("a relation geo-db never held is left alone", () => {
+			const r = translateOps([upd({toSpace: id(40)})], context().ctx, both)
+			expect(r.intents).toEqual([])
+			expect(r.stats).toEqual({"updateRelation-predates-window": 1})
+		})
+
+		it("updates a relation created earlier in the same edit, after its own claims", () => {
+			const create: GrcOp = {type: "createRelation", id: id(50), from: id(1), to: id(7), relationType: id(8), toSpace: id(40)}
+			const r = translateOps([create, upd({toSpace: id(41)})], context().ctx, both)
+			expect(r.intents.at(-1)).toEqual(set("relationToSpace", hex(41)))
+			expect(r.intents.some((i) => i.includes(".add") && i.includes(`.statement = "${sid}"`))).toBe(true)
+		})
+	})
+
 	it("pins the reserved relation-facet property ids", () => {
 		expect(RELATION_FACET_PROPERTY).toEqual({
 			toSpace: conformingId("reserved-property", "relationToSpace"),

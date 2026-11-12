@@ -330,6 +330,54 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 				bump("createRelation")
 				break
 			}
+			case "updateRelation": {
+				// Neither flag: untouched from before, counted as a skipped op.
+				if (!opts.positions && !opts.facets) {
+					bump("skip:op-updateRelation")
+					break
+				}
+				const sid = cid("statement", op.id as string | Uint8Array)
+				if (!ctx.knownStmt(sid)) {
+					bump("updateRelation-predates-window")
+					break
+				}
+				const unset = new Set<string>(
+					(Array.isArray(op.unset) ? op.unset : []).filter((u): u is string => typeof u === "string"),
+				)
+				const facetsSet = RELATION_FACETS.filter(({field}) => op[field] != null)
+				const facetsUnset = RELATION_FACETS.filter(({field}) => op[field] == null && unset.has(field))
+				const positionTouched = op.position != null || unset.has("position")
+				if (!positionTouched && facetsSet.length === 0 && facetsUnset.length === 0) {
+					bump("updateRelation-noop")
+					break
+				}
+				// A move or an unset of the position needs geo-db's `set_position`, which names the relation's cell
+				// (from, type) and a replacement statement id; the op carries neither and geodb-client's ZON edit
+				// cannot say the verb (ISS-587-318 "Not covered: A move"). Nothing is sent, and it is counted.
+				if (positionTouched) bump("relation-position-update-dropped")
+				if (opts.facets) {
+					// A facet claim is the cell (the relation's statement, the facet's reserved property). `set` closes
+					// the cell's active claim whatever id it was written under (createRelation's `add`, an earlier
+					// `set`) and opens the new one, so a change replaces; `unset` closes it. A set wins over an unset of
+					// the same field, as gaia applies an op's unsets first.
+					for (const {field} of facetsSet) {
+						const v = op[field]
+						if (typeof v !== "string" && !(v instanceof Uint8Array)) {
+							bump("relation-facet-update-malformed")
+							continue
+						}
+						const value = `.{ .text = ${zigString(hexId(v).replaceAll("-", "").toLowerCase())} }`
+						intents.push(`.{ .set = .{ .statement = "${sid}", .property = "${RELATION_FACET_PROPERTY[field]}", .value = ${value} } }`)
+						bump("relation-facet-claims-set")
+					}
+					for (const {field} of facetsUnset) {
+						intents.push(`.{ .unset = .{ .statement = "${sid}", .property = "${RELATION_FACET_PROPERTY[field]}" } }`)
+						bump("relation-facet-claims-unset")
+					}
+				} else if (facetsSet.length + facetsUnset.length > 0) bump("relation-facets-dropped")
+				bump("updateRelation")
+				break
+			}
 			case "deleteRelation": {
 				const sid = cid("statement", op.id as string | Uint8Array)
 				if (!ctx.knownStmt(sid)) {
