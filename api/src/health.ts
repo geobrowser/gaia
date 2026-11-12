@@ -24,6 +24,7 @@ import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderRelationLookupShadowMetrics} from "./geodb/relationLookupShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
+import {renderServeGateMetrics} from "./geodb/serveGate"
 import {renderTypeCountsShadowMetrics} from "./geodb/typeCountsShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
@@ -179,6 +180,8 @@ function renderPrometheusMetrics(): string {
 		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
 		renderRelationLookupShadowMetrics(),
 		renderEntityAtVersionShadowMetrics(),
+		// Governance and versions serve counters: reads answered from geo-db and the ones Postgres answered instead, by reason (GEODB_GOVERNANCE_SERVE, GEODB_VERSIONS_SERVE) — see geodb/serveGate.ts.
+		renderServeGateMetrics(),
 		// Entity diff after side and review base side checked against geo-db (GEODB_ENTITY_DIFF_SHADOW) — see geodb/entityDiffShadow.ts.
 		renderEntityDiffShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.

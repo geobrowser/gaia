@@ -69,10 +69,15 @@ import {
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
-import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
+import {
+	createRelationLookupServeWithoutShadow,
+	createRelationLookupShadow,
+	readRelationLookupShadowConfig,
+} from "./src/geodb/relationLookupShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
+import {readServeGateConfig} from "./src/geodb/serveGate"
 import {
 	createPostgresTypeCountsSource,
 	createTypeCountsShadow,
@@ -95,7 +100,11 @@ import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow
 import {createProposalsRouter} from "./src/proposals"
 import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
-import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
+import {
+	createGovernanceServeWithoutShadow,
+	createGovernanceShadow,
+	readGovernanceShadowConfig,
+} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
 import {getProposalWithVotes} from "./src/proposals/queries"
 import {createSearchRouter} from "./src/search"
@@ -107,7 +116,7 @@ import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
-import {setRelationLookupObserver} from "./src/versioned/proposal-diff"
+import {setRelationLookupObserver, setRelationLookupServer} from "./src/versioned/proposal-diff"
 import {entityHasLiveStatements} from "./src/versioned/queries"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
@@ -307,14 +316,22 @@ if (proposalDiffShadowConfig.enabled) {
 	})
 }
 
+const versionsServeConfig = readServeGateConfig(process.env, "versions")
 const relationLookupShadowConfig = readRelationLookupShadowConfig(process.env)
 if (relationLookupShadowConfig.enabled) {
 	const relationLookupShadow = createRelationLookupShadow({
 		config: relationLookupShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
+		serve: versionsServeConfig,
 	})
 	setRelationLookupObserver((relationIds, served) => relationLookupShadow.lookup(relationIds, served))
+	// GEODB_VERSIONS_SERVE (off by default): a proposal diff's relation lookup answers from geo-db when the shadow's last
+	// comparison of every id matched, else from Postgres.
+	if (versionsServeConfig.enabled) setRelationLookupServer((relationIds) => relationLookupShadow.serve(relationIds))
+} else if (versionsServeConfig.enabled) {
+	// Serve on, shadow off: no comparison exists, so Postgres answers and each lookup is counted `shadow_off`.
+	setRelationLookupServer(createRelationLookupServeWithoutShadow())
 }
 
 const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
@@ -355,9 +372,13 @@ log.info("Profile routes enabled")
 // Mount proposals router
 // GEODB_GOVERNANCE_SHADOW (off by default) also reads the keyed governance records from geo-db after serving a proposal
 // and counts whether the status they give equals the served one (gaia_api_governance_shadow_total). Never changes a response.
+// GEODB_GOVERNANCE_SERVE (off by default) additionally answers a proposal's status from geo-db when this shadow's last
+// comparison of that proposal on that surface matched; otherwise, or on any geo-db error or timeout, Postgres answers.
+const governanceServeConfig = readServeGateConfig(process.env, "governance")
 const governanceShadowConfig = readGovernanceShadowConfig(process.env)
 const governanceShadow = governanceShadowConfig.enabled
 	? createGovernanceShadow({
+			serve: governanceServeConfig,
 			config: governanceShadowConfig,
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
@@ -382,7 +403,16 @@ const queriesShadow = queriesShadowConfig.enabled
 			log,
 		})
 	: null
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow))
+app.route(
+	"/proposals",
+	createProposalsRouter(
+		db,
+		runtime,
+		// Serve on, shadow off: no comparison exists, so Postgres answers and each proposal is counted `shadow_off`.
+		governanceShadow ?? (governanceServeConfig.enabled ? createGovernanceServeWithoutShadow() : null),
+		queriesShadow,
+	),
+)
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
