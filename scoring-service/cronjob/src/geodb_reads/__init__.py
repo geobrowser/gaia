@@ -27,8 +27,9 @@ only values that are not an id at all.
 
 Serving (``GEODB_SCORES_SERVE``, off by default, a sibling of the compare flag because it reads the derived score
 collections, not members and votes): the scoring writer diffs the new scores against the stored ones to find the rows the
-geo-db mirror must resend. With the flag on that diff reads the stored rows from geo-db's collections 2, 3 and 4 (a ``get``
-per row on a ``geodb-client derived pipe``) instead of Postgres. Any error or timeout falls back to the Postgres diff and is
+geo-db mirror must resend. With the flag on that diff reads the stored rows from geo-db's collections 2, 3 and 4 (each group read
+in bounded pages by the ``scan`` resume cursor of a ``geodb-client derived pipe``, which needs a client with that field)
+instead of Postgres. Any error or timeout falls back to the Postgres diff and is
 counted in ``gaia_scoring_scores_serve_fallback_total{reason}`` (``error``, ``timeout``, ``misconfigured``). See
 :class:`ScoresServe`.
 
@@ -581,6 +582,17 @@ class StoredScore:
     value: str
 
 
+@dataclass(frozen=True)
+class ScanPage:
+    """One page of a group scan: ``(score, key hex, value hex)`` rows, and the cursor to resume from (``None`` at the end)."""
+
+    rows: list[tuple[float, str, str]]
+    next: str | None
+
+
+SCAN_PAGE_ROWS = 512  # geo-db's page_max: the most rows one DerivedScan frame answers
+
+
 class DerivedGetReader(PipeReader):
     """A held ``geodb-client derived pipe`` child answering ``get`` (``none`` or ``<group hex>\t<score>\t<value hex>``)."""
 
@@ -624,9 +636,37 @@ class DerivedGetReader(PipeReader):
             raise GeoDbReadError("derived get score is not finite")
         return StoredScore(group=parts[0], score=score, value=parts[2])
 
+    def scan(self, collection: int, group_hex: str, after: str | None) -> ScanPage:
+        """One page of a group in geo-db's order, resuming past ``after`` (the ``more<TAB><hex>`` cursor the last page
+        returned). Needs a ``geodb-client`` that has the scan resume field; an older one answers the line as malformed."""
+        body = self._request(f"scan\t{collection}\t0x{group_hex}\t{SCAN_PAGE_ROWS}\t1\t{after or '-'}\n")
+        rows: list[tuple[float, str, str]] = []
+        cursor: str | None = None
+        for line in body.split("\n"):
+            if not line:
+                continue
+            if line.startswith("more\t"):
+                cursor = line[5:]
+                if not re.fullmatch(r"([0-9a-f]{2})+", cursor):
+                    raise GeoDbReadError("derived scan cursor is malformed")
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3 or not re.fullmatch(r"([0-9a-f]{2})+", parts[1]) or not re.fullmatch(r"([0-9a-f]{2})*", parts[2]):
+                raise GeoDbReadError(f"derived scan row is malformed: {line[:60]}")
+            try:
+                score = float(parts[0])
+            except ValueError as e:
+                raise GeoDbReadError("derived scan score is not a number") from e
+            if not math.isfinite(score):
+                raise GeoDbReadError("derived scan score is not finite")
+            rows.append((score, parts[1], parts[2]))
+        return ScanPage(rows, cursor)
+
 
 class ScoreReader(Protocol):
     def get(self, collection: int, key_hex: str) -> StoredScore | None: ...
+
+    def scan(self, collection: int, group_hex: str, after: str | None) -> ScanPage: ...
 
     def close(self) -> None: ...
 
@@ -695,29 +735,50 @@ class ScoresServe:
             self._reader.close()
         return None
 
-    def _diff(self, table: str, entities: list, deadline: float) -> set:
+    def _scan_group(self, collection: int, group_hex: str, deadline: float) -> dict[str, StoredScore]:
+        """Every row of one group, by key hex, read in bounded pages by the resume cursor: a few thousand calls for a
+        million rows instead of one ``get`` a row. Raises ``ServeFallback`` past the budget."""
         reader = self._reader
         assert reader is not None
-        out: set = set()
-
-        def get(collection: int, key: bytes) -> StoredScore | None:
+        rows: dict[str, StoredScore] = {}
+        after: str | None = None
+        while True:
             if self._clock() > deadline:
                 raise ServeFallback("timeout", "budget exceeded")
-            self.stats.rows_read += 1
-            return reader.get(collection, key.hex())
+            page = reader.scan(collection, group_hex, after)
+            self.stats.rows_read += len(page.rows)
+            for score, key_hex, value_hex in page.rows:
+                rows[key_hex] = StoredScore(group=group_hex, score=score, value=value_hex)
+            if page.next is None:
+                return rows
+            if page.next == after:
+                raise ServeFallback("error", "scan cursor did not advance")
+            after = page.next
 
-        for e in entities:
-            ekey = _id_bytes(e.id)
-            if table == "global_scores":
-                if ekey is not None and not _same(get(COLLECTION_GLOBAL, ekey), _ZERO_GROUP, float(e.normalized_score)):
+    def _diff(self, table: str, entities: list, deadline: float) -> set:
+        assert self._reader is not None
+        out: set = set()
+
+        if table == "global_scores":
+            stored = self._scan_group(COLLECTION_GLOBAL, _ZERO_GROUP, deadline)
+            for e in entities:
+                ekey = _id_bytes(e.id)
+                if ekey is not None and not _same(stored.get(ekey.hex()), _ZERO_GROUP, float(e.normalized_score)):
                     out.add(str(uuid.UUID(bytes=ekey)))
-                continue
+            return out
+
+        # local_scores: the group is the Space id (a u128, 32 hex digits), so scan each Space once and compare its rows.
+        by_space: dict[str, list[tuple[bytes, bytes, float]]] = {}
+        for e in entities:
             for p in e.perspectives:
                 pe, ps = _id_bytes(p.entity_id), _id_bytes(p.space_id)
                 if pe is None or ps is None:
                     continue  # the mirror skips a row whose id is not a UUID, so there is nothing to diff
-                group = ps.hex()  # the group is the Space id as a u128, printed as 32 hex digits
-                if not _same(get(COLLECTION_LOCAL, pe + ps), group, float(p.normalized_score)):
+                by_space.setdefault(ps.hex(), []).append((pe, ps, float(p.normalized_score)))
+        for group, wanted in by_space.items():
+            stored = self._scan_group(COLLECTION_LOCAL, group, deadline)
+            for pe, ps, score in wanted:
+                if not _same(stored.get((pe + ps).hex()), group, score):
                     out.add((str(uuid.UUID(bytes=pe)), str(uuid.UUID(bytes=ps))))
         return out
 

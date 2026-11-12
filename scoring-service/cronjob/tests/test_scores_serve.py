@@ -14,6 +14,7 @@ from src.geodb_reads import (
     DerivedGetReader,
     GeoDbReadError,
     GeoDbTimeout,
+    ScanPage,
     ScoresServe,
     StoredScore,
     serve_enabled,
@@ -42,12 +43,30 @@ def persp(eid: str, sid: str, score: float) -> Perspective:
 class FakeReader:
     """Holds rows by (collection, key hex); can fail or tick a fake clock on each read."""
 
-    def __init__(self, rows=None, error: Exception | None = None, tick=None):
+    def __init__(self, rows=None, error: Exception | None = None, tick=None, page: int = 2):
         self.rows = rows or {}
         self.error = error
         self.tick = tick
+        self.page = page
         self.reads = 0
+        self.scans = 0
         self.closed = 0
+
+    def scan(self, collection: int, group_hex: str, after: str | None) -> ScanPage:
+        """geo-db's order is score descending then key ascending; the cursor here is the index of the next row."""
+        self.scans += 1
+        if self.tick:
+            self.tick()
+        if self.error:
+            raise self.error
+        rows = sorted(
+            ((v.score, k[1], v.value) for k, v in self.rows.items() if k[0] == collection and v.group == group_hex),
+            key=lambda r: (-r[0], r[1]),
+        )
+        start = int(after) if after else 0
+        chunk = rows[start:start + self.page]
+        more = start + self.page < len(rows)
+        return ScanPage(chunk, str(start + self.page) if more else None)
 
     def get(self, collection: int, key_hex: str):
         self.reads += 1
@@ -115,6 +134,36 @@ class TestServed:
         assert serve.changed_keys("global_scores", ents) == {E1, E2}
         assert serve.changed_keys("local_scores", ents) == {(E1, S1)}
 
+    def test_the_diff_pages_a_group_instead_of_reading_a_row_at_a_time(self) -> None:
+        ents = [entity(f"{i:08x}-1111-4111-8111-111111111111", 0.01 * i) for i in range(1, 8)]
+        reader = FakeReader(stored_for(ents), page=3)
+        serve = ScoresServe(reader)
+        assert serve.changed_keys("global_scores", ents) == set()
+        assert reader.reads == 0
+        assert reader.scans == 3  # 7 rows, 3 a page
+        assert serve.stats.rows_read == 7
+
+    def test_a_row_moved_between_pages_is_still_found_changed(self) -> None:
+        ents = [entity(f"{i:08x}-1111-4111-8111-111111111111", 0.01 * i) for i in range(1, 8)]
+        rows = stored_for(ents)
+        moved = ents[3]
+        rows[(COLLECTION_GLOBAL, uuid.UUID(moved.id).bytes.hex())] = StoredScore(ZERO, 0.99, "")
+        assert ScoresServe(FakeReader(rows, page=2)).changed_keys("global_scores", ents) == {moved.id}
+
+    def test_local_scores_scan_each_space_once(self) -> None:
+        s2 = "44444444-4444-4444-8444-444444444444"
+        ents = [entity(E1, 0.5, [persp(E1, S1, 0.7), persp(E1, s2, 0.2)]), entity(E2, 0.6, [persp(E2, S1, 0.1)])]
+        reader = FakeReader(stored_for(ents), page=1)
+        assert ScoresServe(reader).changed_keys("local_scores", ents) == set()
+        assert reader.scans == 3  # S1 holds two rows (a page each), s2 one: a Space is scanned once
+
+    def test_a_scan_cursor_that_does_not_advance_falls_back(self) -> None:
+        reader = FakeReader(stored_for(data()))
+        reader.scan = lambda c, g, after: ScanPage([], "aa")  # type: ignore[method-assign]
+        serve = ScoresServe(reader)
+        assert serve.changed_keys("global_scores", data()) is None
+        assert serve.stats.fallback["error"] == 1
+
     def test_row_with_a_value_counts_as_changed(self) -> None:
         ents = data()
         rows = stored_for(ents)
@@ -175,7 +224,7 @@ class TestFallback:
 
     def test_budget_overrun_falls_back_and_counts_timeout(self) -> None:
         now = [0.0]
-        reader = FakeReader(stored_for(data()), tick=lambda: now.__setitem__(0, now[0] + 700.0))
+        reader = FakeReader(stored_for(data()), tick=lambda: now.__setitem__(0, now[0] + 700.0), page=1)
         serve = ScoresServe(reader, budget_s=600.0, clock=lambda: now[0])
         assert serve.changed_keys("global_scores", data()) is None
         assert serve.stats.fallback == {"timeout": 1}
@@ -234,3 +283,36 @@ class TestDerivedGetReader:
         r = DerivedGetReader.from_env({"GEODB_KEY_PATH": "/k", "GEODB_BINDING_PATH": "/b"})
         assert r is not None and r._argv[-2:] == ["derived", "pipe"]
         assert DerivedGetReader.from_env({}) is None
+
+
+class TestDerivedScanPages:
+    def _reader(self, tmp_path, answers: list[str]) -> DerivedGetReader:
+        p = tmp_path / "scan.py"
+        p.write_text(
+            "import sys\nanswers = %r\nlines = []\nprint('ready', flush=True)\nfor l in sys.stdin:\n"
+            "    lines.append(l)\n    a = answers.pop(0)\n    sys.stdout.write('+%%d\\n%%s' %% (len(a), a))\n    sys.stdout.flush()\n"
+            % answers
+        )
+        return DerivedGetReader([sys.executable, str(p)], timeout=5.0)
+
+    def test_pages_resume_from_the_cursor_and_stop_at_the_end(self, tmp_path) -> None:
+        first = f"1.5\t6132\t\n1\t62\t7662\nmore\t01aabb\n"
+        last = "0.5\t63\t\n"
+        r = self._reader(tmp_path, [first, last])
+        page = r.scan(2, ZERO, None)
+        assert page.rows == [(1.5, "6132", ""), (1.0, "62", "7662")] and page.next == "01aabb"
+        page = r.scan(2, ZERO, page.next)
+        assert page.rows == [(0.5, "63", "")] and page.next is None
+        r.close()
+
+    def test_an_empty_group_is_an_empty_last_page(self, tmp_path) -> None:
+        r = self._reader(tmp_path, [""])
+        assert r.scan(3, ZERO, None) == ScanPage([], None)
+        r.close()
+
+    def test_a_malformed_row_or_cursor_is_a_read_error(self, tmp_path) -> None:
+        for bad in ("nan\t61\t\n", "1\tzz\t\n", "1\t61\n", "1\t61\t\nmore\tnothex\n"):
+            r = self._reader(tmp_path, [bad])
+            with pytest.raises(GeoDbReadError):
+                r.scan(2, ZERO, None)
+            r.close()
