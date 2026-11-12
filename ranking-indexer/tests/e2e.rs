@@ -3275,3 +3275,320 @@ async fn a_retried_clear_still_rescores_the_block() {
             .unwrap();
     assert_eq!(queued, 0, "the recompute cleared the queue");
 }
+
+/// Queue entries of a block in `ranks.pending_recomputes`, with attempts.
+async fn queued(storage: &Storage, block: u128) -> Vec<(i64, i32)> {
+    sqlx::query_as(
+        "SELECT seq, attempts FROM ranks.pending_recomputes WHERE block_id = $1 ORDER BY seq",
+    )
+    .bind(u(block))
+    .fetch_all(storage.pool())
+    .await
+    .unwrap()
+}
+
+/// `url` with a session `lock_timeout`, so a recompute waiting on a held
+/// block lock fails instead of waiting.
+fn with_lock_timeout(url: &str, ms: u32) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}options=-c%20lock_timeout%3D{ms}")
+}
+
+/// GEO-3591 review 2: a queued block whose recompute keeps failing does not
+/// fail unrelated edits with deletes. The edit's own block is rescored first;
+/// the failing block is tried best effort, counted, and after
+/// `LIVE_DRAIN_MAX_ATTEMPTS` failures left to the backfill, whose queue pass
+/// (`drain_pending_recomputes` with no cap) still recomputes it.
+#[tokio::test]
+async fn a_failing_queued_block_does_not_fail_unrelated_deletes() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let impatient = Storage::new(&with_lock_timeout(&url, 200))
+        .await
+        .expect("connect");
+    const SPACE: u128 = 0xE2E5_3596_0001;
+    const STUCK_SPACE: u128 = 0xE2E5_3596_0002;
+    const M1: u128 = 0xE2E5_3596_0011;
+    const M2: u128 = 0xE2E5_3596_0012;
+    const BLOCK: u128 = 0xE2E5_3596_0021;
+    const STUCK: u128 = 0xE2E5_3596_0022;
+    const R1: u128 = 0xE2E5_3596_0041;
+    const R2: u128 = 0xE2E5_3596_0042;
+    const A: u128 = 0xE2E5_3596_0031;
+    const B: u128 = 0xE2E5_3596_0032;
+    fresh_dao_block(&storage, SPACE, &[M1, M2], BLOCK, &[R1, R2], None).await;
+    fresh_dao_block(&storage, STUCK_SPACE, &[], STUCK, &[], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(R1, BLOCK, 0x3596_1000, SPACE, &[A, B]),
+        10,
+    )
+    .await;
+    apply_in(
+        &storage,
+        M2,
+        &ballot_edit(R2, BLOCK, 0x3596_2000, SPACE, &[B]),
+        11,
+    )
+    .await;
+
+    // STUCK is queued and its recompute fails (its lock is held, and the
+    // impatient connection gives up waiting).
+    sqlx::query("INSERT INTO ranks.pending_recomputes (block_id) VALUES ($1)")
+        .bind(u(STUCK))
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    let held = storage.lock_block_for_recompute(u(STUCK)).await.unwrap();
+
+    // M1 clears their ballot: the edit succeeds and its own block is rescored.
+    let clear = EditBuilder::new(gid(0x3596_0C1E))
+        .delete_relation(gid(0x3596_1000))
+        .delete_relation(gid(0x3596_1001))
+        .build();
+    apply_detected_edit(&detect(&clear, u(M1), 20, 0), u(M1), &impatient)
+        .await
+        .expect("a failing queued block must not fail this edit");
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
+    assert_eq!(queued(&storage, STUCK).await[0].1, 1, "one failed attempt");
+
+    // Unrelated edits with deletes keep trying STUCK until the cap...
+    for n in 0..4u128 {
+        let unrelated = EditBuilder::new(gid(0x3596_0E00 + n))
+            .delete_relation(gid(0x3596_0F00 + n))
+            .build();
+        apply_detected_edit(
+            &detect(&unrelated, u(M2), 30 + n as i64, 0),
+            u(M2),
+            &impatient,
+        )
+        .await
+        .unwrap();
+    }
+    // ...then leave it alone.
+    let attempts = queued(&storage, STUCK).await[0].1;
+    assert_eq!(
+        attempts,
+        ranking_indexer::recompute::LIVE_DRAIN_MAX_ATTEMPTS
+    );
+    held.commit().await.unwrap();
+
+    // The backfill's queue pass takes it whatever its attempts.
+    let (recomputed, failed) = ranking_indexer::recompute::drain_pending_recomputes(
+        &storage,
+        BlockMeta::default(),
+        Utc::now(),
+        None,
+        &std::collections::HashSet::new(),
+    )
+    .await;
+    assert_eq!(failed, 0);
+    assert!(recomputed >= 1);
+    assert!(queued(&storage, STUCK).await.is_empty());
+}
+
+/// GEO-3591 review 2: a recompute clears only the queue entries it saw before
+/// reading its inputs. An entry committed after that (whatever its sequence
+/// number) stays queued.
+#[tokio::test]
+async fn a_recompute_clears_only_the_queue_entries_it_saw() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let block = Uuid::new_v4();
+    let insert = || async {
+        sqlx::query_scalar::<_, i64>(
+            "INSERT INTO ranks.pending_recomputes (block_id) VALUES ($1) RETURNING seq",
+        )
+        .bind(block)
+        .fetch_one(storage.pool())
+        .await
+        .unwrap()
+    };
+    let before = insert().await;
+    let mut lock = storage.lock_block_for_recompute(block).await.unwrap();
+    let seen = storage
+        .pending_recompute_seen(&mut lock, block)
+        .await
+        .unwrap();
+    assert_eq!(seen, vec![before]);
+    let after = insert().await;
+    storage
+        .clear_pending_recompute(&mut lock, &seen)
+        .await
+        .unwrap();
+    lock.commit().await.unwrap();
+    let left: Vec<i64> =
+        sqlx::query_scalar("SELECT seq FROM ranks.pending_recomputes WHERE block_id = $1")
+            .bind(block)
+            .fetch_all(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(left, vec![after]);
+    sqlx::query("DELETE FROM ranks.pending_recomputes WHERE block_id = $1")
+        .bind(block)
+        .execute(storage.pool())
+        .await
+        .unwrap();
+}
+
+/// GEO-3591 review 2: a Rank deleted before it has a row is tombstoned too:
+/// one created and deleted (with its link) in one edit, and one deleted while
+/// still unregistered. A delete from another space tombstones nothing for
+/// the Rank's own space.
+#[tokio::test]
+async fn a_rank_deleted_before_it_has_a_row_is_not_recovered() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_3597_0001;
+    const M1: u128 = 0xE2E5_3597_0011;
+    const M2: u128 = 0xE2E5_3597_0012;
+    const BLOCK: u128 = 0xE2E5_3597_0021;
+    const SAME_EDIT: u128 = 0xE2E5_3597_0041;
+    const UNREGISTERED: u128 = 0xE2E5_3597_0042;
+    const OTHERS: u128 = 0xE2E5_3597_0043;
+    const A: u128 = 0xE2E5_3597_0031;
+    fresh_dao_block(
+        &storage,
+        SPACE,
+        &[M1, M2],
+        BLOCK,
+        &[SAME_EDIT, UNREGISTERED, OTHERS],
+        None,
+    )
+    .await;
+    let types_rel = |rel: u128, rank: u128, space: u128| async move {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap())
+        .bind(u(rank))
+        .bind(Uuid::parse_str(RANK_TYPE_ID).unwrap())
+        .bind(u(space))
+        .execute(pool)
+        .await
+        .unwrap();
+    };
+
+    // Created, linked, voted and deleted in one edit. The kg-indexer keeps the
+    // TYPES relation; it may not have indexed it yet when we tombstone.
+    let mut edit = ballot_edit(SAME_EDIT, BLOCK, 0x3597_1000, SPACE, &[A]);
+    edit.ops
+        .push(grc_20::Op::DeleteEntity(grc_20::model::op::DeleteEntity {
+            id: gid(SAME_EDIT),
+            context: None,
+        }));
+    apply_in(&storage, M1, &edit, 10).await;
+    types_rel(0x3597_10A0, SAME_EDIT, M1).await;
+
+    // Typed in the graph (in M1) but never registered, then deleted by M1.
+    types_rel(0x3597_20A0, UNREGISTERED, M1).await;
+    // Typed in M2 but "deleted" from M1: not M1's to delete.
+    types_rel(0x3597_30A0, OTHERS, M2).await;
+    let delete = EditBuilder::new(gid(0x3597_0DE1))
+        .delete_entity(gid(UNREGISTERED))
+        .delete_entity(gid(OTHERS))
+        .build();
+    apply_in(&storage, M1, &delete, 11).await;
+
+    let candidates = storage.find_unregistered_ranks().await.unwrap();
+    assert!(
+        !candidates.contains(&u(SAME_EDIT)),
+        "created and deleted in one edit"
+    );
+    assert!(
+        !candidates.contains(&u(UNREGISTERED)),
+        "deleted while unregistered"
+    );
+    assert!(
+        candidates.contains(&u(OTHERS)),
+        "a delete from another space is ignored"
+    );
+}
+
+/// GEO-3591 review 2 (base gap): a Rank moving to another block by a new
+/// RANK_BLOCK link leaves the old block, which is rescored.
+#[tokio::test]
+async fn a_rank_moved_to_another_block_leaves_the_old_one() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    const SPACE: u128 = 0xE2E5_3598_0001;
+    const SPACE2: u128 = 0xE2E5_3598_0002;
+    const M1: u128 = 0xE2E5_3598_0011;
+    const OLD_BLOCK: u128 = 0xE2E5_3598_0021;
+    const NEW_BLOCK: u128 = 0xE2E5_3598_0022;
+    const RANK: u128 = 0xE2E5_3598_0041;
+    const A: u128 = 0xE2E5_3598_0031;
+    fresh_dao_block(&storage, SPACE, &[M1], OLD_BLOCK, &[RANK], None).await;
+    fresh_dao_block(&storage, SPACE2, &[M1], NEW_BLOCK, &[], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(RANK, OLD_BLOCK, 0x3598_1000, SPACE, &[A]),
+        10,
+    )
+    .await;
+    assert_eq!(score_rows(&storage, OLD_BLOCK).await, vec![(u(A), 1)]);
+
+    let relink = EditBuilder::new(gid(0x3598_0E11))
+        .create_relation(|b| {
+            b.id(gid(0x3598_10B1))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(NEW_BLOCK))
+        })
+        .build();
+    apply_in(&storage, M1, &relink, 11).await;
+    assert!(
+        score_rows(&storage, OLD_BLOCK).await.is_empty(),
+        "left the old block"
+    );
+    assert_eq!(score_rows(&storage, NEW_BLOCK).await, vec![(u(A), 1)]);
+    assert!(queued(&storage, OLD_BLOCK).await.is_empty());
+}
+
+/// GEO-3591 review 2: the blocks an edit's own deletes change are rescored by
+/// that edit, even when the queue would not offer them (here: the block has
+/// an old entry that the live consumer gave up on).
+#[tokio::test]
+async fn an_edits_own_deletes_are_rescored_even_when_the_queue_gave_up() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    const SPACE: u128 = 0xE2E5_3599_0001;
+    const M1: u128 = 0xE2E5_3599_0011;
+    const BLOCK: u128 = 0xE2E5_3599_0021;
+    const RANK: u128 = 0xE2E5_3599_0041;
+    const A: u128 = 0xE2E5_3599_0031;
+    fresh_dao_block(&storage, SPACE, &[M1], BLOCK, &[RANK], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(RANK, BLOCK, 0x3599_1000, SPACE, &[A]),
+        10,
+    )
+    .await;
+    sqlx::query("INSERT INTO ranks.pending_recomputes (block_id, attempts) VALUES ($1, 99)")
+        .bind(u(BLOCK))
+        .execute(storage.pool())
+        .await
+        .unwrap();
+    let clear = EditBuilder::new(gid(0x3599_0C1E))
+        .delete_relation(gid(0x3599_1000))
+        .build();
+    apply_in(&storage, M1, &clear, 20).await;
+    assert!(score_rows(&storage, BLOCK).await.is_empty());
+}

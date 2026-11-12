@@ -1384,6 +1384,8 @@ export const rankingPendingRecomputes = ranks.table(
 		seq: bigserial({mode: "number"}).primaryKey(),
 		blockId: uuid("block_id").notNull(),
 		queuedAt: timestamp("queued_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+		/** Failed live recomputes; the consumer stops retrying after a few, the backfill does not. */
+		attempts: integer().notNull().default(0),
 	},
 	(table) => [index("pending_recomputes_block_id_idx").on(table.blockId)],
 )

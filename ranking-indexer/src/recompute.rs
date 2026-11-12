@@ -99,10 +99,10 @@ pub async fn recompute_block(
     // backfill can both reach it). Released when `lock` commits below, or is
     // dropped on any early return or error.
     let mut lock = storage.lock_block_for_recompute(block_id).await?;
-    // Deletes queued for this block before we read its inputs (GEO-3591).
-    // Cleared below with the commit; a delete queued after this point stays
-    // queued for the next recompute.
-    let pending = storage.pending_recompute_mark(&mut lock, block_id).await?;
+    // Queue entries for this block visible before we read its inputs
+    // (GEO-3591). Exactly these are cleared below with the commit; an entry
+    // committed after this read stays queued for the next recompute.
+    let seen = storage.pending_recompute_seen(&mut lock, block_id).await?;
 
     let block = match storage.get_ranking_block(block_id).await? {
         Some(block) => block,
@@ -120,11 +120,7 @@ pub async fn recompute_block(
                 }
                 None => {
                     // Nothing to score, so nothing left to do for a queued delete.
-                    if let Some(mark) = pending {
-                        storage
-                            .clear_pending_recompute(&mut lock, block_id, mark)
-                            .await?;
-                    }
+                    storage.clear_pending_recompute(&mut lock, &seen).await?;
                     lock.commit().await?;
                     return Ok(());
                 }
@@ -187,11 +183,7 @@ pub async fn recompute_block(
     // until the public graph shows it.
     storage.mark_block_scoring_applied(block_id, config).await?;
 
-    if let Some(mark) = pending {
-        storage
-            .clear_pending_recompute(&mut lock, block_id, mark)
-            .await?;
-    }
+    storage.clear_pending_recompute(&mut lock, &seen).await?;
     lock.commit().await?;
 
     tracing::debug!(
@@ -223,23 +215,35 @@ pub async fn apply_detected_edit(
     // delete from any other space changes nothing.
     //
     // Each delete queues the blocks it changed in `ranks.pending_recomputes`
-    // in the same statement, and those are what get recomputed below, not
-    // what the delete returned. A retry of this edit after a failed recompute
-    // deletes nothing the second time, but the queue still holds the blocks.
+    // in the same statement and returns them. The returned blocks are this
+    // edit's own and are recomputed below. A retry of this edit after a failed
+    // recompute deletes nothing the second time; the queue still holds the
+    // blocks, and the drain after the edit's own blocks picks them up.
     let has_deletes =
         !detected.deleted_entities.is_empty() || !detected.deleted_relations.is_empty();
+    let mut own: HashSet<Uuid> = HashSet::new();
     if !detected.deleted_entities.is_empty() {
-        storage
-            .delete_rankings(&detected.deleted_entities, space_id)
-            .await?;
+        own.extend(
+            storage
+                .delete_rankings(
+                    &detected.deleted_entities,
+                    &detected.deleted_ranks,
+                    space_id,
+                )
+                .await?,
+        );
     }
     if !detected.deleted_relations.is_empty() {
-        storage
-            .unlink_rankings_by_relation(&detected.deleted_relations, space_id)
-            .await?;
-        storage
-            .delete_ranking_items_by_relation(&detected.deleted_relations, space_id)
-            .await?;
+        own.extend(
+            storage
+                .unlink_rankings_by_relation(&detected.deleted_relations, space_id)
+                .await?,
+        );
+        own.extend(
+            storage
+                .delete_ranking_items_by_relation(&detected.deleted_relations, space_id)
+                .await?,
+        );
     }
 
     for block in &detected.blocks {
@@ -266,22 +270,82 @@ pub async fn apply_detected_edit(
     for link in &detected.block_links {
         // The RANK_BLOCK relation is authored in the ranking's space, so the
         // edit's `space_id` is the rank row's space.
-        storage
-            .set_ranking_block(link.ranking_id, link.block_id, link.relation_id, space_id)
-            .await?;
+        // A rank moving block also rescores the block it left.
+        own.extend(
+            storage
+                .set_ranking_block(link.ranking_id, link.block_id, link.relation_id, space_id)
+                .await?,
+        );
     }
 
+    // This edit's own blocks first, with errors propagating as for any edit.
     let now = Utc::now();
-    let mut blocks = affected_blocks(detected, storage).await?;
-    if has_deletes {
-        // This edit's queued blocks, and any an earlier failed run left.
-        blocks.extend(storage.pending_recompute_blocks().await?);
+    own.extend(affected_blocks(detected, storage).await?);
+    for block_id in &own {
+        recompute_block(*block_id, detected.meta, now, storage).await?;
     }
-    for block_id in blocks {
-        recompute_block(block_id, detected.meta, now, storage).await?;
+
+    // Then whatever an earlier failed run left queued, best effort: a block
+    // that fails here must not fail an unrelated edit, and one that keeps
+    // failing is left to the hourly backfill after a few tries.
+    if has_deletes {
+        drain_pending_recomputes(
+            storage,
+            detected.meta,
+            now,
+            Some(LIVE_DRAIN_MAX_ATTEMPTS),
+            &own,
+        )
+        .await;
     }
 
     Ok(())
+}
+
+/// How many failed recomputes of a queued block the live consumer tries
+/// before leaving it to the hourly backfill.
+pub const LIVE_DRAIN_MAX_ATTEMPTS: i32 = 3;
+
+/// Recompute the blocks in `ranks.pending_recomputes` (GEO-3591), except
+/// `skip`. A failure is logged, counted in
+/// `ranking_indexer_pending_recompute_failures_total` and in the entry's
+/// `attempts`, and does not stop the others. `max_attempts` leaves out blocks
+/// that have already failed that often (the live consumer); `None` takes every
+/// queued block (the hourly backfill). Returns `(recomputed, failed)`.
+pub async fn drain_pending_recomputes(
+    storage: &Storage,
+    meta: BlockMeta,
+    now: DateTime<Utc>,
+    max_attempts: Option<i32>,
+    skip: &HashSet<Uuid>,
+) -> (usize, usize) {
+    let queued = match storage.pending_recompute_blocks(max_attempts).await {
+        Ok(queued) => queued,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the pending recompute queue");
+            crate::metrics::pending_recompute_failed();
+            return (0, 1);
+        }
+    };
+    let (mut recomputed, mut failed) = (0, 0);
+    for block_id in queued.into_iter().filter(|b| !skip.contains(b)) {
+        match recompute_block(block_id, meta, now, storage).await {
+            Ok(()) => recomputed += 1,
+            Err(e) => {
+                failed += 1;
+                crate::metrics::pending_recompute_failed();
+                tracing::warn!(
+                    block_id = %block_id,
+                    error = %e,
+                    "queued block recompute failed; left queued"
+                );
+                if let Err(e) = storage.note_pending_recompute_failure(block_id).await {
+                    tracing::warn!(block_id = %block_id, error = %e, "could not count the failure");
+                }
+            }
+        }
+    }
+    (recomputed, failed)
 }
 
 #[cfg(test)]

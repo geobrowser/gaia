@@ -100,11 +100,12 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         s.remove_editor(a, b).await,
         s.upsert_ranking_block(&block).await,
         s.upsert_ranking(&ranking).await,
-        s.set_ranking_block(a, b, b, b).await,
+        nothing(s.set_ranking_block(a, b, b, b).await),
         s.replace_ranking_items(a, &[item], b).await,
         nothing(s.delete_ranking_items_by_relation(&[a], b).await),
         nothing(s.unlink_rankings_by_relation(&[a], b).await),
-        nothing(s.delete_rankings(&[a], b).await),
+        nothing(s.delete_rankings(&[a], &[a], b).await),
+        s.note_pending_recompute_failure(a).await,
         s.fill_missing_relation_ids()
             .await
             .map(|n| assert_eq!(n, (0, 0))),
@@ -179,6 +180,7 @@ fn pg_writes_off_issues_no_statements_and_counts_skips() {
         "unlink_rankings",
         "delete_rankings",
         "fill_relation_ids",
+        "note_pending_recompute_failure",
         "replace_ranking_scores",
         "replace_rank_position_projection",
     ] {

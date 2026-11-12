@@ -75,19 +75,16 @@ async fn main() -> Result<(), IndexerError> {
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
     let stale_blocks = storage.find_stale_ranking_type_blocks().await?;
     let rank_candidates = storage.find_unregistered_ranks().await?;
-    let mut pending_configs = storage.find_pending_block_configs().await?;
-    // Blocks a delete queued whose recompute never ran or failed (GEO-3591);
-    // recomputed in the same pass as changed configs.
-    for block_id in storage.pending_recompute_blocks().await? {
-        if !pending_configs.contains(&block_id) {
-            pending_configs.push(block_id);
-        }
-    }
+    let pending_configs = storage.find_pending_block_configs().await?;
+    // Blocks a delete queued whose recompute never ran or failed (GEO-3591),
+    // including ones the live consumer gave up on.
+    let queued = storage.pending_recompute_blocks(None).await?;
     info!(
         blocks = block_candidates.len(),
         stale_blocks = stale_blocks.len(),
         ranks = rank_candidates.len(),
         pending_configs = pending_configs.len(),
+        queued = queued.len(),
         dry_run,
         "found unregistered/stale blocks and unregistered ranks"
     );
@@ -114,7 +111,10 @@ async fn main() -> Result<(), IndexerError> {
             info!(rank_id = %id, "would recover rank");
         }
         for id in &pending_configs {
-            info!(block_id = %id, "would recompute (block config changed or a delete queued)");
+            info!(block_id = %id, "would recompute (block config changed)");
+        }
+        for id in &queued {
+            info!(block_id = %id, "would recompute (queued by a delete)");
         }
         for id in &all_blocks {
             info!(block_id = %id, "would recompute (--recompute-all)");
@@ -143,6 +143,7 @@ async fn main() -> Result<(), IndexerError> {
         && stale_blocks.is_empty()
         && rank_candidates.is_empty()
         && pending_configs.is_empty()
+        && queued.is_empty()
         && all_blocks.is_empty()
     {
         if fill_failed {
@@ -276,9 +277,8 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
-    // Blocks whose scoring config was added or changed (GEO-3676), and blocks
-    // with a queued delete (GEO-3591). A block recomputed above already applied
-    // its current config and cleared its queue.
+    // Blocks whose scoring config was added or changed (GEO-3676). A block
+    // recomputed above already applied its current config.
     let mut applied_configs = 0;
     for block_id in pending_configs {
         if !handled_blocks.insert(block_id) {
@@ -288,9 +288,25 @@ async fn main() -> Result<(), IndexerError> {
             error!(block_id = %block_id, error = %e, "recompute failed for a changed block config");
             failed += 1;
         } else {
-            info!(block_id = %block_id, "recomputed block for its changed config or a queued delete");
+            info!(block_id = %block_id, "recomputed block for its changed config");
             applied_configs += 1;
         }
+    }
+
+    // Blocks queued by a delete (GEO-3591) that no recompute has cleared,
+    // whatever their failed attempts. A block recomputed above already cleared
+    // its entries.
+    let (drained, drain_failed) = ranking_indexer::recompute::drain_pending_recomputes(
+        &storage,
+        meta,
+        now,
+        None,
+        &handled_blocks,
+    )
+    .await;
+    failed += drain_failed;
+    for block_id in queued {
+        handled_blocks.insert(block_id);
     }
 
     // Full recompute last, so anything recovered above is included rather than
@@ -324,6 +340,7 @@ async fn main() -> Result<(), IndexerError> {
         recovered_ranks,
         still_unregistered_ranks,
         applied_configs,
+        drained,
         recomputed_all,
         failed,
         "backfill complete"

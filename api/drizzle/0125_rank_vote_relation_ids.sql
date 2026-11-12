@@ -12,14 +12,17 @@
 --    id, authored in the Rank's own space, deletes the item.
 -- 2. ranks.rankings.block_relation_id: the RANK_BLOCK relation that links the Rank to its block. A
 --    DeleteRelation of that id from the Rank's space unlinks the Rank (block_id NULL).
--- 3. ranks.pending_recomputes: blocks a delete changed that have not been recomputed yet. The delete and
---    this row commit together; the recompute that rescored the block clears the row. A delete edit retried
---    after a failed recompute matches nothing the second time, so without this row the retry would not
---    know which block to rescore.
--- 4. ranks.deleted_rankings: Rank entities deleted by an edit (DeleteEntity, in the Rank's space). The
---    kg-indexer does not apply DeleteEntity, so the Rank's TYPES relation stays in public.relations and the
---    hourly backfill would otherwise register the deleted Rank again. Cleared when an edit creates the Rank
---    again.
+-- 3. ranks.pending_recomputes: blocks a delete (or a Rank moving block) changed that have not been
+--    recomputed yet. The write and this row commit together; the recompute that rescored the block clears
+--    the rows it saw. A delete edit retried after a failed recompute matches nothing the second time, so
+--    without this row the retry would not know which block to rescore. `attempts` counts failed recomputes
+--    from the live consumer, which stops retrying a block after a few; the hourly backfill retries it
+--    regardless.
+-- 4. ranks.deleted_rankings: Rank entities deleted by an edit (DeleteEntity), keyed by the deleting edit's
+--    space. The kg-indexer does not apply DeleteEntity, so the Rank's TYPES relation stays in
+--    public.relations and the hourly backfill would otherwise register the deleted Rank again. The backfill
+--    honours a row only when it matches the space of the Rank's TYPES relation, so a delete from another
+--    space has no effect. Cleared when an edit creates the Rank again.
 --
 -- NO FILL HERE. Existing rows get their relation ids from public.relations when the new ranking-indexer
 -- starts (Storage::fill_missing_relation_ids, before it consumes anything) and on every hourly
@@ -41,7 +44,8 @@ CREATE INDEX IF NOT EXISTS "rankings_block_relation_id_idx" ON "ranks"."rankings
 CREATE TABLE IF NOT EXISTS "ranks"."pending_recomputes" (
 	"seq" bigserial PRIMARY KEY NOT NULL,
 	"block_id" uuid NOT NULL,
-	"queued_at" timestamp with time zone DEFAULT now() NOT NULL
+	"queued_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"attempts" integer DEFAULT 0 NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "pending_recomputes_block_id_idx" ON "ranks"."pending_recomputes" ("block_id");

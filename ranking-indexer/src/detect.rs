@@ -193,6 +193,10 @@ pub struct DetectedEdit {
     pub deleted_relations: Vec<Uuid>,
     /// Every entity id the edit deletes (storage keeps only Rank ids).
     pub deleted_entities: Vec<Uuid>,
+    /// Ranks this edit created and then deleted. They never reach storage as
+    /// rows, but are tombstoned so the backfill does not register them from
+    /// the `TYPES` relation the kg-indexer keeps.
+    pub deleted_ranks: Vec<Uuid>,
     /// Block provenance of the edit, recorded on entities the recompute mints.
     pub meta: BlockMeta,
 }
@@ -372,6 +376,9 @@ pub fn detect(
                 let id = id_to_uuid(&entity.id);
                 // Likewise a Rank created earlier in this edit, with the votes
                 // and link that hang off it.
+                if out.rankings.iter().any(|r| r.id == id) {
+                    out.deleted_ranks.push(id);
+                }
                 out.rankings.retain(|r| r.id != id);
                 out.items.retain(|it| it.ranking_id != id);
                 out.block_links.retain(|l| l.ranking_id != id);
@@ -846,6 +853,7 @@ mod tests {
         assert!(detected.rankings.is_empty());
         assert!(detected.items.is_empty());
         assert_eq!(detected.deleted_entities, vec![Uuid::from_u128(RANK)]);
+        assert_eq!(detected.deleted_ranks, vec![Uuid::from_u128(RANK)]);
     }
 
     #[test]
