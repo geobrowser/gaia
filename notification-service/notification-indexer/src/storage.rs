@@ -888,8 +888,42 @@ impl Storage {
         if let Some(twin) = &self.twin {
             let seen: Vec<(Uuid, i64)> = expired.iter().map(|e| (e.id, e.end_time)).collect();
             twin.observe_expired_proposals(min_end_time, &seen);
+            if twin.reverse_due() {
+                // Compare only, and off the poller's path: read Postgres's side of the window on
+                // a task of its own and hand it to the twin.
+                let (twin, pool) = (twin.clone(), self.pool.clone());
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    rt.spawn(async move {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs() as i64);
+                        let ids = Self::proposal_ids_ending_in(&pool, min_end_time, now).await;
+                        twin.observe_expired_reverse(min_end_time, now, ids);
+                    });
+                }
+            }
         }
         Ok(expired)
+    }
+
+    /// Every `proposals_current` id whose `end_time` is in `[floor, now)`, in any state: the
+    /// Postgres side of the twin's reverse expiry check. `None` when the read failed or the set
+    /// is larger than the twin takes.
+    async fn proposal_ids_ending_in(pool: &PgPool, floor: i64, now: i64) -> Option<Vec<Uuid>> {
+        let limit = crate::geodb_twin::MAX_REVERSE_SQL_IDS as i64 + 1;
+        let rows = sqlx::query(
+            "SELECT id FROM proposals_current WHERE end_time >= $1 AND end_time < $2 LIMIT $3",
+        )
+        .bind(floor)
+        .bind(now)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .ok()?;
+        if rows.len() as i64 >= limit {
+            return None;
+        }
+        Some(rows.iter().map(|r| r.get("id")).collect())
     }
 
     /// Delete notification rows older than `retention_days`, in batches of
