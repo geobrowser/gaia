@@ -112,6 +112,9 @@ spec:
           image: registry.digitalocean.com/geo/notification-indexer:latest
           imagePullPolicy: Always
           env:
+            # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+            - name: NOTIFICATION_INDEXER_PG_WRITES
+              value: "1"
             # Database configuration
             - name: DATABASE_URL
               valueFrom:

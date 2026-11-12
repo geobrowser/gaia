@@ -170,6 +170,9 @@ spec:
                   mountPath: /etc/geodb/cursor-key
                   readOnly: true
               env:
+                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+                - name: RANKING_INDEXER_PG_WRITES
+                  value: "1"
                 - name: FEED_SIGNAL_CONFIG_SOURCE
                   value: postgres
                 - name: PGSSLROOTCERT
@@ -309,6 +312,9 @@ spec:
                   mountPath: /ssl
                   readOnly: true
               env:
+                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+                - name: RANKING_INDEXER_PG_WRITES
+                  value: "1"
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL
