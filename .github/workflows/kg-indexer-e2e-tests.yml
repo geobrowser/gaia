@@ -124,31 +124,6 @@ jobs:
         working-directory: ./api
         run: bun run db:migrate
 
-      # These three files hold 21 cases (12 + 5 + 4) that no workflow ran: all are
-      # #[ignore] so a bare `cargo test` skips them. They need only the migrated
-      # Postgres above. One thread because the tally-queue cases share a queue.
-      # Four of them had rotted against the foreign keys and the governance-v2
-      # columns, so a green here is a real signal, not a restored habit.
-      - name: Run storage integration tests (ignored by default)
-        run: |
-          set -euo pipefail
-          min=21
-          cargo test --package kg-indexer \
-            --test governance_storage_integration \
-            --test subspace_integration \
-            --test system_relations_integration \
-            -- --ignored --test-threads=1 2>&1 | tee storage-integration.log
-          passed=$(grep -E '^test result: ok\.' storage-integration.log \
-            | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' \
-            | paste -sd+ - | bc)
-          echo "storage integration cases passed: ${passed}"
-          if [ "${passed:-0}" -lt "$min" ]; then
-            echo "::error::expected at least ${min} cases to run, saw ${passed:-0}"
-            exit 1
-          fi
-        env:
-          RUST_BACKTRACE: 1
-
       - name: Wait for Kafka
         run: |
           echo "Waiting for Kafka to be ready..."
@@ -186,5 +161,32 @@ jobs:
 
       - name: Run E2E assertions
         run: cargo test --package kg-indexer --test e2e --release
+        env:
+          RUST_BACKTRACE: 1
+
+      # These three files hold 21 cases (12 + 5 + 4) that no workflow ran: all are
+      # #[ignore] so a bare `cargo test` skips them. They need only the migrated
+      # Postgres above. It runs LAST: the cases insert
+      # spaces and entities, and the e2e assertions above count rows (exactly 18
+      # spaces), so running before them turned that suite red. One thread because the tally-queue cases share a queue.
+      # Four of them had rotted against the foreign keys and the governance-v2
+      # columns, so a green here is a real signal, not a restored habit.
+      - name: Run storage integration tests (ignored by default)
+        run: |
+          set -euo pipefail
+          min=21
+          cargo test --package kg-indexer \
+            --test governance_storage_integration \
+            --test subspace_integration \
+            --test system_relations_integration \
+            -- --ignored --test-threads=1 2>&1 | tee storage-integration.log
+          passed=$(grep -E '^test result: ok\.' storage-integration.log \
+            | sed -E 's/^test result: ok\. ([0-9]+) passed.*/\1/' \
+            | paste -sd+ - | bc)
+          echo "storage integration cases passed: ${passed}"
+          if [ "${passed:-0}" -lt "$min" ]; then
+            echo "::error::expected at least ${min} cases to run, saw ${passed:-0}"
+            exit 1
+          fi
         env:
           RUST_BACKTRACE: 1
