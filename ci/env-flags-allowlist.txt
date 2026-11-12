@@ -11,7 +11,6 @@ GEODB_CONFIG_REVISION_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, ti
 GEODB_CURSOR_COLLECTION  path or id with a code default that is the intended value
 GEODB_DERIVED_RETRIES  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_DERIVED_SESSION_REFRESH_S  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
-GEODB_EDIT_META  serve flags default off by design (unset = Postgres/current source)
 GEODB_EDIT_META_SHADOW  serve flags default off by design (unset = Postgres/current source)
 GEODB_EDIT_META_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_EDIT_META_SHADOW_MAX_PER_MINUTE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
