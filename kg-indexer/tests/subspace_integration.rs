@@ -22,6 +22,34 @@ async fn get_pool() -> sqlx::Pool<sqlx::Postgres> {
         .expect("Failed to connect to database")
 }
 
+/// `subspaces` has foreign keys on both ends to `spaces`, so a row can only be
+/// inserted between spaces that exist. These tests predate those constraints
+/// and used bare random ids, which made four of the five fail with 23503.
+async fn ensure_space(pool: &sqlx::Pool<sqlx::Postgres>, id: Uuid) {
+    sqlx::query(
+        r#"INSERT INTO spaces (id, type, address)
+           VALUES ($1, 'DAO'::"spaceTypes", '0x0000000000000000000000000000000000000000')
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("failed to insert space");
+}
+
+/// `subspace_topics.topic_id` references `entities`, not `spaces`.
+async fn ensure_entity(pool: &sqlx::Pool<sqlx::Postgres>, id: Uuid) {
+    sqlx::query(
+        "INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+         VALUES ($1, '2024-01-01', '1', '2024-01-01', '1')
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .expect("failed to insert entity");
+}
+
 /// Insert a verified subspace, then unverify it, verify the row is gone.
 #[tokio::test]
 #[ignore]
@@ -29,6 +57,8 @@ async fn test_insert_verified_then_unverify() {
     let pool = get_pool().await;
     let parent = Uuid::new_v4();
     let child = Uuid::new_v4();
+    ensure_space(&pool, parent).await;
+    ensure_space(&pool, child).await;
 
     // Insert
     sqlx::query(
@@ -85,6 +115,8 @@ async fn test_dual_edges_remove_one_survives() {
     let pool = get_pool().await;
     let parent = Uuid::new_v4();
     let child = Uuid::new_v4();
+    ensure_space(&pool, parent).await;
+    ensure_space(&pool, child).await;
 
     // Insert both types
     sqlx::query(
@@ -157,6 +189,8 @@ async fn test_insert_topic_then_remove() {
     let pool = get_pool().await;
     let space = Uuid::new_v4();
     let topic = Uuid::new_v4();
+    ensure_space(&pool, space).await;
+    ensure_entity(&pool, topic).await;
 
     // Insert
     sqlx::query(
@@ -206,6 +240,8 @@ async fn test_insert_subspace_idempotent() {
     let pool = get_pool().await;
     let parent = Uuid::new_v4();
     let child = Uuid::new_v4();
+    ensure_space(&pool, parent).await;
+    ensure_space(&pool, child).await;
 
     for _ in 0..2 {
         sqlx::query(
@@ -250,6 +286,8 @@ async fn test_remove_nonexistent_is_noop() {
     let pool = get_pool().await;
     let parent = Uuid::new_v4();
     let child = Uuid::new_v4();
+    ensure_space(&pool, parent).await;
+    ensure_space(&pool, child).await;
 
     // Delete something that doesn't exist — should succeed
     let result = sqlx::query(

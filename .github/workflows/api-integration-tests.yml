@@ -61,6 +61,7 @@ jobs:
       - name: Run integration tests
         # Every api __tests__ folder must be listed here: the unit workflow
         # excludes **/__tests__/**, so a folder missing from this list runs nowhere.
+        # The four files excluded below run in the pg-free-tests job instead.
         run: >-
           bun run test
           src/kg/__tests__/
@@ -75,8 +76,47 @@ jobs:
           src/geodb/__tests__/
           src/pairFit/__tests__/
           src/gateway/__tests__/
+          --exclude "**/gateway/__tests__/entityShadowFields.test.ts"
+          --exclude "**/gateway/__tests__/searchShadow.test.ts"
+          --exclude "**/geodb/__tests__/rankedReadsShadow.test.ts"
+          --exclude "**/kg/__tests__/entityComputedTextFilterPlugin.test.ts"
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          IPFS_KEY: "test-key"
+          IPFS_GATEWAY_WRITE: "https://ipfs.io"
+          RPC_ENDPOINT: "https://rpc.testnet.example.com"
+          CHAIN_ID: "80451"
+          DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+
+  # Postgres-free __tests__ files: no services block, no DATABASE_URL (vitest.config.ts
+  # supplies a placeholder that nothing connects to). A file moved here must be
+  # excluded from the test job above, and its folder stays listed there.
+  pg-free-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./api
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run Postgres-free tests
+        run: >-
+          bun run test
+          src/gateway/__tests__/entityShadowFields.test.ts
+          src/gateway/__tests__/searchShadow.test.ts
+          src/geodb/__tests__/rankedReadsShadow.test.ts
+          src/kg/__tests__/entityComputedTextFilterPlugin.test.ts
+        env:
           IPFS_KEY: "test-key"
           IPFS_GATEWAY_WRITE: "https://ipfs.io"
           RPC_ENDPOINT: "https://rpc.testnet.example.com"

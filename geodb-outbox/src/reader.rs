@@ -85,6 +85,16 @@ pub fn complete_line(key: &[u8; KEY_BYTES], epoch: u64) -> String {
     format!("complete\t{}\t{epoch}\n", hex(key))
 }
 
+/// The `retry` request line: back to `pending` after `delay_ms`, `attempts + 1`. Epoch-fenced.
+pub fn retry_line(key: &[u8; KEY_BYTES], epoch: u64, delay_ms: u64) -> String {
+    format!("retry\t{}\t{epoch}\t{delay_ms}\n", hex(key))
+}
+
+/// The `fail` request line: `failed` for good, `attempts + 1`. Epoch-fenced.
+pub fn fail_line(key: &[u8; KEY_BYTES], epoch: u64) -> String {
+    format!("fail\t{}\t{epoch}\n", hex(key))
+}
+
 /// The rows of a claim's answer. An empty body is no units.
 pub fn parse_claim(body: &str) -> Result<Vec<Claimed>, MirrorError> {
     let bad = |l: &str| MirrorError::BadFrame(format!("claim row {l:?}"));
@@ -174,6 +184,26 @@ impl OutboxReader {
         let body = self
             .worker
             .call_replaying(&complete_line(&c.key, c.epoch), 64)
+            .await?;
+        parse_ack(&body)
+    }
+
+    /// Returns a claimed unit to `pending`, due after `delay_ms`, counting one failed try. A
+    /// lapsed lease answers [`Ack::LeaseLost`] and changes nothing (plan 10.16 W10).
+    pub async fn retry(&mut self, c: &Claimed, delay_ms: u64) -> Result<Ack, MirrorError> {
+        let body = self
+            .worker
+            .call_replaying(&retry_line(&c.key, c.epoch, delay_ms), 64)
+            .await?;
+        parse_ack(&body)
+    }
+
+    /// Ends a claimed unit as `failed`, counting one failed try. A lapsed lease answers
+    /// [`Ack::LeaseLost`] and changes nothing.
+    pub async fn fail(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
+        let body = self
+            .worker
+            .call_replaying(&fail_line(&c.key, c.epoch), 64)
             .await?;
         parse_ack(&body)
     }
@@ -294,6 +324,33 @@ mod tests {
             payload: vec![],
         };
         assert_eq!(r.complete(&c).await.unwrap(), Ack::Ok);
+    }
+
+    #[test]
+    fn retry_and_fail_lines_have_the_wire_shape() {
+        let k = format!("{}{}", LEDGER, "09".repeat(16));
+        assert_eq!(
+            retry_line(&key(), 3, 30_000),
+            format!("retry\t{k}\t3\t30000\n")
+        );
+        assert_eq!(fail_line(&key(), 3), format!("fail\t{k}\t3\n"));
+    }
+
+    #[tokio::test]
+    async fn retry_and_fail_send_their_verbs_and_parse_the_ack() {
+        let script = "echo ready; read -r a; case \"$a\" in retry*3*30000) printf '+8\\nack: ok\\n';; \
+                      *) printf '+13\\nack: unknown\\n';; esac; read -r b; \
+                      case \"$b\" in fail*3) printf '+15\\nack: lease_lost\\n';; \
+                      *) printf '+13\\nack: unknown\\n';; esac";
+        let mut r = reader(script);
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 3,
+            payload: vec![],
+        };
+        assert_eq!(r.retry(&c, 30_000).await.unwrap(), Ack::Ok);
+        assert_eq!(r.fail(&c).await.unwrap(), Ack::LeaseLost);
     }
 
     #[tokio::test]

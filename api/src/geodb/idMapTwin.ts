@@ -57,7 +57,7 @@ export function readIdMapTwinConfig(env: Record<string, string | undefined>): Id
 		enabled: flag === "1" || flag === "on" || flag === "true",
 		sample: fraction(env.GEODB_ID_MAP_TWIN_SAMPLE, 0.05),
 		timeoutMs: positive(env.GEODB_ID_MAP_TWIN_TIMEOUT_MS, 2000),
-		cooldownMs: positive(env.GEODB_ID_MAP_TWIN_COOLDOWN_MS, 30_000),
+		cooldownMs: positive(env.GEODB_ID_MAP_TWIN_COOLDOWN_MS, 5_000),
 	}
 }
 

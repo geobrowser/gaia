@@ -344,7 +344,7 @@ function sqlTotalEditors() {
 }
 
 /** Proposal is ACCEPTED: already executed. */
-function sqlIsAccepted() {
+export function sqlIsAccepted() {
 	return sql`(p.executed_at IS NOT NULL)`
 }
 
@@ -367,7 +367,7 @@ function sqlIsAccepted() {
  * never execute no matter what the stored votes say, so it must not be offered
  * as executable (see `proposals.unexecutable_at`).
  */
-function sqlIsExecutable(nowSeconds: bigint) {
+export function sqlIsExecutable(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
 		AND p.unexecutable_at IS NULL
