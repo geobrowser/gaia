@@ -14,6 +14,13 @@ A name counts as read when it is
 Allowlist lines are `NAME  reason` (one reason per line, `#` starts a comment). An allowlisted name
 that is no longer read anywhere, or is now in a manifest, also fails, so the list cannot rot.
 
+It also fails a manifest that would serve users from geo-db (no read cutover without a decision):
+  - GRAPHQL_GATEWAY_FIELDS with any `field=on` entry,
+  - PROPOSAL_EXECUTED_AT_FROM_GEODB set to anything but "false",
+  - NOTIFICATION_INDEXER_GEODB_VOTE_UPDATES set to `serve`, `1` or `true` (no Postgres fallback).
+An env entry is allowed through by a comment `# allow-serve: <reason>` on its `- name:` line, its `value:` line
+or the comment line directly above its `- name:` line.
+
 Usage: check-env-flags.py [repo_root]   (standard library only)
 """
 import os
@@ -26,6 +33,47 @@ NAME = r"(?:GEODB_[A-Z0-9_]+|[A-Z0-9_]+_PG_WRITES|[A-Z0-9_]+_SOURCE|[A-Z0-9_]+_S
 LITERAL = re.compile(r"""["'](%s)["']""" % NAME)
 ACCESS = re.compile(r"\benv\.(%s)\b" % NAME)
 IN_MANIFEST = re.compile(r"\b(%s)\b" % NAME)
+ENV_NAME = re.compile(r"^\s*-?\s*name:\s*[\"']?([A-Z0-9_]+)[\"']?\s*(#.*)?$")
+ENV_VALUE = re.compile(r"^\s*value:\s*(?:\"([^\"]*)\"|'([^']*)'|([^#\s]*))\s*(#.*)?$")
+ALLOW_MARK = re.compile(r"#\s*allow-serve:\s*\S")
+
+
+def serves(name, value):
+    """Why this manifest value would serve users from geo-db, or None."""
+    v = value.strip().lower()
+    if name == "GRAPHQL_GATEWAY_FIELDS":
+        on = [e.split("=")[0].strip() for e in v.split(",") if e.partition("=")[2].strip() == "on"]
+        return "field(s) set to on: " + ", ".join(on) if on else None
+    if name == "PROPOSAL_EXECUTED_AT_FROM_GEODB":
+        return None if v == "false" else "must be \"false\" or unset"
+    if name == "NOTIFICATION_INDEXER_GEODB_VOTE_UPDATES":
+        return "serve mode has no Postgres fallback" if v in ("serve", "1", "true") else None
+    return None
+
+
+def serve_findings(rel, text):
+    lines = text.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        m = ENV_NAME.match(line)
+        if not m or m.group(1) not in SERVE_GUARDED:
+            continue
+        for j in range(i + 1, min(i + 4, len(lines))):
+            vm = ENV_VALUE.match(lines[j])
+            if vm:
+                break
+        else:
+            continue
+        value = next(g for g in vm.groups()[:3] if g is not None)
+        why = serves(m.group(1), value)
+        marked = ALLOW_MARK.search(line) or ALLOW_MARK.search(lines[j]) or (i > 0 and ALLOW_MARK.match(lines[i - 1].strip()))
+        if why and not marked:
+            out.append(f"{rel}:{i + 1}: {m.group(1)}={value!r} ({why})")
+    return out
+
+
+SERVE_GUARDED = {"GRAPHQL_GATEWAY_FIELDS", "PROPOSAL_EXECUTED_AT_FROM_GEODB", "NOTIFICATION_INDEXER_GEODB_VOTE_UPDATES"}
+serve_bad = []
 
 
 def tracked():
@@ -49,6 +97,7 @@ for rel in files:
         continue
     if is_manifest:
         manifests.update(IN_MANIFEST.findall(text))
+        serve_bad += serve_findings(rel, text)
     else:
         for n in LITERAL.findall(text) + ACCESS.findall(text):
             code.setdefault(n, rel)
@@ -78,6 +127,9 @@ if missing:
     for n in missing:
         print(f"  {n}   (first seen in {code[n]})", file=sys.stderr)
     print("\nSet it explicitly in the manifest of the workload that reads it, or add `NAME reason` to the allowlist.", file=sys.stderr)
+if serve_bad:
+    bad = True
+    print("\nManifest would serve users from geo-db (no read cutover). Revert it, or mark the entry with `# allow-serve: <reason>`:", *serve_bad, sep="\n  ", file=sys.stderr)
 if stale_gone:
     bad = True
     print("\nAllowlisted but no longer read in code (remove the line):", *stale_gone, sep="\n  ", file=sys.stderr)

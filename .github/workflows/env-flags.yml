@@ -3,6 +3,8 @@ name: env flags are in a manifest
 # An unset flag reads as its code default, and an unset *_PG_WRITES reads as on. scripts/check-env-flags.py
 # fails when code reads a GEODB_*, *_PG_WRITES, *_SOURCE, *_SERVE or DELIVERY_WORKER_CLAIM_* name that is in no
 # v2 manifest and not in ci/env-flags-allowlist.txt. The fixture test proves it fails on an unlisted flag.
+# It also fails a manifest that would serve from geo-db (gateway field =on, PROPOSAL_EXECUTED_AT_FROM_GEODB,
+# vote-updates serve/1/true) unless the entry carries `# allow-serve: <reason>`.
 
 on:
   push:
