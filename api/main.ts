@@ -26,10 +26,8 @@ import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointRead
 import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
 import {
 	createBestOrderResolver,
-	createEntityColumnsResolver,
 	createTypeCountsResolver,
 	ENTITIES_IN_BEST_ORDER_FIELD,
-	entityColumnsFirst,
 	TOPIC_FEED_TYPE_COUNTS_FIELD,
 } from "./src/gateway/rankedReadsServe"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
@@ -44,7 +42,6 @@ import {
 	readConfigRevisionShadowConfig,
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
-import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {
 	createEntityAtVersionShadow,
@@ -86,11 +83,16 @@ import {
 	readRankedReadsShadowConfig,
 } from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
-import {createRelationLookupShadow, readRelationLookupShadowConfig} from "./src/geodb/relationLookupShadow"
+import {
+	createRelationLookupServeWithoutShadow,
+	createRelationLookupShadow,
+	readRelationLookupShadowConfig,
+} from "./src/geodb/relationLookupShadow"
 import {createReplayPairsRouter} from "./src/geodb/replayPairs"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
+import {readServeGateConfig} from "./src/geodb/serveGate"
 import {
 	createPostgresTypeCountsSource,
 	createTypeCountsShadow,
@@ -114,7 +116,11 @@ import {createProposalsRouter} from "./src/proposals"
 import {createFastPathFacts} from "./src/proposals/fastPathFact"
 import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
-import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
+import {
+	createGovernanceServeWithoutShadow,
+	createGovernanceShadow,
+	readGovernanceShadowConfig,
+} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
 import {getProposalWithVotes} from "./src/proposals/queries"
 import {isFastPathFactReadEnabled} from "./src/proposals/status"
@@ -127,7 +133,7 @@ import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
-import {setRelationLookupObserver} from "./src/versioned/proposal-diff"
+import {setRelationLookupObserver, setRelationLookupServer} from "./src/versioned/proposal-diff"
 import {entityHasLiveStatements} from "./src/versioned/queries"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
@@ -243,8 +249,6 @@ if (opensearchUrl) {
 // GEODB_VERSIONS_SHADOW (off by default) also reads a sampled request's entity version log from geo-db (below, once the
 // shared geo-db pool exists) and counts whether version count, order and author agree (gaia_api_versions_shadow_total).
 const entityVersionsShadowRef: {current: EntityVersionsShadow | null} = {current: null}
-// The same page's edit block, sequence and name against geo-db's edit_meta records (GEODB_EDIT_META_SHADOW; off by default).
-const editMetaShadowRef: {current: EditMetaShadow | null} = {current: null}
 // GEODB_PROPOSAL_DIFF_SHADOW (off by default) also checks a sampled active proposal or proposal-group diff's base-side
 // statements against geo-db's cards, counts only (gaia_api_proposal_diff_shadow_total). Never changes a response.
 const proposalDiffShadowRef: {current: ProposalDiffShadow | null} = {current: null}
@@ -257,10 +261,7 @@ const entityDiffShadowRef: {current: EntityDiffShadow | null} = {current: null}
 app.route(
 	"/versioned",
 	createVersionedRouter(db, runtime, {
-		versions: (served) => {
-			entityVersionsShadowRef.current?.versions(served)
-			editMetaShadowRef.current?.versions(served)
-		},
+		versions: (served) => entityVersionsShadowRef.current?.versions(served),
 		proposalDiff: (served) => proposalDiffShadowRef.current?.diff(served),
 		entityAt: (served) => entityAtVersionShadowRef.current?.snapshot(served),
 		entityDiff: (served) => entityDiffShadowRef.current?.entityDiff(served),
@@ -310,8 +311,6 @@ const gatewayServeTypeCounts =
 	gatewayConfig.mode === "on" &&
 	fieldModeOf(gatewayConfig, TOPIC_FEED_TYPE_COUNTS_FIELD) === "on" &&
 	rankedReadsListed.has("typeCounts")
-// `entity(id) { upvotes ... }` shares the entity root, so it needs entity=on in GRAPHQL_GATEWAY_FIELDS and `entityColumns` listed.
-const gatewayServeEntityColumns = gatewayServeEntity && rankedReadsListed.has("entityColumns")
 
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
 const geoDbCardConfig = readGeoDbCardConfig(process.env)
@@ -329,9 +328,17 @@ if (geoDbCardConfig.mode !== "off") {
 	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
 	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
+	// Gated by GAIA_INTERNAL_TOKEN (x-internal-token, 401 otherwise); not mounted without a long enough token.
 	if (process.env.GEODB_REPLAY_PAIRS === "on") {
-		app.route("/geodb", createReplayPairsRouter(db))
-		log.info("GeoDB replay pairs route enabled")
+		const replayToken = process.env.GAIA_INTERNAL_TOKEN?.trim()
+		if (replayToken && replayToken.length >= MIN_INTERNAL_TOKEN_LENGTH) {
+			app.route("/geodb", createReplayPairsRouter(db, replayToken))
+			log.info("GeoDB replay pairs route enabled")
+		} else {
+			log.error(
+				"GEODB_REPLAY_PAIRS=on but GAIA_INTERNAL_TOKEN is unset or too short; replay pairs route not mounted",
+			)
+		}
 	}
 }
 
@@ -345,16 +352,6 @@ if (entityVersionsShadowConfig.enabled) {
 	})
 }
 
-const editMetaShadowConfig = readEditMetaShadowConfig(process.env)
-if (editMetaShadowConfig.enabled) {
-	editMetaShadowRef.current = createEditMetaShadow({
-		config: editMetaShadowConfig,
-		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
-		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
-		log,
-	})
-}
-
 const proposalDiffShadowConfig = readProposalDiffShadowConfig(process.env)
 if (proposalDiffShadowConfig.enabled) {
 	proposalDiffShadowRef.current = createProposalDiffShadow({
@@ -365,14 +362,22 @@ if (proposalDiffShadowConfig.enabled) {
 	})
 }
 
+const versionsServeConfig = readServeGateConfig(process.env, "versions")
 const relationLookupShadowConfig = readRelationLookupShadowConfig(process.env)
 if (relationLookupShadowConfig.enabled) {
 	const relationLookupShadow = createRelationLookupShadow({
 		config: relationLookupShadowConfig,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		log,
+		serve: versionsServeConfig,
 	})
 	setRelationLookupObserver((relationIds, served) => relationLookupShadow.lookup(relationIds, served))
+	// GEODB_VERSIONS_SERVE (off by default): a proposal diff's relation lookup answers from geo-db when the shadow's last
+	// comparison of every id matched, else from Postgres.
+	if (versionsServeConfig.enabled) setRelationLookupServer((relationIds) => relationLookupShadow.serve(relationIds))
+} else if (versionsServeConfig.enabled) {
+	// Serve on, shadow off: no comparison exists, so Postgres answers and each lookup is counted `shadow_off`.
+	setRelationLookupServer(createRelationLookupServeWithoutShadow())
 }
 
 const entityAtVersionShadowConfig = readEntityAtVersionShadowConfig(process.env)
@@ -413,9 +418,13 @@ log.info("Profile routes enabled")
 // Mount proposals router
 // GEODB_GOVERNANCE_SHADOW (off by default) also reads the keyed governance records from geo-db after serving a proposal
 // and counts whether the status they give equals the served one (gaia_api_governance_shadow_total). Never changes a response.
+// GEODB_GOVERNANCE_SERVE (off by default) additionally answers a proposal's status from geo-db when this shadow's last
+// comparison of that proposal on that surface matched; otherwise, or on any geo-db error or timeout, Postgres answers.
+const governanceServeConfig = readServeGateConfig(process.env, "governance")
 const governanceShadowConfig = readGovernanceShadowConfig(process.env)
 const governanceShadow = governanceShadowConfig.enabled
 	? createGovernanceShadow({
+			serve: governanceServeConfig,
 			config: governanceShadowConfig,
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
@@ -445,7 +454,17 @@ const queriesShadow = queriesShadowConfig.enabled
 const fastPathFacts = isFastPathFactReadEnabled()
 	? createFastPathFacts(createDerivedReader(geoDbCardConfig), {warn: (message, fields) => log.warn(message, fields)})
 	: null
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow, fastPathFacts))
+app.route(
+	"/proposals",
+	createProposalsRouter(
+		db,
+		runtime,
+		// Serve on, shadow off: no comparison exists, so Postgres answers and each proposal is counted `shadow_off`.
+		governanceShadow ?? (governanceServeConfig.enabled ? createGovernanceServeWithoutShadow() : null),
+		queriesShadow,
+		fastPathFacts,
+	),
+)
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
@@ -722,26 +741,17 @@ const rankTypedObserver =
 const gatewayResolvers = new Map<string, FieldResolver>()
 if (sharedGeoDb) {
 	if (gatewayServeEntity) {
-		const entityResolver = createEntityResolver({
-			...sharedGeoDb,
-			// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
-			gaiaIdsOf: withIdMapTwin(createGaiaIdMap(idMapQuery(db)), {
-				client: sharedGeoDb.geoDb,
-				config: readIdMapTwinConfig(process.env),
-				log,
-			}),
-		})
 		gatewayResolvers.set(
 			ENTITY_FIELD,
-			gatewayServeEntityColumns
-				? entityColumnsFirst(
-						createEntityColumnsResolver(
-							rankedReadsServe,
-							createPostgresScoresPorts(db, createDerivedReader(geoDbCardConfig)),
-						),
-						entityResolver,
-					)
-				: entityResolver,
+			createEntityResolver({
+				...sharedGeoDb,
+				// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
+				gaiaIdsOf: withIdMapTwin(createGaiaIdMap(idMapQuery(db)), {
+					client: sharedGeoDb.geoDb,
+					config: readIdMapTwinConfig(process.env),
+					log,
+				}),
+			}),
 		)
 	}
 	if (gatewayServeBestOrder) {

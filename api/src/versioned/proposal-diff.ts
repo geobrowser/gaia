@@ -667,6 +667,16 @@ export function setRelationLookupObserver(observer: RelationLookupObserver | nul
 }
 
 /**
+ * GEODB_VERSIONS_SERVE: answers the relation-id lookup from geo-db when the shadow's last comparison of every id matched.
+ * Resolves null when Postgres must answer; it never rejects. Set once at startup.
+ */
+export type RelationLookupServer = (relationIds: readonly string[]) => Promise<ReadonlyMap<string, string> | null>
+let relationLookupServer: RelationLookupServer | null = null
+export function setRelationLookupServer(server: RelationLookupServer | null): void {
+	relationLookupServer = server
+}
+
+/**
  * Extract all affected entity IDs from ops, including those requiring relation lookups.
  */
 export function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<NormalizedUuid[], QueryError> {
@@ -675,11 +685,28 @@ export function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<
 
 		// If we have relation ops that need lookup, fetch the from_entity_id for each
 		if (relationIdsNeedingLookup.length > 0) {
-			const relationEntityMap = yield* batchLookupRelationEntities(db, relationIdsNeedingLookup)
-			try {
-				relationLookupObserver?.(relationIdsNeedingLookup, relationEntityMap)
-			} catch {
-				// A shadow never reaches the diff.
+			const fromGeoDb = yield* Effect.promise(async () => {
+				try {
+					return (await relationLookupServer?.(relationIdsNeedingLookup)) ?? null
+				} catch {
+					return null
+				}
+			})
+			// Served from geo-db there is no Postgres answer to compare, so the observer sees only Postgres-served lookups.
+			const relationEntityMap =
+				fromGeoDb !== null
+					? new Map(
+							[...fromGeoDb].map(
+								([relation, from]) => [normalizeUuid(relation), normalizeUuid(from)] as const,
+							),
+						)
+					: yield* batchLookupRelationEntities(db, relationIdsNeedingLookup)
+			if (fromGeoDb === null) {
+				try {
+					relationLookupObserver?.(relationIdsNeedingLookup, relationEntityMap)
+				} catch {
+					// A shadow never reaches the diff.
+				}
 			}
 			for (const [_relationId, fromEntityId] of relationEntityMap) {
 				entityIds.add(fromEntityId)

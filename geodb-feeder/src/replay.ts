@@ -111,7 +111,7 @@ const isId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32
 
 /**
  * The same pools as `loadPools`, from the api's POST /geodb/replay-pairs (GEODB_REPLAY_PAIRS=on there), through
- * Service `api` only. Rows that are not 32-hex ids, or name a Space outside \`spaces\`, are dropped; a malformed
+ * Service `api` only, sending `token` (the api's GAIA_INTERNAL_TOKEN) in `x-internal-token`. Rows that are not 32-hex ids, or name a Space outside \`spaces\`, are dropped; a malformed
  * answer or a non-2xx throws, so the caller keeps its last pools.
  */
 export async function loadPoolsFromApi(
@@ -121,12 +121,13 @@ export async function loadPoolsFromApi(
 	perSpace = 50,
 	limit = 1500,
 	timeoutMs = 90_000,
+	token?: string,
 ): Promise<Pools> {
 	if (spaces.length === 0) return {top: [], recent: [], random: []}
 	const allowed = new Set(spaces)
 	const res = await fetchImpl(new URL("/geodb/replay-pairs", target).toString(), {
 		method: "POST",
-		headers: {"content-type": "application/json"},
+		headers: {"content-type": "application/json", ...(token ? {"x-internal-token": token} : {})},
 		body: JSON.stringify({spaces, perSpace, limit}),
 		signal: AbortSignal.timeout(timeoutMs),
 	})

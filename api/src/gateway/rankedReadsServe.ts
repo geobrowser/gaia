@@ -1,7 +1,7 @@
 import type {FieldNode} from "graphql"
 import type {RankedReadsServe, ScoresPorts, TypeCountsPorts} from "../geodb/rankedReadsServe"
-import {serveBestOrder, serveEntityColumnsOf, serveTypeCounts} from "../geodb/rankedReadsServe"
-import {argsOf, ENTITY_FIELD, fieldsOf, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
+import {serveBestOrder, serveTypeCounts} from "../geodb/rankedReadsServe"
+import {argsOf, fieldsOf, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
 import type {FieldResolver, ResolveResult} from "./gateway"
 
 /**
@@ -14,13 +14,8 @@ import type {FieldResolver, ResolveResult} from "./gateway"
  *  - `entitiesInBestOrder(entityIds: [UUID]) { id __typename }`: the page order from the scores geo-db serves.
  *  - `topicFeedTypeCounts(topicIds, typeIds, spaceIds, matchAll, debateTaggedClaims) { typeId entityCount __typename }`.
  *
- *  - `entity(id) { id __typename upvotes downvotes agrees disagrees commenters trendingSource trendingTopicId }` (`entityColumns`): the
- *    count and text columns of one entity, the ones whose Postgres text a count or a label reproduces exactly. The numeric score columns
- *    (`rankingScore`, `qualityScore` ...) are `numeric` in Postgres and an f64 in the twin, so their text can differ in the last digits and
- *    they decline. It shares the `entity` root with the entity-card resolver; `entityColumnsFirst` tries this one and falls through.
- *
- * Reads with no seam here: the `entities_*` columns inside a list (`entities`, `entitiesConnection`, a nested `Entity`), the numeric
- * score columns, and the trending and feed reads, which have no geo-db row source (the twins run over Postgres rows).
+ * Reads with no seam here: the `entities_*` computed columns are fields of `Entity` inside any entity read, not a root field, and the
+ * trending and feed reads have no geo-db row source (the twins run over Postgres rows), so there is nothing to serve them from.
  */
 
 export const ENTITIES_IN_BEST_ORDER_FIELD = "entitiesInBestOrder"
@@ -185,92 +180,5 @@ export function createTypeCountsResolver(serve: RankedReadsServe, ports: TypeCou
 				return row
 			})
 		return {ok: true, data: {[plan.key]: rows}}
-	}
-}
-
-// ---- entity(id) score columns -------------------------------------------------------------------------------------------
-
-/** GraphQL field -> the SQL function suffix, for the columns served exactly: bigint counts (as strings) and text. */
-const COLUMN_OF = {
-	upvotes: "upvotes",
-	downvotes: "downvotes",
-	agrees: "agrees",
-	disagrees: "disagrees",
-	commenters: "commenters",
-	trendingSource: "trending_source",
-	trendingTopicId: "trending_topic_id",
-} as const
-type ColumnField = keyof typeof COLUMN_OF
-const COUNT_FIELDS: readonly string[] = ["upvotes", "downvotes", "agrees", "disagrees", "commenters"]
-const ENTITY_COLUMN_FIELDS = ["id", "__typename", ...Object.keys(COLUMN_OF)] as readonly (
-	| "id"
-	| "__typename"
-	| ColumnField
-)[]
-
-export type EntityColumnsPlan = {
-	key: string
-	id: string
-	fields: {key: string; name: "id" | "__typename" | ColumnField}[]
-}
-
-export function planEntityColumns(
-	document: Parameters<typeof parseOperation>[0],
-	operationName: string | null,
-	variables: Record<string, unknown>,
-): EntityColumnsPlan {
-	const {root, fragments, vars} = rootOf(ENTITY_FIELD, document, operationName, variables)
-	const args = argsOf(root, vars)
-	onlyArgs(args, ["id"])
-	if (!("id" in args)) throw new Unsupported("args")
-	const fields = plainSelection(root, fragments, ENTITY_COLUMN_FIELDS)
-	// A selection with no score column is the entity-card resolver's (or PostGraphile's) to answer.
-	if (!fields.some((f) => f.name in COLUMN_OF)) throw new Unsupported("selection")
-	return {key: responseKeyOf(root), id: uuidArg(args.id), fields}
-}
-
-/** `entity(id)` with only the exact score columns: PostGraphile's `Entity` (or null), counts as strings, `trendingTopicId` as 32 hex. */
-export function createEntityColumnsResolver(serve: RankedReadsServe, ports: ScoresPorts): FieldResolver {
-	return async ({params, document}) => {
-		let plan: EntityColumnsPlan
-		try {
-			plan = planEntityColumns(document, params.operationName, params.variables ?? {})
-		} catch (error) {
-			if (error instanceof Unsupported) return decline(error.reason)
-			throw error
-		}
-		const columns = await serve.run<Awaited<ReturnType<typeof serveEntityColumnsOf>> | typeof FELL_BACK>(
-			"entityColumns",
-			() => serveEntityColumnsOf(ports, plan.id),
-			async () => FELL_BACK,
-		)
-		if (columns === FELL_BACK) return decline("ranked_read_fallback")
-		if (columns === null) return {ok: true, data: {[plan.key]: null}}
-		const row: Record<string, unknown> = {}
-		for (const f of plan.fields) {
-			if (f.name === "id") row[f.key] = plan.id
-			else if (f.name === "__typename") row[f.key] = "Entity"
-			else {
-				const value = columns[COLUMN_OF[f.name]]
-				if (value === null) row[f.key] = null
-				else if (COUNT_FIELDS.includes(f.name)) row[f.key] = String(value)
-				else if (f.name === "trendingTopicId") row[f.key] = String(value).replace(/-/g, "").toLowerCase()
-				else row[f.key] = value
-			}
-		}
-		return {ok: true, data: {[plan.key]: row}}
-	}
-}
-
-/**
- * Both resolvers want the `entity` root, and the gateway keeps one resolver per root field. This one tries the score-column resolver
- * first (it declines at once for any selection with no score column, without touching geo-db) and then the entity-card resolver.
- */
-export function entityColumnsFirst(columns: FieldResolver, entity: FieldResolver | undefined): FieldResolver {
-	return async (context) => {
-		const out = await columns(context)
-		if (out.ok || entity === undefined) return out
-		const next = await entity(context)
-		return next.ok ? next : out.reason === "selection" ? next : out
 	}
 }

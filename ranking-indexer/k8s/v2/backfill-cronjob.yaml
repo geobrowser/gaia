@@ -136,6 +136,9 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
+                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+                - name: RANKING_INDEXER_PG_WRITES
+                  value: "1"
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL
@@ -158,9 +161,9 @@ spec:
                 # Shadow read of hermes_pipeline's meta block (current_chain_meta) from geo-db's cursors collection
                 # (10), counted in geodb_meta_block_shadow_total. Postgres stays the source. Reads with the scores
                 # key above (GEODB_KEY_PATH); collection 10 is not restricted, so any authenticated key may read it.
-                # "0" = off; flipping it to "1" is a separate decision.
+                # "1" = on (Postgres stays the source); "0" is the rollback.
                 - name: GEODB_META_BLOCK_SHADOW
-                  value: "0"
+                  value: "1"
                 - name: RUST_LOG
                   value: "backfill_blocks=info,ranking_indexer=info,geodb_cursor=info"
               resources:

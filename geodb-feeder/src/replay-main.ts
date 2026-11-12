@@ -3,7 +3,8 @@
  * - REPLAY_API_URL (http://api:3000; only Service `api` is accepted), REPLAY_RATE (0.5 rps, at most 1),
  * - REPLAY_REFRESH_MS (15 min), GEODB_SPACE_MAP_PATH (/etc/geodb/space-map/space-map.json),
  * - REPLAY_PAIR_SOURCE: `postgres` (default) reads pairs from gaia Postgres with DATABASE_URL, DATABASE_SSL_CA
- *   (read only); `api` reads them from the api's POST /geodb/replay-pairs and needs neither,
+ *   (read only); `api` reads them from the api's POST /geodb/replay-pairs and needs neither, but needs
+ *   REPLAY_API_TOKEN (the api's GAIA_INTERNAL_TOKEN, sent as x-internal-token),
  * - METRICS_PORT (9090).
  */
 import {readFileSync} from "node:fs"
@@ -23,6 +24,8 @@ async function main(): Promise<void> {
 	const mapPath = env.GEODB_SPACE_MAP_PATH ?? "/etc/geodb/space-map/space-map.json"
 	const source = parsePairSource(env.REPLAY_PAIR_SOURCE)
 	const databaseUrl = env.DATABASE_URL
+	const apiToken = env.REPLAY_API_TOKEN?.trim()
+	if (source === "api" && !apiToken) throw new Error("REPLAY_API_TOKEN is required when REPLAY_PAIR_SOURCE=api")
 	if (source === "postgres" && !databaseUrl) throw new Error("DATABASE_URL is required")
 
 	const requests = new Series("geodb_card_replay_requests_total", "Replayed entity-card requests by result.", "counter")
@@ -48,7 +51,7 @@ async function main(): Promise<void> {
 	const refresh = async () => {
 		readMap()
 		try {
-			pools = pg ? await loadPools(pg, [...mapped]) : await loadPoolsFromApi(fetch, target, [...mapped])
+			pools = pg ? await loadPools(pg, [...mapped]) : await loadPoolsFromApi(fetch, target, [...mapped], 50, 1500, 90_000, apiToken)
 			for (const [k, v] of Object.entries(pools)) pairs.set({pool: k}, v.length)
 			refreshed.set({}, Date.now() / 1000)
 			log("info", "replay pools refreshed", {spaces: mapped.size, top: pools.top.length, recent: pools.recent.length, random: pools.random.length})

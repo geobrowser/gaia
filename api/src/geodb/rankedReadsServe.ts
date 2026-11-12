@@ -421,20 +421,6 @@ export async function serveEntityColumns(ports: ScoresPorts, requested: string[]
 	return new Map(ids.map((id) => [id, scoreColumns(rows.get(id) ?? null)] as const))
 }
 
-/**
- * The `entities_*` score columns of ONE entity as `entity(id:)` returns them: `null` when the entity has no `entities` row (the root
- * field is then null), else the fourteen columns, every one NULL when it has no `entity_ranking_scores` row. geo-db serves a default
- * row for an unscored entity where Postgres has none, so this needs `ports.scored` and declines `not_served` without it.
- */
-export async function serveEntityColumnsOf(ports: ScoresPorts, requested: string): Promise<ScoreColumns | null> {
-	if (ports.scored === undefined) throw new ServeDecline("not_served")
-	const id = hex(requested)
-	const scored = await ports.scored([id])
-	const {withCard, rows} = await scoreRows(ports, [id], scored)
-	if (withCard.length === 0) return null
-	return scoreColumns(rows.get(id) ?? null)
-}
-
 /** The columns a served `ScoreColumns` carries, in the order the shadow compares them. */
 export const SERVED_COLUMNS = SCORE_COLUMNS
 

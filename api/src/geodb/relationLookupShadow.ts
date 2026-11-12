@@ -20,6 +20,18 @@
 
 import {conformingId} from "./card"
 import {type GeoDbCardClient, GeoDbError} from "./client"
+import {
+	activateServeGate,
+	createMatchLedger,
+	failureReason,
+	recordServed,
+	recordServeFallback,
+	type ServeFallbackReason,
+	type ServeGateConfig,
+	withServeTimeout,
+} from "./serveGate"
+
+const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
 
 export type RelationLookupShadowConfig = {
 	enabled: boolean
@@ -133,6 +145,23 @@ export function __resetRelationLookupShadowMetricsForTests(): void {
 export type RelationLookupShadow = {
 	/** Compare Postgres's answer (`served`: relation id to from-entity id, absent for a closed relation) with geo-db, in the background. */
 	lookup(relationIds: readonly string[], served: ReadonlyMap<string, string>): void
+	/**
+	 * GEODB_VERSIONS_SERVE: the same map from geo-db, when every relation id's last comparison matched. Null means ask Postgres
+	 * (counted `gaia_api_geodb_serve_fallback_total{family="versions",read="relation_lookup"}`). Never rejects.
+	 */
+	serve(relationIds: readonly string[]): Promise<Map<string, string> | null>
+}
+
+/** The serve read's name in `gaia_api_geodb_serve_*{read}`. */
+export const RELATION_LOOKUP_SERVE_READ = "relation_lookup"
+
+/** A lookup server for when GEODB_VERSIONS_SERVE is on and GEODB_RELATION_LOOKUP_SHADOW is not: no comparison exists, so Postgres answers (`shadow_off`). */
+export function createRelationLookupServeWithoutShadow(): (relationIds: readonly string[]) => Promise<null> {
+	activateServeGate("versions", [RELATION_LOOKUP_SERVE_READ])
+	return async () => {
+		recordServeFallback("versions", RELATION_LOOKUP_SERVE_READ, "shadow_off")
+		return null
+	}
 }
 
 export function createRelationLookupShadow(deps: {
@@ -140,9 +169,15 @@ export function createRelationLookupShadow(deps: {
 	geoDb: GeoDbCardClient
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
 	now?: () => number
+	/** GEODB_VERSIONS_SERVE; absent or disabled: nothing is served and no serve series exist. */
+	serve?: ServeGateConfig
 }): RelationLookupShadow {
 	const {config, geoDb, log} = deps
 	const now = deps.now ?? Date.now
+	const serveConfig = deps.serve?.enabled ? deps.serve : null
+	if (serveConfig) activateServeGate("versions", [RELATION_LOOKUP_SERVE_READ])
+	/** Per relation id. `exact`: Postgres's from-entity id is the very id geo-db returns, not one `conformingId` remapped. False for a closed relation (nothing to compare), so a relation that opens later is not served. */
+	const ledger = createMatchLedger<{exact: boolean}>({ttlMs: serveConfig?.matchTtlMs ?? 0, now})
 	active = true
 	let inFlight = 0
 	let seen = 0
@@ -179,13 +214,20 @@ export function createRelationLookupShadow(deps: {
 		for (const id of relationIds) {
 			if (!geoOf.has(id)) {
 				failed++
+				if (serveConfig) ledger.record(id, "unsupported")
 				continue
 			}
 			const geo = geoOf.get(id)
 			const pg = pgOf.get(id)
-			if (pg === (geo ?? undefined)) matched++
-			else {
+			if (pg === (geo ?? undefined)) {
+				matched++
+				if (serveConfig) {
+					const own = served.get(id)
+					ledger.record(id, "match", {exact: own !== undefined && compact(own) === geo})
+				}
+			} else {
 				mismatched++
+				if (serveConfig) ledger.record(id, "mismatch")
 				bump(mismatches, pg === undefined ? "extra_in_geodb" : geo == null ? "missing_in_geodb" : "from_entity")
 			}
 		}
@@ -202,7 +244,48 @@ export function createRelationLookupShadow(deps: {
 		} else bump(results, "match")
 	}
 
+	async function serve(relationIds: readonly string[]): Promise<Map<string, string> | null> {
+		if (!serveConfig) return null
+		const fall = (reason: ServeFallbackReason) => {
+			recordServeFallback("versions", RELATION_LOOKUP_SERVE_READ, reason)
+			return null
+		}
+		try {
+			if (relationIds.length > MAX_RELATION_IDS) return fall("unsupported")
+			const read = geoDb.readRelationEntity
+			if (!read) return fall("unsupported")
+			const exact = new Map<string, boolean>()
+			for (const id of relationIds) {
+				const verdict = ledger.check(id)
+				if (!verdict.ok) return fall(verdict.reason)
+				exact.set(id, verdict.detail?.exact ?? false)
+			}
+			const answers = new Map<string, string>()
+			const lookup = async () => {
+				let next = 0
+				const worker = async () => {
+					while (next < relationIds.length) {
+						const id = relationIds[next++] as string
+						const rows = await read.call(geoDb, {relationId: conformingId("entity", id)})
+						const from = rows[0]?.entity
+						if (from) answers.set(id, from)
+					}
+				}
+				await Promise.all(Array.from({length: Math.min(config.concurrency, relationIds.length)}, worker))
+			}
+			await withServeTimeout(lookup(), serveConfig.timeoutMs)
+			// Postgres's map holds the from-entity id as Postgres stores it. geo-db's id is that same id unless the loader remapped a
+			// legacy one; the comparison that matched says which, and a remapped id cannot be turned back.
+			for (const id of answers.keys()) if (exact.get(id) !== true) return fall("differs")
+			recordServed("versions", RELATION_LOOKUP_SERVE_READ)
+			return answers
+		} catch (error) {
+			return fall(failureReason(error))
+		}
+	}
+
 	return {
+		serve,
 		lookup(relationIds, served) {
 			if (!config.enabled) return
 			try {
