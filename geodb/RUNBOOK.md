@@ -262,6 +262,47 @@ $K rollout status deployment/geodb-feeder
 
 If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
 
+### 2b-quater. Replaying one dropped edit (`geodb-replay-edit`)
+
+When kg-indexer drops an edit (a statement timeout rolls the block back, a false `is_errored` in `ipfs_cache`), the
+feeder never sees it either: it only consumes `knowledge.edits`. `replay_edit` re-applies such an edit to Postgres from
+`ipfs_cache`; Job `geodb-replay-edit` (`geodb/k8s/v2/geodb-replay-edit-job.yaml`, same image,
+`node dist/replay-edit-main.js`) is the geo-db side (plan 22 section 21, row B1). It fetches the payload from the IPFS
+gateway (`REPLAY_EDIT_IPFS_GATEWAY`) or `--file`, translates it through the feeder's own `translateOps` with the
+feeder's flags, and writes geo-db only. No Postgres, no Kafka.
+
+Arguments: `--uri ipfs://<cid>`, `--space <gaia space id>`, `--block <n>`, `--created-at <block time, unix seconds>`
+(the edit's block time: kg-indexer's `--created-at`), optional `--sequence`, `--file`, and `--apply`. Without `--apply` it
+is a dry run: fetch, decode, translate, safety check, log counts.
+
+**The refusal rule** (what `check_replay_safety` does by hand, in geo-db terms): the Job exits 2 and writes nothing when
+any entity the edit touches already holds an `updatedAt` newer than the edit's block time, or holds one it cannot read
+(or none: the entity was never stamped, so it cannot be shown older). An entity geo-db does not hold is a creation and
+passes; an `updatedAt` equal to the edit's time is the edit itself and passes. The unit is the entity, not the
+(entity, property) pair Postgres versions on, so it can refuse an edit `check_replay_safety` would pass, never the
+reverse. It also refuses a Space not yet in geo-db (it founds none). Resolve a refusal by hand; do not widen the rule.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+# dry run: the feeder may keep running.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
+    -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__MODE__|--dry-run|" \
+    geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit plan" (intents, touched, conflicts), then "replay-edit dry-run" or "refused"
+$K delete job geodb-replay-edit
+# real run, only after a clean dry run: stop the feeder (it shares the state volume) as in §2b-ter, then __MODE__ -> --apply
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed ... -e "s|__MODE__|--apply|" geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit applied" with deadLettered 0
+$K delete job geodb-replay-edit
+$K scale deployment/geodb-feeder --replicas=1
+```
+
+Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
+The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
+under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
+
 ### 2b-bis. Proposal system entities
 
 The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
@@ -1035,7 +1076,7 @@ write into geo-db's derived class (last-write-wins, no history) after their Post
 source of truth: a geo-db error is counted (`geodb_derived_mirror_errors_total{table}`) and logged, never returned, a
 call is bounded by `GEODB_DERIVED_BUDGET_MS` (default 5000; rows past it are counted in
 `geodb_derived_mirror_dropped_total` and left for the next write of the key), and after a failure the pipe is not
-respawned for 10 s.
+respawned for 2 s.
 
 | writer | tables mirrored (collection) |
 | -- | -- |
@@ -1125,6 +1166,31 @@ wiring (init container, scores key, binding) and set `GEODB_DERIVED_MIRROR=1` an
 
 Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
 `derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
+
+### 2f-reconcile. Stale rows in collection 28 (one-shot reconcile Job)
+
+Before gaia#1501, `not_interested_sync`'s delete-and-reinsert of a user's `user_topic_signals` rows was never mirrored, and the
+sweep and the refit only delete identities that were in their own prior, so a row Postgres dropped stayed in geo-db and inflated
+that user's private `weights`. #1501 stops new ones; `user_topic_signals_reconcile` removes the old ones. For every user (every
+id in `user_topic_signals` plus every Personal space) it scans the user's group in collection 28, compares it with Postgres,
+and plans a delete for each key only geo-db holds and a put for each row geo-db lacks or holds with another score or value.
+A key that is not a 33-byte collection 28 key is left alone. Counts and kinds are logged, never an id. A user in geo-db who is
+in neither id list is not found (a deleted account is the erasure path's job).
+
+Run it as a Job, the same way as the snapshot Job (`ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml`, by hand,
+not part of any deploy, same init containers, scores key and `GEODB_*` wiring as `private-mirror-snapshot-job.yaml`):
+
+1. Needs a ranking-indexer image that contains the binary (the Dockerfile copies it) and the `_PRIVATE` switch on.
+2. Dry run (the manifest's default, no write possible): `sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml | kubectl apply -f -`,
+   then `kubectl -n gaia logs -f job/ranking-indexer-signals-reconcile`. Read the `reconcile: counts` line: `delete_stale` is the
+   rows to remove, `put_missing` and `put_drifted` the rows to write, `partial_groups` users with over 8,192 rows (not fully judged).
+   Exit 0 means nothing to change, 2 means it found changes, 1 means it could not read.
+3. Apply: delete the finished Job, change the container args to `["--apply"]`, apply again. It plans the whole table first and
+   refuses (exit 1) if it would delete over 20% of geo-db's rows, Postgres returned nothing, or it changes over 200,000 rows
+   (`--max-delete-fraction`, `--max-changes`; `--allow-mass-change` overrides). Then it walks again, per page scanning geo-db
+   before reading Postgres, and applies each page at once. Last write wins, so re-running is safe after any stop.
+4. Verify: delete the Job and run the dry run again. It must exit 0 with `delete_stale=0`. Deletes are not individually
+   acknowledged by the pipe, so this re-run is the check.
 
 ### 2f-state-and-loud. Watermark collections 6 and 7, the collection 11 backfill, and loud mirror failures
 
@@ -1690,7 +1756,9 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
 `geodb_derived_refused_cap_total`. Since 5fbf4ad5ee serve also prints `geodb_work_rows`, `geodb_work_rows_max` and the rest of `geodb_work_*` while the work class is on. Alerts:
 `GeoDbWorkRowsHigh` (work rows above 80% of the cap),
 `GeoDbDerivedRowsHigh` (rows above 80% of the cap), `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped`
-(notification-indexer, port 9464, already scraped).
+(notification-indexer, port 9464, already scraped). With the mirror backlog on (gaia#1491) there are two more:
+`GeoDbOutboxMirrorBacklog` (`geodb_outbox_mirror_backlog` above 0 for 10 m) and `GeoDbOutboxMirrorBacklogDropped`
+(`geodb_outbox_mirror_backlog_dropped_total` or `geodb_outbox_mirror_backlog_expired_total` rose in 15 m).
 
 ## 7. Operating notes
 
@@ -2053,9 +2121,21 @@ the shadow is put-if-absent on the outbox idempotency key, so a Kafka replay ans
 writes nothing. It is fire-and-forget: after the Postgres commit the indexer only `try_send`s into a bounded
 queue (4096), a background task owns one held `geodb-client work pipe` child, and a failure is logged and
 counted, never raised. Metrics: `geodb_outbox_mirror_{entered,duplicates,errors,dropped,skipped}_total`,
-`geodb_outbox_mirror_queue`. A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
+`geodb_outbox_mirror_queue`. With `GEODB_OUTBOX_MIRROR_BACKLOG=1` (gaia#1491) also
+`geodb_outbox_mirror_backlog` (gauge), `geodb_outbox_mirror_retried_total`, `geodb_outbox_mirror_backlog_dropped_total`
+and `geodb_outbox_mirror_backlog_expired_total` (gaia#1507).
+A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
 the ones matched at insert; a webhook deleted inside the 30 s cache window is shadowed but has no Postgres
 delivery row.
+
+Backlog (flag `GEODB_OUTBOX_MIRROR_BACKLOG`, off by default): a unit whose enter fails is kept in a bounded
+in-memory queue (`GEODB_OUTBOX_MIRROR_BACKLOG_MAX`, default 3000) and retried oldest first, instead of dropped.
+`GeoDbOutboxMirrorBacklog` fires when `geodb_outbox_mirror_backlog` stays above 0 for 10 m: serve is down or
+refusing the key, so fix that and watch the gauge fall to 0. A serve roll (20-40 s) drains by itself. At the bound
+the oldest unit is dropped and counted in `geodb_outbox_mirror_backlog_dropped_total`; a head unit geo-db keeps
+refusing is dropped after 30 refused attempts or 120 s (`GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS` /
+`_EXPIRE_SECS`) and counted in `geodb_outbox_mirror_backlog_expired_total` (both: `GeoDbOutboxMirrorBacklogDropped`); replay the window with `outbox-replay` below. The backlog is in memory, so a
+notification-indexer restart loses whatever it holds; replay covers that too.
 
 It uses its own key, `geodb-outbox-key`: the binding gives it `work=*` and nothing else
 (`read=- write=- publish=- work=*`), so a leak can neither touch the graph nor read the outbox back. Needs a
@@ -2080,6 +2160,42 @@ $K -n gaia rollout restart deploy/notification-indexer
 
 Rotate: delete Secret `geodb-outbox-key` and Job `geodb-outbox-key`, rerun step 1, then steps 2 and 3.
 Revoke: delete the Secret and restart serve; the principal disappears from the binding.
+
+### Replaying outbox units the mirror missed (`outbox-replay`)
+
+The mirror is fire-and-forget, so a serve outage or roll leaves a gap nothing refills, and the delivery-worker
+shadow counts each gap as a permanent `miss`. `outbox-replay` (a second binary in the notification-indexer image)
+reads the `notification_outbox` rows of a time window from Postgres and enters them into the work class through
+the same `geodb_outbox::enter_line` the mirror uses: same ledger key (the row's `idempotency_key`), same event-type
+byte, same `hex:` payload. An enter is put-if-absent on that key, so a unit geo-db already holds answers
+`duplicate` and is not written again; running a window twice enters nothing the second time. Webhooks come from
+the row's `notification_deliveries` rows, so a webhook that matched at insert but had no delivery row is not
+listed (the live mirror lists it).
+
+It is a dry run unless `--apply` is given. A dry run reads Postgres only (opened read-only) and prints `scanned`,
+`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. When the
+`geodb-client` in the image and the geo-db node both support the read-only batched `has` verb (wire revision 17), it
+also asks geo-db which units it holds and prints `present` and `missing` (`would-enter` is then `missing`); `has`
+does not lease or write. Otherwise it prints `present unknown (<reason>; --apply reports it)`, and `present` comes
+from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
+`--batch` (default 500, max 5000) bounds rows per query, `--rate` (default 50, max 1000) bounds enters a second,
+`--max-units` bounds the scan. A geo-db error stops the run and prints how far it got; rerun the same command.
+
+It runs inside a notification-indexer pod, which already has `DATABASE_URL`, `geodb-client`, the work key and
+`GEODB_OUTBOX_MIRROR=1`. The pod needs an image built from a ref that includes the tool.
+
+```bash
+# the 11-11 rev5 outage (serve down 18:10Z to 21:59Z); dry run first, then --apply
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+$K exec deploy/notification-indexer -- outbox-replay \
+  --from 2026-11-11T18:10:00Z --to 2026-11-11T22:00:00Z
+$K exec deploy/notification-indexer -- outbox-replay \
+  --from 2026-11-11T18:10:00Z --to 2026-11-11T22:00:00Z --apply --rate 50
+```
+
+Expect `entered` close to the `GeoDbOutboxMirrorDropped`/`Errors` count for the window and `present` to be the
+rest. Replayed units land after the delivery's own `miss` grace has passed for rows already delivered, so the
+shadow's earlier `miss` counts stay counted; new rows are unaffected.
 
 ### Delivery-side shadow reader (delivery-worker)
 
@@ -2184,3 +2300,160 @@ or other-space proposal also has such an action).
 Not covered, each named in `_uncompared_total`: which proposals a Space has and their order and cursor (no Space index in
 the records), the list's status filter (the status shadow covers status) and vote counts (records are keyed by voter),
 UpdateVotingSettings fields of an action, and the active checks' Space scope and vote tallies.
+
+## 13. Cutover day (DRAFT)
+
+**DRAFT. Not approved, not rehearsed, and no date is set.** Patrick sets the date for D1 (the read cutover) and D2
+(the table drops); nothing here decides it. The steps are pulled together from geo-db plan 22
+(`docs/plans/10-wire-and-federation/22-zero-postgres-critical-path.md` on geo-db `final`), sections 9.6, 15, 16, 18, 20 and
+23, and the sections above. Where this text and plan 22 disagree, plan 22's newest section wins; fix this one.
+
+How every flag below was sourced. A flag name or value comes from one of three places, and the cell says which:
+**main** = the manifest or code on gaia `origin/main` 71b1e678 (file and line given); **live** = read-only `kubectl get
+-o json` of Deployments, StatefulSets and CronJobs in `gaia` on `do-nyc2-geo-testnet-k8s`, env names and values only, no
+Secret read, taken 11-11 about 21:10 local; **pending #N** = only in an open PR, not merged, so not on main and not
+live. Do not trust a value here on the day; re-read it (§13.1 step 0).
+
+Three facts shape everything else.
+
+1. **Few read flips exist.** Plan 22 speaks of "D1, every source flag", but on main only these switches move a read
+   source (§13.2). Every other geo-db read in the api and the workers is a shadow that compares and never answers. Those have
+   no serve flag in the code, so D1 for them is code that does not exist yet, not a flag to flip.
+2. **A writer off-switch is not reversible by flipping it back.** With `KG_INDEXER_PG_WRITES` off the consumer "advances
+   past each message" (`kg-indexer/src/storage.rs:24`, `main.rs:1738`): Postgres misses that window for good unless the
+   consumer group is rewound. The 10-minute rollback in §13.4 therefore has a catch-up step per Kafka consumer.
+3. **`*_PG_WRITES` are not in any manifest except two.** Live and main set only `IPFS_CACHE_PG_WRITES=1`
+   (`hermes-ipfs-cache/k8s/v2/hermes-ipfs-cache.yaml:134`) and `SCORING_WRITER_PG_WRITES=1`
+   (`scoring-service/deployment/v2/cronjob.yaml:115`). The other eight read an unset variable as on; only an explicit
+   `0`, `false`, `off` or `no` turns them off (for example `kg-indexer/src/storage.rs:30`). A flip is a manifest PR first,
+   because deploy-v2 reverts a hand-set value (see the memory note on diffing a manifest against live).
+
+### 13.1 Pre-checks (all green, or do not start)
+
+Run from a fresh shell: `K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"`. Retry a flaky `Unauthorized` two or three
+times before treating it as real. Metrics through the apiserver proxy to Prometheus, as in the memory notes.
+
+| # | Check | Gate | Source of the gate |
+| -- | -- | -- | -- |
+| 0 | Re-read every flag in §13.2 and §13.3 live (`$K get deploy,sts,cronjob -o json`, env names and values only) and diff against main. | No surprise. A hand-set live value that main lacks is reconciled in a PR first. | `diff-manifest-against-live` rule; ENTITIES_INDEX_VERSION 5 vs 6 crash-looped search-indexer on 2026-09-30 |
+| 1 | Snapshot pair age. `$K get volumesnapshot -l app=geodb-snapshot --sort-by=.metadata.creationTimestamp`, and `kube_cronjob_status_last_successful_time` for `geodb-snapshot-4h`. Then take a manual pair (§9b) immediately before step 1 of §13.2. | Newest scheduled pair under 4 h old (the 4-hourly CronJob is `47 */4 * * *`, `geodb/k8s/v2/geodb-snapshot.yaml:185`); the manual pair under 15 min old. `GeoDbSnapshotNewestOld` (5 h) and `GeoDbSnapshotTooOld` not firing. | §9a; `monitoring/k8s/v2/geodb-snapshot-alerts.yaml`; the 4 h figure is the lead's gate, the alerts are looser |
+| 2 | Feeder lag. `geodb_feeder_consumer_lag` and each per-consumer `geodb_feeder_*_consumer_lag`. | Every one 0, and `GeoDbFeederDown`, `GeoDbFeederStalled`, `GeoDbFeederLagHigh`, `GeoDbFeederDeadLetters` quiet for 1 h. | `monitoring/k8s/v2/geodb-feeder-alerts.yaml` |
+| 3 | Outbox mirror clean. `geodb_outbox_mirror_errors_total` and `geodb_outbox_mirror_dropped_total` on `notification-indexer` (port 9464). | No increase over the last 24 h; `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped` quiet. The 11-11 rev5 outage (serve down 18:15 to 21:45Z) dropped 6,943 units: confirm the replay (§11, `outbox-replay`) ran and its dry run finds nothing to add. Until #1491 merges (pending #1491, flag `GEODB_OUTBOX_MIRROR_BACKLOG`, off by default; #1507 stacks on it) any serve roll loses units, so do not roll serve inside the window. | serve alerts file; plan 22 section 23.3 |
+| 4 | Shadow rates against the gates. `gaia_api_*_shadow_total{result}` for every shadow in §13.2, 24 h, plus the lead's shadow-gates report. | Every gate met. Plan 22 section 23.1 had two over their gates at 11-12 early: `type_counts` mismatch 7.55% (gate 0.5%) and `entities_best_order` `local_score` 29.8% (gate 1%). Others (`GEODB_PRIVATE_READERS_SHADOW`: weight-only mismatch, 7 per hour against 192 matches) need a judgement, not a number. No read below goes live while a gate for its own shadow is red. | plan 22 sections 20.2, 23.1 |
+| 5 | Shadows that must have evidence and do not yet. Four api shadows are dormant live: `GEODB_PROPOSAL_DIFF_SHADOW=0` (live), `GEODB_ENTITY_AT_VERSION_SHADOW`, `GEODB_ENTITY_DIFF_SHADOW`, `GEODB_RELATION_LOOKUP_SHADOW` (unset live; code on main, `api/main.ts`, `api/src/geodb/`). All four are pending #1520, as are the entity type-exclusion and feed-blocklist shadows (`GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW=0`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW=0`, `api/k8s/v2/api.yaml:490-492`; this draft did not check whether #1520 covers those two). Three worker shadows are `0` live: `GEODB_META_BLOCK_SHADOW` (hermes-pipeline, ranking-indexer Deployment, rolling-sweep, backfill), `NOTIFICATION_INDEXER_GEODB_POLL_CURSOR_SHADOW`, and `USER_INTEREST_RUST_SHADOW` on the topic-interest-sweep CronJob; all pending #1522. | A cutover on a path with no shadow evidence is not allowed. Merge and roll #1520 and #1522, then run them for 24 h before the day. | plan 22 section 23.4; PR bodies |
+| 6 | Held items resolved: D5 (`entity_ranking_scores`, 48.9M rows, mostly not mirrored), the collection 1 repair (J), the collection 28 reconcile run (J, #1502), the collection 11 fill (J), the bucket decision B, the job-lease Role. | Each is done or explicitly carried to §13.5. | plan 22 sections 20.4, 23.4, 23.5 |
+| 7 | Postgres is not the only copy of anything unmirrored: `ipfs_cache`, `atlas_checkpoints` and the edit blobs have no home until B. | Confirmed stays-on-Postgres list (§13.5) matches the live `DATABASE_URL` holders: 32 workloads at 11-12 early. | plan 22 sections 23.2, 17 |
+| 8 | Open writers that do not yet reach geo-db: edit block meta (`GEODB_EDIT_META`, pending #1513, not on main), relation facets (pending #1493), fast-path `executed_at` and execution facts (pending #1514, #1515), replay-edit (pending #1519). | Either merged and enabled with their replay, or the matching Postgres writer stays on (§13.5). Switching kg-indexer's writes off before them loses those rows. | plan 22 sections 23.3 and 21 |
+| 9 | Apply people. The feeder still holds `DATABASE_URL` (pending #1492 removes it). | Not a blocker for the flip; it is the reason the feeder stays in §13.5. | plan 22 section 23.5 |
+
+### 13.2 Read flips, in dependency order
+
+Rule for every step: flip one flag, wait 10 minutes, run the post-check in §13.4, and only then take the next step. Take the
+same snapshot discipline as §9b before step 1. Dependency order means a read never moves before the data it needs is
+mirrored and verified (§13.1) and before the reader it feeds is on geo-db.
+
+| Step | Flag, workload, value | Live now | Source | Needs first |
+| -- | -- | -- | -- | -- |
+| R1 | `WARMER_BLOCK_SOURCE=geodb` on Deployment `hermes-pipeline` (default `postgres`; only the exact value `geodb` selects geo-db, `hermes-pipeline/src/cache/postgres.rs:52`) | `postgres` | main `hermes/k8s/v2/hermes-pipeline.yaml:183`; live | `GEODB_META_BLOCK_SHADOW=1` on hermes-pipeline with a clean result (pending #1522; live `0`) and its geo-db key paths. The code refuses `geodb` without it (`postgres.rs:95`). Do R1 before `IPFS_CACHE_PG_WRITES` ever goes to 0 (manifest comment, line 182). |
+| R2 | `FEED_SIGNAL_CONFIG_SOURCE=configmap` on CronJob `ranking-indexer-feed-signals-sync` | `postgres` | main `ranking-indexer/k8s/v2/feed-signals-sync-cronjob.yaml:173`; live | The ConfigMap `ranking-config` applied (main `ranking-indexer/k8s/v2/ranking-config-configmap.yaml`, "on main, not applied" at 11-12 early). An absent ConfigMap blocks nothing but the twin then reads nothing. |
+| R3 | `STANCE_MAP_CONFIG_SOURCE=configmap` on CronJob `ranking-indexer-stance-map-shadow` | `postgres` | main `ranking-indexer/k8s/v2/stance-map-shadow-cronjob.yaml:85`; live | Same ConfigMap. |
+| R4 | `GRAPHQL_GATEWAY_FIELDS`: change `entity=shadow` to `entity=on`, leave every other entry `shadow`, on Deployment `api` | `entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow` | main `api/k8s/v2/api.yaml` (the `GRAPHQL_GATEWAY_FIELDS` entry); live. Modes `off|shadow|on` in `api/src/gateway/config.ts`. | Only `entity` has a registered geo-db resolver (`api/main.ts`, `ENTITY_FIELD`); `entities=on` and the rest would delegate to PostGraphile whatever their mode. `GRAPHQL_GATEWAY=on` is already set. A served `entity` still asks Postgres for the reverse id map (`gaiaIdsOf`, `api/src/geodb/idMap.ts`, migration 0116), so a Postgres read remains (§13.5). Timeout `GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS` default 250; a fallback is counted in `gaia_api_gateway_serve_fallback_total{field,reason}`. |
+| R5 | `GEODB_ENTITY_CARDS=on` on Deployment `api` (modes `off`, `shadow`, `on`; §1 and §4 above) | `shadow` | main `api/k8s/v2/api.yaml:250`; live | R4 evidence. The route falls back to Postgres per request on a timeout or error, so Postgres must still be up; watch `ApiGeoDbCardFallbackRateHigh` (more than 5% for 10 m). |
+
+R4 and R5 are separate switches on the same Deployment: do R4 first (it carries the user traffic and the fallback counter),
+R5 second. One `set env` per rollout, never both.
+
+Not in the table, on purpose. No serve flag exists on main for any of these, so there is nothing to flip on the day; each
+needs code first. They are the real D1 gap.
+
+- Scores and scoring: `GEODB_SCORES_SHADOW=1` and `GEODB_SCORING_READS=0` (scoring-service CronJob, `scoring-service/deployment/v2/cronjob.yaml:185`) are compare-only. `GEODB_SCORING_READS` "is never used for scoring" (`scoring-service/cronjob/main.py:147`). Setting it to `1` adds a comparison, not a cutover.
+- Ranked reads, type counts, ranking scores, entity columns, user votes, governance, versions, config records, feed runs, private readers, account weights and exclusions: `GEODB_RANKED_READS_SHADOW`, `GEODB_TYPE_COUNTS_SHADOW`, `GEODB_RANKING_SCORES_SHADOW`, `GEODB_ENTITY_COLUMNS_SHADOW`, `GEODB_USER_VOTES_TWIN`, `GEODB_GOVERNANCE_*`, `GEODB_VERSIONS_SHADOW`, `GEODB_*_CONFIG_SHADOW`, `GEODB_FEED_RUNS_SHADOW`, `GEODB_PRIVATE_READERS_SHADOW`, `GEODB_ACCOUNT_*_SHADOW`: background comparisons in `api/k8s/v2/api.yaml`, each commented "never changes a response".
+- Notification: `GEODB_OUTBOX_SHADOW_READ=1` on delivery-worker (live) and the notification-indexer twin compare; the source stays Postgres.
+- search-indexer: the `kg_applied_block` and `entities_for_spaces` twins (#1462, #1463) have no env flag in the manifest; a timer to compare a Space is pending #1523 (`SEARCH_INDEXER_GEODB_SHADOW_TIMER_SECS`, off by default, at least 30).
+- Feeder applied block: `GEODB_APPLIED_BLOCK` exists in `geodb-feeder/src/config.ts` and `appliedBlock.ts` but is in no manifest, so it is unset live; plan 22 gates it on ZP-FEEDER-APPLIED-BLOCK-ROLL, which needs Patrick's go.
+- The `*_RUST_COMPUTE` flags (`ranking-indexer/src/bin/*`, default off, in no manifest) run a Rust twin of a SQL job and compare; they do not move a source.
+
+### 13.3 Writer off-switches (`*_PG_WRITES`), in order
+
+Only after §13.2 R1 to R5 are healthy for the agreed soak. Order is derived from §16 of plan 22 and is **this draft's
+proposal, not plan 22's**: leaves first, the readers of KG tables before the writer of them, and `kg-indexer` last because
+notification-indexer and the ranking bins read `proposals_current`, `votes_count` and other KG tables (plan 22 section 16.1, "Reads only"
+rows) and those reads have no geo-db home yet (see the note after the table). Every flag is `0` to turn off, `1` (or unset) to turn on.
+
+| Step | Flag | Workloads that read it | Live now | Source | What stays running when off |
+| -- | -- | -- | -- | -- | -- |
+| W1 | `SCORING_WRITER_PG_WRITES=0` | CronJob `scoring-service` | `1` | main `scoring-service/deployment/v2/cronjob.yaml:115`; live | Off means no connection and no statement (#1451). Postgres reads for the run are unaffected. |
+| W2 | `RANKING_INDEXER_PG_WRITES=0` | Deployment `ranking-indexer` and every ranking-indexer CronJob: `account-exclusions-sync`, `account-weights`, `agenda-listings`, `backfill`, `feed-composition`, `feed-signals-freshness`, `feed-signals-sync`, `not-interested-sync`, `primer-claims`, `rolling-sweep`, `stance-map-shadow`, `topic-interest-refit`, `topic-interest-sweep`, `topic-ranking`, `topic-suggestions` | unset | code `ranking-indexer/src/storage.rs:58`, `pg_bin_writes.rs`; live (no env) | Two startup probes (`ranks.members`, `ranks.editors`) and the bins' SELECTs. The plpgsql write functions are skipped. |
+| W3 | `TOPOLOGY_INDEXER_PG_WRITES=0` | Deployment `topology-indexer` | unset | code `scoring-service/topology-indexer/src/storage.rs:50`; live | Nothing at startup. End-to-end not proven (plan 22 section 16.1). |
+| W4 | `VOTE_INDEXER_PG_WRITES=0` | Deployment `vote-indexer`, CronJobs `vote-indexer-comment-sweep`, `vote-indexer-new-entity-sweep` | unset | code `scoring-service/vote-indexer/src/storage.rs:51`; live | The batch is skipped but votes still count as processed (`vote_batch` skip counter). |
+| W5 | `HERMES_PIPELINE_PG_WRITES=0` | Deployment `hermes-pipeline` | unset | code `hermes-pipeline/src/cursor.rs:147`; live | Cursor reads. Needs R1 first (the warmer reads the block). Mock mode proves nothing; the flag rests on a unit test. |
+| W6 | `DELIVERY_WORKER_PG_WRITES=0`, then `NOTIFICATION_INDEXER_PG_WRITES=0` | Deployments `delivery-worker`, `notification-indexer` | unset | code `notification-service/delivery-worker/src/storage.rs:36`, `notification-indexer/src/storage.rs:104`; live | Delivery-worker's two heartbeat counts; notification-indexer's five SELECTs. Off means no claim UPDATE: nothing is delivered from Postgres. Do not do this until the outbox source has a geo-db home (D1 for the source is held; `GEODB_OUTBOX_SHADOW_READ` is compare-only). |
+| W7 | `KG_INDEXER_PG_WRITES=0` | Deployment `kg-indexer` | unset | code `kg-indexer/src/storage.rs:30`, `main.rs:1738`; live | `SET statement_timeout` per connection only. Offsets still commit. |
+
+Held back from this list, on purpose: `IPFS_CACHE_PG_WRITES` (live `1`, `hermes-ipfs-cache.yaml:134`) and `ATLAS_PG_WRITES`
+(unset live; `atlas/src/persistence.rs:326`). With no object-store home they would persist nothing: the code logs
+"... is off and no object-store mirror is configured" (`hermes-ipfs-cache/src/cache.rs:362`) and "checkpoints are not persisted
+anywhere" (`atlas/src/persistence.rs:375`). They wait for decision B (§13.5).
+
+Gaps this list cannot close by flag. The notification and ranking bins read KG tables, and `delivery-worker` claims
+from `notification_deliveries`. Turning W6 or W7 off leaves those reads on a Postgres that has stopped receiving
+data. Plan 22 section 16.2 says this in one line: "Cutover with all flags off still needs those reads to have a home." Treat
+W6 and W7 as not ready until a read for each exists; W1 to W5 can go on the day.
+
+### 13.4 Post-checks and the 10-minute rollback, per step
+
+After every step: wait 10 minutes, then run its check. A red check is a rollback, not a debate. Keep one shell open on the
+step's workload log. The rollback is a manifest revert PR (merge, then the §1 deploy for that service), with the command
+below as the fast path for the first ten minutes only; a hand-set value is lost at the next deploy-v2, so land the revert PR
+the same hour.
+
+| Step | Post-check (10 min) | Rollback within 10 minutes | After the rollback |
+| -- | -- | -- | -- |
+| R1 | `geodb_meta_block_shadow_total{reader="hermes_pipeline_warmer_block"}`: `failed` about 0, `mismatch` a small rate. The warmer advances (hermes-pipeline log, no stall). | `$K set env deployment/hermes-pipeline WARMER_BLOCK_SOURCE=postgres`; `$K rollout status deployment/hermes-pipeline` | Nothing to heal: a read source only. |
+| R2, R3 | CronJob runs after the flip finish; the "twin matches" log line (`feed_signals_sync.rs:118`, `stance_map_shadow.rs:120`); no run reads an empty config. | `$K set env cronjob/<name> FEED_SIGNAL_CONFIG_SOURCE=postgres` (or `STANCE_MAP_CONFIG_SOURCE`) | Nothing: the table row is still there. |
+| R4 | `gaia_api_gateway_serve_fallback_total{field="entity"}` rate under the agreed share; api p99 and 503 shed rate no worse than the hour before; no `GRAPHQL_VALIDATION_FAILED`. | `$K set env deployment/api GRAPHQL_GATEWAY_FIELDS="entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"`; `$K rollout status deployment/api` (or `rollout undo`) | Nothing. Confirm the value matches live main afterwards. |
+| R5 | `ApiGeoDbCardFallbackRateHigh` quiet; `sum by (reason) (rate(gaia_api_geodb_card_fallback_total[10m]))` low; `GeoDbFeederStalled` quiet. | `$K set env deployment/api GEODB_ENTITY_CARDS=shadow` (§5 says `off`, which un-mounts the route; use `shadow` to keep the evidence flowing) | Nothing. |
+| W1 | Next `scoring-service` run: no Postgres connection and a skip counter; the run finishes. The shadow `GEODB_SCORES_SHADOW` result stays within gate. | `$K set env cronjob/scoring-service SCORING_WRITER_PG_WRITES=1` | Postgres missed every run in the window. Re-run: `$K create job --from=cronjob/scoring-service scoring-catchup-$(date -u +%m%d%H%M)`. |
+| W2 | Per-pod skip counters on every ranking-indexer workload (`ranking_indexer_*skip*`, `storage.rs` metric); no new rows in the tables it writes; `GEODB_DERIVED_MIRROR` mirrors still land (collections keep growing). | `$K set env deployment/ranking-indexer RANKING_INDEXER_PG_WRITES=1`, and the same for each CronJob (`for cj in $($K get cronjob -o name \| grep ranking-indexer); do $K set env $cj RANKING_INDEXER_PG_WRITES=1; done`) | Rewind group `ranking-indexer-testnet-v1` to the flip time (below). CronJobs that recompute from Postgres catch up by their next run. |
+| W3 | Skip counter; consumer lag stays at 0. | `$K set env deployment/topology-indexer TOPOLOGY_INDEXER_PG_WRITES=1` | Rewind group `topology-indexer-testnet`. |
+| W4 | `vote_batch` skip counter rising with votes; lag 0; votes still reach geo-db (`GEODB_DERIVED_MIRROR`). | `$K set env deployment/vote-indexer VOTE_INDEXER_PG_WRITES=1` (and the two sweep CronJobs) | Rewind group `vote-indexer-testnet`. |
+| W5 | Skip counter on the cursor store; the warmer still advances (R1 holds). | `$K set env deployment/hermes-pipeline HERMES_PIPELINE_PG_WRITES=1` | The Postgres cursor is behind; the geo-db copy (`GEODB_CURSOR_MIRROR=1`, live) is the newer one. Restart the pipeline with `WARMER_BLOCK_SOURCE=postgres` only after the Postgres cursor is advanced by hand from the geo-db value. |
+| W6 | Deliveries still reach their destinations from the source named in §13.5; the outbox mirror counters stay clean. | `$K set env deployment/delivery-worker DELIVERY_WORKER_PG_WRITES=1`, then `notification-indexer`. | Rewind groups `notification-indexer-governance-testnet-v1` and `notification-indexer-knowledge-edits-testnet-v1`; undelivered rows in `notification_deliveries` are claimed on restart. |
+| W7 | `blocks_processed` still counts skipped blocks; the skip counter by site rises; `geodb_feeder_consumer_lag` stays 0 (the feeder, not kg-indexer, now feeds geo-db alone). | `$K set env deployment/kg-indexer KG_INDEXER_PG_WRITES=1` | Postgres has a hole from the flip to the revert. Rewind group `kg-indexer-v8-testnet` to the flip time (Kafka keeps `testnet.knowledge.edits` for 7 days): scale kg-indexer to 0, reset offsets to the timestamp, scale to 1 (the replay recipe in the memory note on Kafka consumer replay; SASL_SSL and PEM, not from this file). Writes are idempotent per block. |
+
+Group IDs above are the live `KAFKA_GROUP_ID` values read 11-11 (kg-indexer `kg-indexer-v8-testnet`, ranking-indexer
+`ranking-indexer-testnet-v1`, vote-indexer `vote-indexer-testnet`, topology-indexer `topology-indexer-testnet`,
+notification-indexer `..-governance-testnet-v1` and `..-knowledge-edits-testnet-v1`); re-read them on the day.
+
+If anything turns red and the cause is unclear: put every flag from the last step back first, then diagnose. If the
+whole day goes wrong, restore the pair from §9c, which reached serving in about 20 s; it is the only recovery source.
+
+### 13.5 What stays on Postgres until D2
+
+D2 is the table drop. Until it is called, the following keep their Postgres dependency even after the steps above. Source
+for each is plan 22 sections 16, 18, 20 and 23, and the manifests.
+
+- **The api itself.** PostGraphile answers every GraphQL field except a served `entity` (R4), and a served `entity` still
+  reads the reverse id map from Postgres (`api/src/geodb/idMap.ts`, migration 0116). The api, the response cache's SQL
+  and the PG pool admission control all remain.
+- **All reads in §13.2's "not in the table" list**, until code gives each a serve path.
+- **`ipfs_cache`, `atlas_checkpoints` and the edit blobs.** Home is object storage (B), a bucket and Secret decision that is
+  held. `IPFS_CACHE_PG_WRITES=1` and `ATLAS_PG_WRITES` (unset) stay on; `IPFS_CACHE_BLOB_SHADOW_READ=0` and
+  `ATLAS_CHECKPOINT_BLOB_SHADOW_READ=0` (live) stay off until B.
+- **`entity_ranking_scores`, 48.9M rows (D5)**, and the SQL and plpgsql functions that read it
+  (`refresh_entity_ranking_scores` is "partial", plan 22 section 23.3). `entity_type_ranking` and `entity_topic_ranking` wait for the
+  collection 1 repair (J).
+- **Rows with an open writer PR:** edit block meta (#1513), relation facets (#1493), fast-path execution (#1514, #1515, #1519),
+  relation positions (`GEODB_RELATION_POSITIONS=0` live; moves need pending #1517, and relations that predate the flag need
+  the seed Job, pending #1521).
+- **`DATABASE_URL` holders:** 32 workloads at 11-12 early: 11 Deployments (api, delivery-worker, geodb-card-replay, geodb-feeder,
+  hermes-ipfs-cache, hermes-pipeline, kg-indexer, notification-indexer, ranking-indexer, topology-indexer, vote-indexer), the
+  search-indexer StatefulSet and 20 CronJobs. The feeder and card-replay hold it only for the membership shadow compare and
+  the backfill mains (pending #1492 removes the feeder's). atlas uses `ATLAS_CHECKPOINT_DATABASE_URL`.
+- **The job-lease Role** (`GEODB_JOB_LEASE=0` live on seven CronJobs) and the lease-fenced refreshes: needs the Role applied by Patrick.
+- **CI that starts Postgres:** `api-integration-tests`, `api-unit-tests`, `atlas-e2e-tests` (plan 22 section 20.3).
+- **Postgres itself, the snapshots and the backfill Jobs** (`pg-row-counts-job.yaml` and the rest): Postgres is the source
+  for every backfill in §2 and for the 5 h rebuild path in §9, so it is not switched off until D2 and a restore drill.
+
+What this section does not decide: the date, the soak lengths, whether W6 and W7 go on the same day as W1 to W5, and
+whether R4 happens before or after #1520's shadows have their 24 h.

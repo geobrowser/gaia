@@ -45,7 +45,8 @@ import {PendingSpaces} from "./spaceEntities.js"
 import {startSpaceEntityConsumer} from "./spaceEntitiesConsumer.js"
 import {createMetrics, observeFreshness} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
-import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
+import {ReadOnlyPg, readMembershipIds} from "./pgSource.js"
+import {shadowComparePg} from "./shadowComparePg.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {SYSTEM_SPACE_MAP_KEY, SystemSpaces} from "./systemSpaces.js"
 import {startServer} from "./server.js"
@@ -170,7 +171,7 @@ async function main(config: Config): Promise<void> {
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
-				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
+				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, facets: config.relationFacets, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
 				let outcome: string
 				for (;;) {
 					try {
@@ -255,11 +256,9 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 	if (config.membership.shadowCompare && state) {
-		const url = process.env.DATABASE_URL
-		if (!url) log("error", "GEODB_MEMBERSHIP_SHADOW_COMPARE is set without DATABASE_URL; comparison disabled")
-		else {
+		pg = shadowComparePg()
+		if (pg) {
 			const membershipState = state
-			pg = new ReadOnlyPg(pgConfig(url, process.env.DATABASE_SSL_CA))
 			reader = new PipeReader({clientBin: config.clientBin, keyPath: config.membership.readerKeyPath, bindingPath: config.bindingPath})
 			const run = () =>
 				compareMembership({
