@@ -3999,6 +3999,29 @@ async fn reconcile_removes_ballots_cleared_before_the_deploy() {
     .execute(pool)
     .await
     .unwrap();
+    // FRESH was written by the new indexer (it has a relation id) and the
+    // kg-indexer has not indexed its vote yet: no relation row. It must stay.
+    const FRESH: u128 = 0xE2E5_359D_0043;
+    const M3: u128 = 0xE2E5_359D_0013;
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = $1",
+        "DELETE FROM ranks.rankings WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(FRESH)).execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(M3))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    apply_in(
+        &storage,
+        M3,
+        &ballot_edit(FRESH, BLOCK, 0x359D_3000, SPACE, &[A]),
+        12,
+    )
+    .await;
     let count_items = |rank: u128| async move {
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM ranks.ranking_items WHERE ranking_id = $1",
@@ -4023,6 +4046,11 @@ async fn reconcile_removes_ballots_cleared_before_the_deploy() {
         1,
         "a ballot still in the graph is kept"
     );
+    assert_eq!(
+        count_items(FRESH).await,
+        1,
+        "a ballot written since the deploy is kept while its vote is not indexed yet"
+    );
     assert!(
         !queued(&storage, BLOCK).await.is_empty(),
         "its block is queued"
@@ -4034,5 +4062,138 @@ async fn reconcile_removes_ballots_cleared_before_the_deploy() {
         &std::collections::HashSet::new(),
     )
     .await;
-    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(A), 1), (u(B), 1)]
+    );
+}
+
+/// Round-4 review: items an indexer older than 0125 writes (no
+/// `rank_space_id`) still insert, and the new indexer's fill attributes them:
+/// a registered Rank's space (the latest row for an id in two spaces), else
+/// the vote relation's space. A row neither resolves stays, unattributed,
+/// until one does; a NULL copy of a row the new indexer has written since is
+/// removed.
+#[tokio::test]
+async fn legacy_items_are_attributed_to_their_ranks_space_and_none_is_dropped() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const S1: u128 = 0xE2E5_359E_0011;
+    const S2: u128 = 0xE2E5_359E_0012;
+    const S3: u128 = 0xE2E5_359E_0013;
+    const ITEM_SPACE: u128 = 0xE2E5_359E_0001;
+    const R1: u128 = 0xE2E5_359E_0041; // registered in S1
+    const R2: u128 = 0xE2E5_359E_0042; // registered in S1 (older) and S2 (newer)
+    const R3: u128 = 0xE2E5_359E_0043; // unregistered, vote relation in S3
+    const R4: u128 = 0xE2E5_359E_0044; // unregistered, no vote relation yet
+    const E: u128 = 0xE2E5_359E_0031;
+    const E2: u128 = 0xE2E5_359E_0032;
+    let ranks: Vec<Uuid> = [R1, R2, R3, R4].iter().map(|r| u(*r)).collect();
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
+        "DELETE FROM ranks.rankings WHERE id = ANY($1)",
+        "DELETE FROM relations WHERE from_entity_id = ANY($1)",
+    ] {
+        sqlx::query(sql)
+            .bind(&ranks[..])
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for (rank, space, block) in [(R1, S1, 5i64), (R2, S1, 5), (R2, S2, 9)] {
+        sqlx::query(
+            "INSERT INTO ranks.rankings (id, space_id, updated_at_block, update_index) \
+             VALUES ($1, $2, $3, 0)",
+        )
+        .bind(u(rank))
+        .bind(u(space))
+        .bind(block)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    // Inserted exactly as the indexer before 0125 does: no rank_space_id.
+    for (rank, entity) in [(R1, E), (R1, E2), (R2, E), (R3, E), (R4, E)] {
+        sqlx::query(
+            "INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position, weight) \
+             VALUES ($1, $2, $3, 'a0', NULL)",
+        )
+        .bind(u(rank))
+        .bind(u(entity))
+        .bind(u(ITEM_SPACE))
+        .execute(pool)
+        .await
+        .expect("an old indexer's insert still works");
+    }
+    // The new indexer has since written R1's E2 under S1.
+    sqlx::query(
+        "INSERT INTO ranks.ranking_items (ranking_id, rank_space_id, entity_id, space_id, position) \
+         VALUES ($1, $2, $3, $4, 'a1')",
+    )
+    .bind(u(R1))
+    .bind(u(S1))
+    .bind(u(E2))
+    .bind(u(ITEM_SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+    let vote = |rel: u128, rank: u128, space: u128, to_space: u128| async move {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, \
+             to_space_id, space_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(Uuid::parse_str(RANK_VOTES_RELATION_TYPE_ID).unwrap())
+        .bind(u(rank))
+        .bind(u(E))
+        .bind(u(to_space))
+        .bind(u(space))
+        .execute(pool)
+        .await
+        .unwrap();
+    };
+    // R3's vote, and (lower id) a vote from R3 to E under another perspective,
+    // which is not this item.
+    vote(0x359E_2000, R3, S2, S2).await;
+    vote(0x359E_3000, R3, S3, ITEM_SPACE).await;
+
+    storage.fill_missing_relation_ids().await.unwrap();
+
+    type Row = (Uuid, Uuid, Option<Uuid>, Option<String>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT ranking_id, entity_id, rank_space_id, position FROM ranks.ranking_items \
+         WHERE ranking_id = ANY($1) ORDER BY ranking_id, entity_id",
+    )
+    .bind(&ranks[..])
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (u(R1), u(E), Some(u(S1)), Some("a0".into())),
+            (u(R1), u(E2), Some(u(S1)), Some("a1".into())),
+            (u(R2), u(E), Some(u(S2)), Some("a0".into())),
+            (u(R3), u(E), Some(u(S3)), Some("a0".into())),
+            (u(R4), u(E), None, Some("a0".into())),
+        ],
+        "registered -> its space (latest for two), unregistered -> its vote's space, \
+         unresolvable kept, the stale copy of R1's E2 removed"
+    );
+
+    // Once the kg-indexer has R4's vote, the next fill attributes it.
+    vote(0x359E_4000, R4, S1, ITEM_SPACE).await;
+    storage.fill_missing_relation_ids().await.unwrap();
+    let r4: Option<Uuid> =
+        sqlx::query_scalar("SELECT rank_space_id FROM ranks.ranking_items WHERE ranking_id = $1")
+            .bind(u(R4))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(r4, Some(u(S1)));
 }

@@ -540,9 +540,11 @@ async function* pageByKey<R extends Record<string, unknown>>(
 	table: string,
 	keys: string[],
 	pageSize: number,
+	/** A key's SQL expression when it is not the plain column `t.<key>` (the selected value must be the same). */
+	keyExpr: Record<string, string> = {},
 ): AsyncGenerator<R> {
 	let after: string[] | null = null
-	const tuple = keys.map((k) => `t.${k}`).join(", ")
+	const tuple = keys.map((k) => keyExpr[k] ?? `t.${k}`).join(", ")
 	const cast = keys.map((_, i) => `$${i + 2}::uuid`).join(", ")
 	for (;;) {
 		const page: R[] = await db.read<R>(
@@ -581,17 +583,22 @@ export const readRankingRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator
 		pageSize,
 	)
 
+/** `ranking_items.rank_space_id` with NULL (a row written before 0125, not attributed yet) as the nil uuid. */
+const RANK_SPACE_KEY = "COALESCE(t.rank_space_id, '00000000-0000-0000-0000-000000000000'::uuid)"
+
 /**
- * Every `ranks.ranking_items` row (keyset-paged on its primary key, which includes `rank_space_id` since 0125).
- * The keyed record has no rank-space column yet: one Rank id registered from two spaces maps both ballots' items
- * onto the same records (GEO-3591; see ranksKeyed.ts).
+ * Every `ranks.ranking_items` row, keyset-paged on its unique key (ranking, rank space, entity, space) since 0125;
+ * the rank space is NULL on rows not attributed yet, so it is paged as the nil uuid. The keyed record has no
+ * rank-space column yet: one Rank id registered from two spaces maps both ballots' items onto the same records
+ * (GEO-3591; see ranksKeyed.ts).
  */
 export const readRankingItemRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<RankingItemRow> =>
 	pageByKey<RankingItemRow>(
 		db,
-		`t.ranking_id::text AS ranking_id, t.rank_space_id::text AS rank_space_id, t.entity_id::text AS entity_id,
+		`t.ranking_id::text AS ranking_id, ${RANK_SPACE_KEY}::text AS rank_space_id, t.entity_id::text AS entity_id,
 		 t.space_id::text AS space_id, t.position AS position, t.weight AS weight`,
 		"ranks.ranking_items",
 		["ranking_id", "rank_space_id", "entity_id", "space_id"],
 		pageSize,
+		{rank_space_id: RANK_SPACE_KEY},
 	)

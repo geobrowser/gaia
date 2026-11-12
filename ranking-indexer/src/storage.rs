@@ -1291,6 +1291,74 @@ impl Storage {
         Ok(())
     }
 
+    /// Attribute items with no `rank_space_id` (written before migration 0125,
+    /// by an indexer that predates it) to their Rank's space, GEO-3591:
+    /// - a registered Rank: its `ranks.rankings` space, the latest row by the
+    ///   dedup order for an id registered in more than one space;
+    /// - otherwise the space of the item's own vote relation in the graph
+    ///   (lowest relation id when several match).
+    ///
+    /// A row neither gives a space stays NULL until one does (the Rank is not
+    /// registered yet, or the kg-indexer has not indexed the vote yet); nothing
+    /// is dropped for that. A NULL row whose attributed key already holds a row
+    /// (the new indexer has written that Rank's item since) is a stale copy of
+    /// it and is removed. Idempotent. Returns the rows attributed.
+    pub async fn fill_missing_rank_spaces(&self) -> Result<u64, IndexerError> {
+        if self.skip_pg_write(PgWriteSite::FillRelationIds) {
+            return Ok(0);
+        }
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        // (ranking, entity, item space) -> the Rank space a NULL row resolves to.
+        let resolved = "WITH registered AS ( \
+                 SELECT DISTINCT ON (id) id, space_id FROM ranks.rankings \
+                 ORDER BY id, updated_at_block DESC, update_index DESC, space_id \
+             ), by_relation AS ( \
+                 SELECT DISTINCT ON (i.ranking_id, i.entity_id, i.space_id) \
+                        i.ranking_id, i.entity_id, i.space_id, r.space_id AS rank_space_id \
+                 FROM ranks.ranking_items i \
+                 JOIN relations r ON r.type_id = $1 AND r.from_entity_id = i.ranking_id \
+                   AND r.to_entity_id = i.entity_id AND r.to_space_id = i.space_id \
+                 WHERE i.rank_space_id IS NULL \
+                   AND NOT EXISTS (SELECT 1 FROM ranks.rankings k WHERE k.id = i.ranking_id) \
+                 ORDER BY i.ranking_id, i.entity_id, i.space_id, r.id \
+             ), m AS ( \
+                 SELECT i.ranking_id, i.entity_id, i.space_id, \
+                        COALESCE(g.space_id, b.rank_space_id) AS rank_space_id \
+                 FROM ranks.ranking_items i \
+                 LEFT JOIN registered g ON g.id = i.ranking_id \
+                 LEFT JOIN by_relation b ON b.ranking_id = i.ranking_id \
+                   AND b.entity_id = i.entity_id AND b.space_id = i.space_id \
+                 WHERE i.rank_space_id IS NULL \
+                   AND COALESCE(g.space_id, b.rank_space_id) IS NOT NULL \
+             )";
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "{resolved} \
+             DELETE FROM ranks.ranking_items i USING m \
+             WHERE i.rank_space_id IS NULL AND i.ranking_id = m.ranking_id \
+               AND i.entity_id = m.entity_id AND i.space_id = m.space_id \
+               AND EXISTS (SELECT 1 FROM ranks.ranking_items j \
+                           WHERE j.ranking_id = m.ranking_id AND j.rank_space_id = m.rank_space_id \
+                             AND j.entity_id = m.entity_id AND j.space_id = m.space_id)"
+        )))
+        .bind(pid(ids::RANK_VOTES_RELATION_TYPE_ID))
+        .execute(&mut *tx)
+        .await?;
+        let filled = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "{resolved} \
+             UPDATE ranks.ranking_items i SET rank_space_id = m.rank_space_id FROM m \
+             WHERE i.rank_space_id IS NULL AND i.ranking_id = m.ranking_id \
+               AND i.entity_id = m.entity_id AND i.space_id = m.space_id"
+        )))
+        .bind(pid(ids::RANK_VOTES_RELATION_TYPE_ID))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(filled)
+    }
+
     /// Fill `ranking_items.relation_id` and `rankings.block_relation_id` where
     /// they are NULL, from the indexed public graph: rows written before
     /// migration 0125, or by an older indexer since. Run when the indexer
@@ -1304,6 +1372,15 @@ impl Storage {
     pub async fn fill_missing_relation_ids(&self) -> Result<(u64, u64), IndexerError> {
         if self.skip_pg_write(PgWriteSite::FillRelationIds) {
             return Ok((0, 0));
+        }
+        // The relation-id fill matches on the item's Rank space, so attribute
+        // items to a space first.
+        let spaces = self.fill_missing_rank_spaces().await?;
+        if spaces > 0 {
+            tracing::info!(
+                items = spaces,
+                "attributed rank items to their Rank's space"
+            );
         }
         use sdk::core::ids;
         let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
@@ -1363,11 +1440,19 @@ impl Storage {
             return Ok(());
         }
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1 AND rank_space_id = $2")
-            .bind(ranking_id)
-            .bind(space_id)
-            .execute(&mut *tx)
-            .await?;
+        // This Rank's own items, plus items an indexer older than 0125 wrote
+        // for this id with no space, but only while no space has the id
+        // registered: those can only be this Rank's own earlier writes, and
+        // keeping them would bring old votes back once the Rank is registered.
+        sqlx::query(
+            "DELETE FROM ranks.ranking_items WHERE ranking_id = $1 \
+               AND (rank_space_id = $2 OR (rank_space_id IS NULL \
+                    AND NOT EXISTS (SELECT 1 FROM ranks.rankings k WHERE k.id = $1)))",
+        )
+        .bind(ranking_id)
+        .bind(space_id)
+        .execute(&mut *tx)
+        .await?;
         for it in items {
             sqlx::query(
                 r#"

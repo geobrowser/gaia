@@ -317,6 +317,16 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // A recovered Rank's items may have been written with no space by an
+    // indexer older than 0125: attribute them now, so the recompute below
+    // counts them (GEO-3591).
+    if !affected_blocks.is_empty() {
+        if let Err(e) = storage.fill_missing_rank_spaces().await {
+            error!(error = %e, "failed to attribute recovered ranks' items to their space");
+            failed += 1;
+        }
+    }
+
     // Recompute every block a recovered rank links to — its aggregate needs
     // to include the rank that just appeared.
     for block_id in affected_blocks {

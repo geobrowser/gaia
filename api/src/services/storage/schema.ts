@@ -21,6 +21,7 @@ import {
 	time,
 	timestamp,
 	unique,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core"
 
@@ -1367,11 +1368,20 @@ export const rankingItems = ranks.table(
 		weight: doublePrecision(),
 		/** The RANK_VOTES relation the item came from, so deleting it removes the item (GEO-3591, 0125). */
 		relationId: uuid("relation_id"),
-		/** The space of the Rank the item belongs to: items are scoped by (ranking, rank space) (GEO-3591, 0125). */
-		rankSpaceId: uuid("rank_space_id").notNull(),
+		/**
+		 * The space of the Rank the item belongs to: items are scoped by (ranking, rank space) (GEO-3591, 0125).
+		 * NULL only on rows written before 0125 and not filled yet; a later migration makes it NOT NULL.
+		 */
+		rankSpaceId: uuid("rank_space_id"),
 	},
 	(table) => [
-		primaryKey({columns: [table.rankingId, table.rankSpaceId, table.entityId, table.spaceId]}),
+		// Replaces the (ranking_id, entity_id, space_id) primary key until rank_space_id is NOT NULL (0125).
+		uniqueIndex("ranking_items_rank_space_key").on(
+			table.rankingId,
+			sql`COALESCE(${table.rankSpaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+			table.entityId,
+			table.spaceId,
+		),
 		index("ranking_items_relation_id_idx").on(table.relationId).where(sql`${table.relationId} IS NOT NULL`),
 	],
 )
