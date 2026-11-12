@@ -121,6 +121,28 @@ pub enum MirrorError {
     BadUnit(String),
     #[error("cooling down after a failure")]
     CoolingDown,
+    /// The `has` probe is not available: the client in the image predates it, the node answers
+    /// `UnknownOpcode`, or no geo-db connection is configured. Not a fault; the caller falls back.
+    #[error("has probe unavailable: {0}")]
+    Unsupported(String),
+}
+
+impl MirrorError {
+    /// Whether a refused `has` means the probe does not exist on this client or node, as opposed
+    /// to a real refusal (no access, class off). An older client answers an unknown pipe verb
+    /// with its `want ...` list, which does not name `has`; an older node answers the opcode
+    /// `UnknownOpcode`.
+    fn has_unsupported(self) -> MirrorError {
+        match self {
+            MirrorError::Refused(body)
+                if (body.starts_with("want ") && !body.contains("|has|"))
+                    || body.contains("UnknownOpcode") =>
+            {
+                MirrorError::Unsupported(body)
+            }
+            other => other,
+        }
+    }
 }
 
 /// The most an enter's answer (`entered` or `duplicate`) can be.
@@ -212,6 +234,64 @@ impl Enterer {
     pub async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
         self.worker.enter(unit).await
     }
+
+    /// Which of `keys` (at most [`HAS_MAX`] ledger keys) geo-db already holds, in order, without
+    /// leasing or writing: the read-only `has` verb. [`MirrorError::Unsupported`] when the client
+    /// or node predates it, so a caller can fall back to not knowing.
+    pub async fn has(&mut self, keys: &[String]) -> Result<Vec<bool>, MirrorError> {
+        self.worker.has(keys).await
+    }
+}
+
+/// The most keys one `has` line may carry (geo-db's `has_max`).
+pub const HAS_MAX: usize = 256;
+
+/// The longest `has` answer: a key, a tab, `held` or `absent`, a newline, for each of [`HAS_MAX`].
+const HAS_ANSWER_MAX: usize = HAS_MAX * (64 + 1 + 6 + 1);
+
+/// The `has` line `work pipe` reads for `keys` (ledger keys, 64 lowercase hex digits each), or why
+/// it cannot be sent. `has` is read-only: it needs no write access to the class and never leases,
+/// counts or writes.
+pub fn has_line(keys: &[String]) -> Result<String, MirrorError> {
+    if keys.is_empty() || keys.len() > HAS_MAX {
+        return Err(MirrorError::BadUnit(format!(
+            "{} keys in a has",
+            keys.len()
+        )));
+    }
+    for key in keys {
+        if key.len() != 64
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(MirrorError::BadUnit(format!("ledger key {key:?}")));
+        }
+    }
+    Ok(format!("has\t{}\n", keys.join("\t")))
+}
+
+/// The flags of a `has` answer, `<key>\t<held|absent>` a line in request order.
+fn parse_has(keys: &[String], body: &str) -> Result<Vec<bool>, MirrorError> {
+    let mut out = Vec::with_capacity(keys.len());
+    let mut lines = body.lines();
+    for key in keys {
+        let bad = || MirrorError::BadFrame(format!("has answer {body:.80?}"));
+        let line = lines.next().ok_or_else(bad)?;
+        let (k, state) = line.split_once('\t').ok_or_else(bad)?;
+        if k != key {
+            return Err(bad());
+        }
+        out.push(match state {
+            "held" => true,
+            "absent" => false,
+            _ => return Err(bad()),
+        });
+    }
+    if lines.next().is_some() {
+        return Err(MirrorError::BadFrame(format!("has answer {body:.80?}")));
+    }
+    Ok(out)
 }
 
 /// The line `work pipe` reads for `unit`, or why it cannot be sent.
@@ -284,6 +364,16 @@ impl Worker {
             "duplicate" => Ok(Entered::Duplicate),
             other => Err(MirrorError::BadFrame(other.to_string())),
         }
+    }
+
+    async fn has(&mut self, keys: &[String]) -> Result<Vec<bool>, MirrorError> {
+        let line = has_line(keys)?;
+        // A probe changes nothing, so replaying it on a fresh pipe is safe.
+        let body = self
+            .call_replaying(&line, HAS_ANSWER_MAX)
+            .await
+            .map_err(MirrorError::has_unsupported)?;
+        parse_has(keys, &body)
     }
 
     /// As [`Worker::call`], for a request that is safe to send twice. geo-db closes a pipe that
@@ -782,6 +872,102 @@ mod tests {
         let sent = std::fs::read_to_string(&log).unwrap();
         assert_eq!(sent, enter_line(&unit()).unwrap().repeat(2));
         let _ = std::fs::remove_file(&log);
+    }
+
+    fn key(n: u8) -> String {
+        format!("{n:02x}").repeat(32)
+    }
+
+    #[test]
+    fn has_line_shape_and_bounds() {
+        assert_eq!(
+            has_line(&[key(1), key(2)]).unwrap(),
+            format!("has\t{}\t{}\n", key(1), key(2))
+        );
+        assert!(has_line(&[]).is_err());
+        assert!(has_line(&vec![key(1); HAS_MAX + 1]).is_err());
+        assert!(has_line(&vec![key(1); HAS_MAX]).is_ok());
+        assert!(has_line(&["zz".to_string()]).is_err());
+        assert!(has_line(&[key(0xab).to_uppercase()]).is_err());
+    }
+
+    #[test]
+    fn has_answer_is_checked_against_the_request() {
+        let keys = [key(1), key(2)];
+        let ok = format!("{}\theld\n{}\tabsent\n", key(1), key(2));
+        assert_eq!(parse_has(&keys, &ok).unwrap(), vec![true, false]);
+        // wrong order, a short answer, a long one and an unknown state are all refused
+        let swapped = format!("{}\theld\n{}\tabsent\n", key(2), key(1));
+        assert!(parse_has(&keys, &swapped).is_err());
+        assert!(parse_has(&keys, &format!("{}\theld\n", key(1))).is_err());
+        assert!(parse_has(&keys[..1], &ok).is_err());
+        assert!(parse_has(&keys[..1], &format!("{}\tmaybe\n", key(1))).is_err());
+    }
+
+    /// A child that answers each line with the frame in `answer` (a `+<n>` frame, or the raw
+    /// text of a refusal) and logs the lines it was sent.
+    fn answering(log: &std::path::Path, answer: &std::path::Path) -> String {
+        format!(
+            "echo ready; while IFS= read -r l; do printf '%s\\n' \"$l\" >> {}; cat {}; done",
+            log.display(),
+            answer.display()
+        )
+    }
+
+    #[tokio::test]
+    async fn has_reads_the_held_flags_over_the_pipe() {
+        let (log, answer) = (tmp("has-log"), tmp("has-answer"));
+        let body = format!("{}\theld\n{}\tabsent\n", key(2), key(3));
+        std::fs::write(&answer, format!("+{}\n{body}", body.len())).unwrap();
+        let mut e = Enterer {
+            worker: worker(&answering(&log, &answer), Duration::ZERO),
+        };
+        let keys = [key(2), key(3)];
+        assert_eq!(e.has(&keys).await.unwrap(), vec![true, false]);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            has_line(&keys).unwrap()
+        );
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&answer);
+    }
+
+    #[tokio::test]
+    async fn a_client_or_node_without_has_is_unsupported_not_a_fault() {
+        for refusal in [
+            // an older client's answer to an unknown pipe verb
+            "want enter|note|noted|claim|complete|retry|fail|counts<tab>...",
+            // a node at an earlier wire revision
+            "error: UnknownOpcode",
+        ] {
+            let (log, answer) = (tmp("has-old-log"), tmp("has-old-answer"));
+            std::fs::write(&answer, format!("-{}\n{refusal}", refusal.len())).unwrap();
+            let mut e = Enterer {
+                worker: worker(&answering(&log, &answer), Duration::ZERO),
+            };
+            assert!(
+                matches!(e.has(&[key(1)]).await, Err(MirrorError::Unsupported(_))),
+                "{refusal}"
+            );
+            let _ = std::fs::remove_file(&log);
+            let _ = std::fs::remove_file(&answer);
+        }
+    }
+
+    #[tokio::test]
+    async fn any_other_refusal_of_has_stays_a_refusal() {
+        let (log, answer) = (tmp("has-deny-log"), tmp("has-deny-answer"));
+        let refusal = "error: NotFoundOrRestricted";
+        std::fs::write(&answer, format!("-{}\n{refusal}", refusal.len())).unwrap();
+        let mut e = Enterer {
+            worker: worker(&answering(&log, &answer), Duration::ZERO),
+        };
+        assert!(matches!(
+            e.has(&[key(1)]).await,
+            Err(MirrorError::Refused(_))
+        ));
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&answer);
     }
 
     #[tokio::test]
