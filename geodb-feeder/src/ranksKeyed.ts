@@ -34,7 +34,10 @@
  * - Deletes are not ported (GEO-3591). detect.rs now records DeleteRelation/DeleteEntity ids, and storage.rs
  *   removes the items whose vote relation was deleted, unlinks a rank whose RANK_BLOCK relation was deleted and
  *   drops a deleted Rank, so a ranker can clear their ballot with an edit of deletes only. Here such an edit
- *   writes nothing, and the cleared ranking keeps its items at their last generation.
+ *   writes nothing, and the cleared ranking keeps its items at their last generation. The ranks gate counts those
+ *   items (and a deleted Rank's record) as geo-db-only, which it already expects; a deleted RANK_BLOCK link would
+ *   show as a `block` value difference. Porting deletes needs the item's relation id in geo-db and a way to find
+ *   the ranking from a deleted relation id without a read before the write.
  */
 import {relationEntityId} from "@geoprotocol/grc-20"
 import {parseHermesEdit} from "./hermes.js"
