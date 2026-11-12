@@ -12,12 +12,29 @@
 //! is the wall clock at the mirror write, which is within the batch's time of Postgres' own. A
 //! snapshot of the whole table at start repairs any put the best-effort mirror dropped and
 //! backfills the rows that predate it. Rows are never deleted: nothing deletes from `votes_count`.
+//!
+//! Collection 33 `votes_count_updates` (geo-db 19b75f0596, plan 10.22 section 29.6): the update-time
+//! order of the same rows, for the notification poller's "changed since T" read. One row of 33 for
+//! each row of 26, with the same key and the same 24-byte value. Group `object_type << 8 | vote_kind`
+//! (`collection.voteUpdateGroup`), so the poller's `object_type = 0 AND vote_kind = 0` is group 0.
+//! Score minus `updated_at` in microseconds (`collection.voteUpdateScore`), so a scan walks the
+//! oldest update first. [`mirror`] sends both rows of a count adjacent in one call, so the live
+//! write and the start-up copy both carry the pair. Collection 33 needs a geodb client at or after
+//! 19b75f0596: an older node refuses the collection and, as for any refused put, the rest of the
+//! call is dropped and counted.
 
 use geodb_cursor::derived::{DerivedMirror, DerivedRow};
 use uuid::Uuid;
 
 /// `votes_count` in geo-db's collection registry.
 pub const COLLECTION: u32 = 26;
+
+/// `votes_count_updates` in geo-db's collection registry.
+pub const UPDATES_COLLECTION: u32 = 33;
+
+/// The largest update time, in microseconds either side of the epoch, collection 33's score holds
+/// (geo-db `vote_update_us_max`, 2^53: an f64 holds every integer up to it exactly).
+pub const UPDATE_US_MAX: i64 = 1 << 53;
 
 /// The label the mirror's metrics carry.
 pub const TABLE: &str = "votes_count";
@@ -69,9 +86,48 @@ pub fn row(c: &Count) -> DerivedRow {
     }
 }
 
-/// Sends `counts` as puts. Never fails.
+/// Collection 33's group for a (type, kind): the type byte, then the kind byte
+/// (geo-db `voteUpdateGroup`).
+pub fn update_group(object_type: i16, vote_kind: i16) -> u128 {
+    (u128::from(object_type as u8) << 8) | u128::from(vote_kind as u8)
+}
+
+/// Collection 33's score for an update time in microseconds: its negation (geo-db
+/// `voteUpdateScore`), because a scan walks the highest score first.
+pub fn update_score(updated_us: i64) -> f64 {
+    -(updated_us as f64)
+}
+
+/// The update time a collection 33 score holds, the inverse of [`update_score`].
+pub fn update_us_of(score: f64) -> i64 {
+    (-score) as i64
+}
+
+/// The collection 33 row for one count: the key and value of [`row`], grouped by (type, kind) and
+/// scored by minus the update time. `None` when the time is outside what the score holds, so the
+/// count is still written to 26 and only its update-order row is left out.
+pub fn update_row(c: &Count) -> Option<DerivedRow> {
+    if !(-UPDATE_US_MAX..=UPDATE_US_MAX).contains(&c.updated_us) {
+        return None;
+    }
+    let base = row(c);
+    Some(DerivedRow {
+        collection: UPDATES_COLLECTION,
+        group: update_group(c.object_type, c.vote_kind),
+        score: update_score(c.updated_us),
+        key: base.key,
+        value: base.value,
+    })
+}
+
+/// Sends `counts` as puts: for each count its row of 26 and then its row of 33, in one call.
+/// Never fails.
 pub async fn mirror(mirror: &DerivedMirror, counts: &[Count]) {
-    let puts: Vec<DerivedRow> = counts.iter().map(row).collect();
+    let mut puts: Vec<DerivedRow> = Vec::with_capacity(counts.len() * 2);
+    for c in counts {
+        puts.push(row(c));
+        puts.extend(update_row(c));
+    }
     if !puts.is_empty() {
         mirror.put(TABLE, &puts).await;
     }
@@ -130,6 +186,83 @@ mod tests {
             i64::from_le_bytes(v[16..24].try_into().unwrap()),
             1_793_000_000_000_000
         );
+    }
+
+    #[test]
+    fn the_update_row_mirrors_key_and_value_and_orders_by_minus_time() {
+        let c = count();
+        let base = row(&c);
+        let u = update_row(&c).unwrap();
+        assert_eq!(u.collection, 33);
+        assert_eq!(u.key, base.key);
+        assert_eq!(u.value, base.value);
+        assert_eq!(u.group, 1);
+        assert_eq!(u.score, -1_793_000_000_000_000.0);
+        // Object type 0, kind 0 (the poller's predicate) is group 0; type 1 kind 2 is 0x102.
+        assert_eq!(update_group(0, 0), 0);
+        assert_eq!(update_group(1, 2), 0x102);
+        // A later update has a lower score, so a scan (highest score first) reads it later.
+        let later = Count {
+            updated_us: c.updated_us + 1,
+            ..c.clone()
+        };
+        assert!(update_row(&later).unwrap().score < u.score);
+        assert_eq!(update_us_of(u.score), c.updated_us);
+    }
+
+    #[test]
+    fn a_time_outside_the_score_range_leaves_only_the_update_row_out() {
+        let c = Count {
+            updated_us: UPDATE_US_MAX + 1,
+            ..count()
+        };
+        assert!(update_row(&c).is_none());
+        let edge = Count {
+            updated_us: UPDATE_US_MAX,
+            ..count()
+        };
+        assert!(update_row(&edge).is_some());
+    }
+
+    #[tokio::test]
+    async fn one_put_call_carries_both_rows_of_each_count() {
+        use geodb_cursor::Config;
+        use std::time::Duration;
+        let log = std::env::temp_dir().join(format!("votes-count-mirror-{}", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        // The derived pipe answers each request with a `+` frame and logs the request.
+        let script = format!(
+            "echo ready; while IFS= read -r l; do printf '%s\\n' \"$l\" >> {}; printf '+10\\napplied: 1'; done",
+            log.display()
+        );
+        let m = DerivedMirror::new(
+            Config {
+                program: "sh".into(),
+                args: vec!["-c".into(), script.into()],
+                collection: 0,
+                timeout: Duration::from_millis(1500),
+                cooldown: Duration::from_secs(60),
+            },
+            Duration::from_secs(5),
+        );
+        let a = count();
+        let b = Count {
+            object_id: u(4),
+            updated_us: a.updated_us + 5,
+            ..count()
+        };
+        mirror(&m, &[a.clone(), b.clone()]).await;
+        let sent = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_file(&log);
+        let lines: Vec<&str> = sent.lines().collect();
+        let expect: Vec<String> = [&a, &b]
+            .iter()
+            .flat_map(|c| [row(c), update_row(c).unwrap()])
+            .map(|r| r.put_line().unwrap().trim_end().to_string())
+            .collect();
+        assert_eq!(lines, expect);
+        assert!(lines[0].starts_with("put\t26\t"));
+        assert!(lines[1].starts_with("put\t33\t1\t"));
     }
 
     #[test]

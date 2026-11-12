@@ -15,6 +15,7 @@ pub mod outbox_replay;
 pub mod poll_cursor_mirror;
 pub mod poll_cursor_shadow;
 pub mod storage;
+pub mod vote_updates;
 pub mod webhooks_file;
 pub mod write_retry;
 
