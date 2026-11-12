@@ -47,7 +47,14 @@ export type RelationSeedDeps = {
 	guard: () => Promise<void>
 	sleep?: (ms: number) => Promise<void>
 	signal?: AbortSignal
+	/** Clock for the progress lines (tests). */
+	now?: () => number
+	/** Receives each progress line's fields (tests); default logs them as `relation-seed progress`. */
+	onProgress?: (fields: Record<string, unknown>) => void
 }
+
+/** A progress line is logged when a Space finishes and at most this often inside a long one. */
+const PROGRESS_EVERY_MS = 30_000
 
 export type RelationSeedStats = {
 	dryRun: boolean
@@ -157,7 +164,35 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 	const plan = Object.keys(deps.store.spaces).sort()
 	log("info", "relation-seed plan", {dryRun: opts.dryRun, spaces: plan.length})
 
+	// Progress, so an operator can estimate the finish: Spaces visited out of the plan (an unmapped or already finished
+	// Space counts as visited), counts so far, and the rate of this run (entities per second since it started).
+	const now = deps.now ?? Date.now
+	const startedAt = now()
+	let lastProgress = startedAt
+	let visited = 0
+	const progress = (space: string, spaceDone: boolean) => {
+		const t = now()
+		const seconds = Math.max((t - startedAt) / 1000, 0.001)
+		lastProgress = t
+		const fields = {
+			dryRun: opts.dryRun,
+			spacesDone: visited,
+			spacesTotal: plan.length,
+			spaceDone,
+			entities: stats.entities,
+			relations: stats.relations,
+			toSeed: stats.toSeed,
+			seeded: stats.seeded,
+			notOpen: stats.notOpen,
+			elapsedSeconds: Math.round(seconds),
+			entitiesPerSecond: Math.round((stats.entities / seconds) * 10) / 10,
+		}
+		if (deps.onProgress) deps.onProgress({space, ...fields})
+		else log("info", "relation-seed progress", fields)
+	}
+
 	for (const space of plan) {
+		visited++
 		if (deps.signal?.aborted) throw new Error("shutting down")
 		const record = deps.store.spaces[space]
 		if (!record?.geo) {
@@ -227,8 +262,10 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 			state.cursor.done[space] = to
 			state.cursor.inflight = null
 			state.save()
+			if (now() - lastProgress >= PROGRESS_EVERY_MS) progress(space, false)
 			if (opts.pauseMs > 0) await sleep(opts.pauseMs)
 		}
+		progress(space, true)
 	}
 	return stats
 }

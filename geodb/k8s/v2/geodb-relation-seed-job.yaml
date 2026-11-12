@@ -6,7 +6,8 @@
 # See geodb/RUNBOOK.md §2b-quater and geodb-feeder/src/relationSeed.ts. Its cursor is /data/feeder/relation-seed/.
 #
 # NOT in deploy-v2: it runs by hand. DRY_RUN "1" reads and logs counts only and writes nothing (no journal, no cursor),
-# and needs no stopped feeder; "0" writes the journal, and then the feeder must be scaled to 0 (it mounts the feeder's
+# and needs no stopped feeder (but it still mounts the feeder's RWO volume geodb-feeder-state, so it runs on the feeder's
+# node and stays Pending if that node lacks room; see geodb/RUNBOOK.md "Where the Job runs"); "0" writes the journal, and then the feeder must be scaled to 0 (it mounts the feeder's
 # RWO state volume, appends to the journal the feeder holds in memory, and refuses to start while the feeder's consumer
 # group has members). The placeholder is replaced at run time; the Job refuses to start if __DRY_RUN__ is left in:
 #   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" geodb-relation-seed-job.yaml | kubectl apply -f -
