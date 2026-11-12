@@ -1,0 +1,25 @@
+name: geodb kafka-rewind tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'geodb/kafka-rewind.sh'
+      - 'geodb/test-kafka-rewind.sh'
+      - 'geodb/testdata/kafka-rewind/**'
+      - '.github/workflows/geodb-kafka-rewind-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'geodb/kafka-rewind.sh'
+      - 'geodb/test-kafka-rewind.sh'
+      - 'geodb/testdata/kafka-rewind/**'
+      - '.github/workflows/geodb-kafka-rewind-test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -x geodb/kafka-rewind.sh geodb/test-kafka-rewind.sh
+      - run: bash geodb/test-kafka-rewind.sh
