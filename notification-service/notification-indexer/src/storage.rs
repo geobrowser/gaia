@@ -1171,6 +1171,39 @@ impl Storage {
             .collect())
     }
 
+    /// Whether an `entity_votes_threshold` notification already exists for this `(entity, space)` at
+    /// `threshold`: the `already_notified` of [`find_entity_vote_counts_since`](Self::find_entity_vote_counts_since)
+    /// for one row, for the geo-db-served read (`crate::vote_updates`), which has no Postgres row to
+    /// carry it.
+    #[instrument(
+        name = "notification_indexer.storage.vote_threshold_already_notified",
+        skip(self)
+    )]
+    pub async fn vote_threshold_already_notified(
+        &self,
+        entity_id: Uuid,
+        space_id: Uuid,
+        threshold: i64,
+    ) -> Result<bool, StorageError> {
+        let found: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM notification_outbox o
+                WHERE o.event_type = 'entity_votes_threshold'
+                  AND (o.payload->>'entity_id')::uuid = $1
+                  AND (o.payload->>'vote_space_id')::uuid = $2
+                  AND (o.payload->>'threshold')::bigint = $3
+            )
+            "#,
+        )
+        .bind(entity_id)
+        .bind(space_id)
+        .bind(threshold)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(found)
+    }
+
     /// Read a named poll cursor. Returns `None` if the poller has never run.
     #[instrument(name = "notification_indexer.storage.get_poll_cursor", skip(self))]
     pub async fn get_poll_cursor(

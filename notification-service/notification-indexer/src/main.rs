@@ -492,6 +492,13 @@ async fn async_main() -> Result<(), IndexerError> {
             interval_secs = vote_poll_interval_secs,
             "Entity-vote-threshold poller enabled"
         );
+        let vote_updates = notification_indexer::vote_updates::VoteUpdates::from_env();
+        if let Some(v) = vote_updates.as_ref() {
+            info!(
+                serve = v.serves(),
+                "Vote poller reads geo-db votes_count_updates"
+            );
+        }
         Some(tokio::spawn(async move {
             const CURSOR_NAME: &str = "entity_votes_threshold";
             const BATCH_LIMIT: i64 = 1000;
@@ -548,11 +555,30 @@ async fn async_main() -> Result<(), IndexerError> {
                         let mut hw_ts = persisted_ts;
                         let mut hw_id = persisted_id;
 
+                        let tick_start = cur_ts;
+                        let mut first_page = true;
+                        // geo-db serving: the cursor after the last row of the previous page.
+                        let mut geodb_resume: Option<Vec<u8>> = None;
+
                         loop {
-                            let rows = match vote_storage
-                                .find_entity_vote_counts_since(cur_ts, cur_id, vote_threshold, BATCH_LIMIT)
-                                .await
-                            {
+                            let serving = vote_updates.as_ref().filter(|v| v.serves());
+                            let rows = match serving {
+                                Some(v) => v
+                                    .find_since(
+                                        &vote_storage,
+                                        &mut geodb_resume,
+                                        tick_start.timestamp_micros(),
+                                        vote_threshold,
+                                        BATCH_LIMIT,
+                                    )
+                                    .await
+                                    .map_err(|e| e.to_string()),
+                                None => vote_storage
+                                    .find_entity_vote_counts_since(cur_ts, cur_id, vote_threshold, BATCH_LIMIT)
+                                    .await
+                                    .map_err(|e| e.to_string()),
+                            };
+                            let rows = match rows {
                                 Ok(r) => r,
                                 Err(e) => {
                                     metrics::poller_error(Poller::VoteThreshold);
@@ -560,6 +586,12 @@ async fn async_main() -> Result<(), IndexerError> {
                                     break;
                                 }
                             };
+                            if first_page {
+                                first_page = false;
+                                if let Some(v) = vote_updates.as_ref().filter(|v| v.shadows()) {
+                                    v.observe(&rows, tick_start.timestamp_micros(), BATCH_LIMIT).await;
+                                }
+                            }
                             let batch_len = rows.len();
                             if batch_len == 0 {
                                 break;
