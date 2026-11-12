@@ -32,7 +32,9 @@ const missing = findTestDirs("src")
 if (missing.length > 0) {
 	console.error("These __tests__ folders are listed in no API test workflow, so they run nowhere:")
 	for (const dir of missing) console.error(`  ${dir}`)
-	console.error("Add each to the folder list in .github/workflows/api-integration-tests.yml (or the pg-free-tests job).")
+	console.error(
+		"Add each to the folder list in .github/workflows/api-integration-tests.yml (or the pg-free-tests job).",
+	)
 	process.exit(1)
 }
 console.log(`ok: all ${findTestDirs("src").length} __tests__ folders are listed`)
