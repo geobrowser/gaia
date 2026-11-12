@@ -22,6 +22,8 @@ import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
 import {startOptionalConsumer} from "./optionalConsumer.js"
 import {startProposalStatusConsumer} from "./proposalStatusConsumer.js"
+import {editMetaKeyedEnabled, editMetaOffsetsDir} from "./editMetaKeyed.js"
+import {startEditMetaConsumer} from "./editMetaConsumer.js"
 import {startRanksConsumer} from "./ranksConsumer.js"
 import {ranksKeyedEnabled, ranksOffsetsDir} from "./ranksKeyed.js"
 import {proposalStatusKeyedEnabled, proposalStatusOffsetsDir} from "./proposalStatusKeyed.js"
@@ -495,6 +497,28 @@ async function main(config: Config): Promise<void> {
 		)
 	}
 
+	// Keyed per-edit metadata (editMetaKeyed.ts): GEODB_EDIT_META with GEODB_RECORD_KEYS. Reads the envelope only.
+	let editMeta: Awaited<ReturnType<typeof startEditMetaConsumer>> | null = null
+	if (config.editMeta.enabled && !config.recordKeys) log("warn", "GEODB_EDIT_META is set without GEODB_RECORD_KEYS; edit-meta consumer not started")
+	if (editMetaKeyedEnabled(config)) {
+		editMeta = await startOptionalConsumer("edit_meta", metrics.consumerStartFailed, () =>
+			startEditMetaConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(editMetaOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
 	// Keyed ranking blocks, rankings and items (ranksKeyed.ts): GEODB_RANKS with GEODB_RECORD_KEYS, after their backfill.
 	let ranks: Awaited<ReturnType<typeof startRanksConsumer>> | null = null
 	if (config.ranks.enabled && !config.recordKeys) log("warn", "GEODB_RANKS is set without GEODB_RECORD_KEYS; ranks consumer not started")
@@ -584,6 +608,12 @@ async function main(config: Config): Promise<void> {
 		await ps.poll()
 	}
 
+	if (editMeta) {
+		const em = editMeta
+		setInterval(() => void em.poll(), config.lagPollMs).unref()
+		await em.poll()
+	}
+
 	if (ranks) {
 		const rk = ranks
 		setInterval(() => void rk.poll(), config.lagPollMs).unref()
@@ -633,6 +663,7 @@ async function main(config: Config): Promise<void> {
 		await proposalVersions?.stop()
 		await proposalStatus?.stop()
 		await ranks?.stop()
+		await editMeta?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()

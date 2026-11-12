@@ -12,6 +12,7 @@ import {renderEntityAtVersionShadowMetrics} from "./geodb/entityAtVersionShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderEntityDiffShadowMetrics} from "./geodb/entityDiffShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
+import {renderEditMetaShadowMetrics} from "./geodb/editMetaShadow"
 import {renderEntityVersionsShadowMetrics} from "./geodb/entityVersionsShadow"
 import {renderFeedRunsShadowMetrics} from "./geodb/feedRunsShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
@@ -174,6 +175,8 @@ function renderPrometheusMetrics(): string {
 		renderProfileShadowMetrics(),
 		// Entity version count, order and author from geo-db against the served /versioned/entities/:id/versions (GEODB_VERSIONS_SHADOW) — see geodb/entityVersionsShadow.ts.
 		renderEntityVersionsShadowMetrics(),
+		// Edit block, sequence and name from geo-db's edit_meta records against the same page (GEODB_EDIT_META_SHADOW) — see geodb/editMetaShadow.ts.
+		renderEditMetaShadowMetrics(),
 		// Active proposal and proposal-group diff base statements checked against geo-db's cards (GEODB_PROPOSAL_DIFF_SHADOW) — see geodb/proposalDiffShadow.ts.
 		renderProposalDiffShadowMetrics(),
 		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
