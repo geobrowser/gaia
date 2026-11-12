@@ -1,0 +1,87 @@
+# Flag-shaped env names that code reads but no v2 manifest sets (checked by scripts/check-env-flags.py).
+# One `NAME  reason` per line. A name that gets set in a manifest, or stops being read, must be removed here.
+# Do not add a *_PG_WRITES name: an unset writer switch reads as on, so set it in the manifest instead.
+ATLAS_CHECKPOINT_SOURCE  serve flags default off by design (unset = Postgres/current source)
+DELIVERY_WORKER_CLAIM_LEASE_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+DELIVERY_WORKER_CLAIM_SOURCE  serve flags default off by design (unset = Postgres/current source)
+GEODB_ACCOUNT_WEIGHTS_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ACCOUNT_WEIGHTS_SHADOW_POLL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ACCOUNT_WEIGHTS_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_CONFIG_REVISION_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_CURSOR_COLLECTION  path or id with a code default that is the intended value
+GEODB_DERIVED_RETRIES  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_DERIVED_SESSION_REFRESH_S  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_EDIT_META  serve flags default off by design (unset = Postgres/current source)
+GEODB_EDIT_META_SHADOW  serve flags default off by design (unset = Postgres/current source)
+GEODB_EDIT_META_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_EDIT_META_SHADOW_MAX_PER_MINUTE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_EDIT_META_SHADOW_SAMPLE_EVERY  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITIES_BEST_ORDER_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITY_COLUMNS_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITY_COLUMNS_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITY_FEED_CONFIG_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ENTITY_RANKING_CONFIG_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_FEEDER_TEST_PG_URL  test-only variable, no workload reads it
+GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_FEED_RUNS_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_FOR_YOU_CONFIG_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_QUERIES_SHADOW_LIST_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_QUERIES_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_QUERIES_SHADOW_VOTER_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_SHADOW_LIST_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_SHADOW_REREAD_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_SHADOW_SAMPLER_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_SHADOW_SAMPLER_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_GOVERNANCE_SHADOW_VOTER_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ID_MAP_TWIN  shadow or mirror switch, off when unset by design
+GEODB_ID_MAP_TWIN_COOLDOWN_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ID_MAP_TWIN_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_ID_MAP_TWIN_TIMEOUT_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_JOB_LEASE_NAMESPACE  path or id with a code default that is the intended value
+GEODB_JOB_LEASE_TTL_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_JOB_LEASE_WAIT_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_KEYED_RECORDS_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_KEYED_RECORDS_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_LEGACY_ID_MAP  shadow or mirror switch, off when unset by design
+GEODB_MEMBERSHIP_COMPARE_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_OUTBOX_MIRROR_BACKLOG_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_POOL_SIZE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_PRIVATE_READERS_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_PROFILE_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_PROFILE_SHADOW_MAX_PER_RESPONSE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKED_READS_SERVE_CACHE_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKED_READS_SERVE_MAX_LAG_BLOCKS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKED_READS_SERVE_TIMEOUT_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKED_READS_SHADOW_SPACES  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKED_READS_SHADOW_STATEMENT_TIMEOUT_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKING_SCORES_SHADOW_DEFAULT_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANKING_SCORES_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANK_TYPED_SHADOW_BURST  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANK_TYPED_SHADOW_PER_SECOND  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RANK_TYPED_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_REPLAY_PAIRS  shadow or mirror switch, off when unset by design
+GEODB_REPO  test-only variable, no workload reads it
+GEODB_SCORES_SERVE  serve flags default off by design (unset = Postgres/current source)
+GEODB_SCORES_SERVE_BUDGET_S  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SCORES_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SCORING_READS_BUDGET_S  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SEARCH_MAX_CONCURRENT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SEARCH_MODE  selector, unset = typeahead, the intended default
+GEODB_SHADOW_BATCH  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SHADOW_EXTRA_GRACE_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SHADOW_INTERVAL_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SHADOW_LEASE_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SHADOW_MISS_GRACE_SECS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SYSTEM_SPACE_MAP_PATH  path or id with a code default that is the intended value
+GEODB_TYPE_COUNTS_SHADOW_TOPICS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_USER_VOTES_TWIN_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_USER_VOTES_TWIN_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_USER_VOTES_TWIN_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_VERSIONS_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_VERSIONS_SHADOW_MAX_PER_MINUTE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_VERSIONS_SHADOW_SAMPLE_EVERY  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+REPLAY_PAIR_SOURCE  selector with a safe default (postgres), set only on the replay pod by hand
+SEARCH_INDEXER_GEODB_SERVE  serve flags default off by design (unset = Postgres/current source)
