@@ -333,7 +333,12 @@ export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerat
 		        trending_position_base::text AS trending_position_base,
 		        trending_position_step::text AS trending_position_step,
 		        trending_position_slots::text AS trending_position_slots,
-		        trending_position_day_factor::text AS trending_position_day_factor
+		        trending_position_day_factor::text AS trending_position_day_factor,
+		        ranking_places_mode::text AS ranking_places_mode,
+		        ranking_place_base::text AS ranking_place_base,
+		        ranking_place_step::text AS ranking_place_step,
+		        ranking_pushdown::text AS ranking_pushdown,
+		        ranking_pushdown_since::text AS ranking_pushdown_since
 		 FROM public.entity_ranking_config WHERE id`,
 		[],
 		60_000,

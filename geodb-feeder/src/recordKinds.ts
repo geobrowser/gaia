@@ -153,7 +153,8 @@ export const RECORD_COLUMNS = {
 	entityRankingConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
 		id: "8aadf80a0b2546aea407d12a065494d1",
-		/** Mutable, one per column of the same name in snake case; decimals except the integers (`*_target`, `*_days` and `trending_position_slots`). */
+		/** Mutable, one per column of the same name in snake case; decimals except the integers (`*_target`, `*_days`,
+		 * `trending_position_slots`, `ranking_places_mode` and `ranking_pushdown_since`). */
 		tauSeconds: "5c83400bff444efca45f68eb07fa9b09",
 		wilsonZ: "93a7b5019cd24ad99e52775c2241ee30",
 		priorPositive: "76bd3657e4a94ea38786d51b4691ae80",
@@ -191,6 +192,15 @@ export const RECORD_COLUMNS = {
 		/** An integer, like the `*_days` columns. */
 		trendingPositionSlots: "8ef101e5e2ff45519677eb8de7208be3",
 		trendingPositionDayFactor: "a68b8359f702468cb0dae2165ce8e417",
+		/**
+		 * Added with 0123 (GEO-3681), minted 2026-11-11: the Best debates ranking places. The mode (0 off, 1 shadow,
+		 * 2 on) and the push-down launch time (epoch seconds) are integers.
+		 */
+		rankingPlacesMode: "f1905a9d3e3745a79f90e2037f90861b",
+		rankingPlaceBase: "9d76ae49d9124cbaa6502a8ac387695e",
+		rankingPlaceStep: "175cfab0e5554449b928efc12b720184",
+		rankingPushdown: "d7fbcef7d34d4c3bbcc1afd31b5a2848",
+		rankingPushdownSince: "541e7823a0774ac9ae6a25c1345d97c4",
 	},
 	forYouConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
