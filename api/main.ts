@@ -35,6 +35,7 @@ import {
 	readConfigRevisionShadowConfig,
 } from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
+import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {
 	createEntityAtVersionShadow,
@@ -48,7 +49,6 @@ import {
 	createEntityFeedConfigShadow,
 	readEntityFeedConfigShadowConfig,
 } from "./src/geodb/entityFeedConfigShadow"
-import {createEditMetaShadow, type EditMetaShadow, readEditMetaShadowConfig} from "./src/geodb/editMetaShadow"
 import {
 	createEntityVersionsShadow,
 	type EntityVersionsShadow,
