@@ -54,6 +54,7 @@ import {
 	type TypeCountsCall,
 	typeCountsFrom,
 } from "./rankedReads/typeCounts"
+import {readCards, readScoreConfig} from "./rankingScoresShadow"
 
 export const SERVE_READS = ["typeCounts", "bestOrder", "entityColumns", "trending", "feeds"] as const
 export type ServeRead = (typeof SERVE_READS)[number]
@@ -353,15 +354,22 @@ export type ScoresPorts = {
 	/** The ranking cards of the entities that exist (id as 32 hex), as the shadows read them. */
 	cards: (ids: string[]) => Promise<Map<string, ScoreCard>>
 	config: () => Promise<ScoreConfig | null>
+	/**
+	 * The ids (32 hex) that have an `entity_ranking_scores` row. `entities_in_best_order` puts an entity without one after every
+	 * scored entity, in the caller's order, which geo-db cannot tell (it serves a default row), so `serveBestOrder` ranks only these.
+	 * Absent: every entity with a card is ranked (the shadow's reading, not exact for an unscored entity).
+	 */
+	scored?: (ids: string[]) => Promise<Set<string>>
 }
 
-async function scoreRows(ports: ScoresPorts, ids: string[]) {
+async function scoreRows(ports: ScoresPorts, ids: string[], only: ReadonlySet<string> | null = null) {
 	const [cards, config] = await Promise.all([ports.cards(ids), ports.config()])
 	if (config === null) throw new Error("entity_ranking_config has no usable row")
 	const withCard = ids.filter((id) => cards.has(id))
+	const asked = only === null ? withCard : withCard.filter((id) => only.has(id))
 	const rows = new Map<string, Awaited<ReturnType<DerivedScoresReader["scores"]>>[number]>()
-	for (let i = 0; i < withCard.length; i += MAX_SCORE_CARDS) {
-		const chunk = withCard.slice(i, i + MAX_SCORE_CARDS)
+	for (let i = 0; i < asked.length; i += MAX_SCORE_CARDS) {
+		const chunk = asked.slice(i, i + MAX_SCORE_CARDS)
 		const served = await ports.reader.scores(
 			config,
 			chunk.map((id) => cards.get(id) as ScoreCard),
@@ -372,15 +380,38 @@ async function scoreRows(ports: ScoresPorts, ids: string[]) {
 			rows.set(id, row)
 		})
 	}
-	return {withCard, rows}
+	return {withCard, asked, rows}
 }
 
 /** `public.entities_in_best_order(ids)`: the ids in page order (dashless lowercase), from the scores geo-db serves. */
 export async function serveBestOrder(ports: ScoresPorts, requested: string[]): Promise<string[]> {
 	const ids = [...new Set(requested.map(hex))]
-	const {withCard, rows} = await scoreRows(ports, ids)
-	const ranking = new Map(withCard.map((id) => [id, (rows.get(id) as {ranking: number}).ranking] as const))
+	const {withCard, asked, rows} = await scoreRows(ports, ids, ports.scored ? await ports.scored(ids) : null)
+	const ranking = new Map(asked.map((id) => [id, (rows.get(id) as {ranking: number}).ranking] as const))
 	return entitiesInBestOrder(requested, new Set(withCard), ranking)
+}
+
+/**
+ * The Postgres side of `ScoresPorts`: cards and config as the shadows read them, and the ids that have an `entity_ranking_scores`
+ * row. These are the small point reads geo-db's scores are held to; the scores themselves come from geo-db.
+ */
+export function createPostgresScoresPorts(db: Database, reader: DerivedScoresReader): ScoresPorts {
+	return {
+		reader,
+		cards: (ids) => readCards(db, ids),
+		config: () => readScoreConfig(db),
+		async scored(ids) {
+			if (ids.length === 0) return new Set()
+			const list = sql.join(
+				ids.map((id) => sql`${id}::uuid`),
+				sql`, `,
+			)
+			const result = (await db.execute(
+				sql`SELECT entity_id::text AS id FROM public.entity_ranking_scores WHERE entity_id IN (${list})`,
+			)) as {rows?: {id: string}[]}
+			return new Set((result.rows ?? []).map((row) => hex(String(row.id))))
+		},
+	}
 }
 
 /** The fourteen `entities_*` score columns of each id; an entity with no entities row has every column NULL. */
