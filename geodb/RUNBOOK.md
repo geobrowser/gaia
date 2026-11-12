@@ -1043,6 +1043,8 @@ geo-db plan 10.22 section 22.
 
 Check: `gaia_api_edit_meta_shadow_total{result}` with `GEODB_EDIT_META_SHADOW=on` on the api once the consumer has caught up.
 
+The versions list's other fields: `GEODB_VERSIONS_SHADOW` compares count, order, author and, with `GEODB_ENTITY_TIMES` on the feeder, the page's two ends' `createdAt` against the entity times (`gaia_api_versions_shadow_mismatch_total{field="newest_time"|"oldest_time"}`, `gaia_api_versions_shadow_times_total{result}`). Nothing is served from geo-db.
+
 Rollback: unset `GEODB_EDIT_META`. The records stay in the Space, unread; nothing reads them yet.
 
 ### 2c-undecies. Keyed space topics (GEODB_SPACE_TOPICS)
