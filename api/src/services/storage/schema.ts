@@ -1515,6 +1515,20 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	trendingPositionSlots: integer("trending_position_slots").notNull(),
 	/** The position term is multiplied by this for each day since the placing agenda's Date (0122). */
 	trendingPositionDayFactor: decimal("trending_position_day_factor").notNull(),
+	/**
+	 * The Best debates ranking switch (0123, GEO-3681): 0 off (the default; scores are exactly 0122's), 1 shadow
+	 * (places, push-downs and the daily report are kept, no score moves), 2 on (ranking places and the push-down
+	 * are served, and agendas stop setting debate places). Applied by the next full pass.
+	 */
+	rankingPlacesMode: integer("ranking_places_mode").notNull(),
+	/** A ranking source's place value is weight × (base + step × (slots − place + 1)) × day_factor^age (0123). */
+	rankingPlaceBase: decimal("ranking_place_base").notNull(),
+	/** The per-place step of the ranking place value (0123). */
+	rankingPlaceStep: decimal("ranking_place_step").notNull(),
+	/** Subtracted from a pushed-down debate's trending score, after the GREATEST, while on (0123). */
+	rankingPushdown: decimal("ranking_pushdown").notNull(),
+	/** Epoch seconds: only Debates members' downvotes cast at or after this count toward a push-down; 0 counts none (0123). */
+	rankingPushdownSince: bigint("ranking_pushdown_since", {mode: "number"}).notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
