@@ -1717,7 +1717,7 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
 `GeoDbDerivedRowsHigh` (rows above 80% of the cap), `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped`
 (notification-indexer, port 9464, already scraped). With the mirror backlog on (gaia#1491) there are two more:
 `GeoDbOutboxMirrorBacklog` (`geodb_outbox_mirror_backlog` above 0 for 10 m) and `GeoDbOutboxMirrorBacklogDropped`
-(`geodb_outbox_mirror_backlog_dropped_total` rose in 15 m).
+(`geodb_outbox_mirror_backlog_dropped_total` or `geodb_outbox_mirror_backlog_expired_total` rose in 15 m).
 
 ## 7. Operating notes
 
@@ -2081,7 +2081,8 @@ writes nothing. It is fire-and-forget: after the Postgres commit the indexer onl
 queue (4096), a background task owns one held `geodb-client work pipe` child, and a failure is logged and
 counted, never raised. Metrics: `geodb_outbox_mirror_{entered,duplicates,errors,dropped,skipped}_total`,
 `geodb_outbox_mirror_queue`. With `GEODB_OUTBOX_MIRROR_BACKLOG=1` (gaia#1491) also
-`geodb_outbox_mirror_backlog` (gauge), `geodb_outbox_mirror_retried_total` and `geodb_outbox_mirror_backlog_dropped_total`.
+`geodb_outbox_mirror_backlog` (gauge), `geodb_outbox_mirror_retried_total`, `geodb_outbox_mirror_backlog_dropped_total`
+and `geodb_outbox_mirror_backlog_expired_total` (gaia#1507).
 A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
 the ones matched at insert; a webhook deleted inside the 30 s cache window is shadowed but has no Postgres
 delivery row.
@@ -2090,8 +2091,9 @@ Backlog (flag `GEODB_OUTBOX_MIRROR_BACKLOG`, off by default): a unit whose enter
 in-memory queue (`GEODB_OUTBOX_MIRROR_BACKLOG_MAX`, default 3000) and retried oldest first, instead of dropped.
 `GeoDbOutboxMirrorBacklog` fires when `geodb_outbox_mirror_backlog` stays above 0 for 10 m: serve is down or
 refusing the key, so fix that and watch the gauge fall to 0. A serve roll (20-40 s) drains by itself. At the bound
-the oldest unit is dropped and counted in `geodb_outbox_mirror_backlog_dropped_total`
-(`GeoDbOutboxMirrorBacklogDropped`); replay the window with `outbox-replay` below. The backlog is in memory, so a
+the oldest unit is dropped and counted in `geodb_outbox_mirror_backlog_dropped_total`; a head unit geo-db keeps
+refusing is dropped after 30 refused attempts or 120 s (`GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS` /
+`_EXPIRE_SECS`) and counted in `geodb_outbox_mirror_backlog_expired_total` (both: `GeoDbOutboxMirrorBacklogDropped`); replay the window with `outbox-replay` below. The backlog is in memory, so a
 notification-indexer restart loses whatever it holds; replay covers that too.
 
 It uses its own key, `geodb-outbox-key`: the binding gives it `work=*` and nothing else

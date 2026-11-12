@@ -8,7 +8,7 @@
 #   GeoDbOutboxMirrorBacklog  geodb_outbox_mirror_backlog above 0 for 10m (needs gaia#1491, flag
 #                             GEODB_OUTBOX_MIRROR_BACKLOG on; the series does not exist before)
 #   GeoDbOutboxMirrorBacklogDropped
-#                             geodb_outbox_mirror_backlog_dropped_total rose in the last 15m
+#                             geodb_outbox_mirror_backlog_dropped_total or _expired_total rose in the last 15m
 #
 #   GeoDbWorkRowsHigh         geodb_work_rows above 80% of geodb_work_rows_max for 15m (serve >= geo-db
 #                             5fbf4ad5ee; printed only while the work class is on)
@@ -114,20 +114,22 @@ spec:
               the backlog falls to 0 (RUNBOOK section 11).
 
         - alert: GeoDbOutboxMirrorBacklogDropped
-          # Same counter shape as the alerts above: the second clause catches a series that first
-          # appeared inside the window.
+          # Overflow drops (backlog_dropped) and refused-head expiry (backlog_expired) both lose a
+          # unit from the shadow. Same counter shape as the alerts above: the second clause catches a
+          # series that first appeared inside the window.
           expr: |
-            sum(increase(geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"}[15m])) > 0
+            sum(increase({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}[15m])) > 0
             or
-            sum(geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"}
-                unless geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"} offset 15m) > 0
+            sum({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}
+                unless {__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"} offset 15m) > 0
           labels:
             severity: warning
             service: notification-indexer
             namespace: gaia
           annotations:
-            summary: The notification-indexer's outbox mirror backlog overflowed and dropped units
+            summary: The notification-indexer's outbox mirror backlog is dropping units
             description: >-
-              The backlog hit its bound during an outage and the oldest units were dropped from the
-              shadow. Postgres delivery is unaffected. Replay the window with outbox-replay once serve
-              is healthy (RUNBOOK section 11).
+              Units were dropped from the backlog: it hit its bound during an outage (backlog_dropped), or
+              a unit geo-db kept refusing was expired from the head (backlog_expired; needs gaia#1507).
+              Postgres delivery is unaffected. Check which counter rose, then replay the window with
+              outbox-replay once serve is healthy (RUNBOOK section 11).
