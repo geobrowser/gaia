@@ -75,7 +75,14 @@ async fn main() -> Result<(), IndexerError> {
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
     let stale_blocks = storage.find_stale_ranking_type_blocks().await?;
     let rank_candidates = storage.find_unregistered_ranks().await?;
-    let pending_configs = storage.find_pending_block_configs().await?;
+    let mut pending_configs = storage.find_pending_block_configs().await?;
+    // Blocks a delete queued whose recompute never ran or failed (GEO-3591);
+    // recomputed in the same pass as changed configs.
+    for block_id in storage.pending_recompute_blocks().await? {
+        if !pending_configs.contains(&block_id) {
+            pending_configs.push(block_id);
+        }
+    }
     info!(
         blocks = block_candidates.len(),
         stale_blocks = stale_blocks.len(),
@@ -107,7 +114,7 @@ async fn main() -> Result<(), IndexerError> {
             info!(rank_id = %id, "would recover rank");
         }
         for id in &pending_configs {
-            info!(block_id = %id, "would recompute (block config changed)");
+            info!(block_id = %id, "would recompute (block config changed or a delete queued)");
         }
         for id in &all_blocks {
             info!(block_id = %id, "would recompute (--recompute-all)");
@@ -269,8 +276,9 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
-    // Blocks whose scoring config was added or changed (GEO-3676). A block
-    // recomputed above already applied its current config.
+    // Blocks whose scoring config was added or changed (GEO-3676), and blocks
+    // with a queued delete (GEO-3591). A block recomputed above already applied
+    // its current config and cleared its queue.
     let mut applied_configs = 0;
     for block_id in pending_configs {
         if !handled_blocks.insert(block_id) {
@@ -280,7 +288,7 @@ async fn main() -> Result<(), IndexerError> {
             error!(block_id = %block_id, error = %e, "recompute failed for a changed block config");
             failed += 1;
         } else {
-            info!(block_id = %block_id, "recomputed block for its changed config");
+            info!(block_id = %block_id, "recomputed block for its changed config or a queued delete");
             applied_configs += 1;
         }
     }

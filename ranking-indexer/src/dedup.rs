@@ -43,6 +43,7 @@ mod tests {
             submitted_at: Some(Utc::now()),
             updated_at_block: blk,
             update_index: idx,
+            block_relation_id: None,
         }
     }
 

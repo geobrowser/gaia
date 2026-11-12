@@ -98,7 +98,11 @@ pub async fn recompute_block(
     // One recompute of a block at a time (the consumer and the hourly
     // backfill can both reach it). Released when `lock` commits below, or is
     // dropped on any early return or error.
-    let lock = storage.lock_block_for_recompute(block_id).await?;
+    let mut lock = storage.lock_block_for_recompute(block_id).await?;
+    // Deletes queued for this block before we read its inputs (GEO-3591).
+    // Cleared below with the commit; a delete queued after this point stays
+    // queued for the next recompute.
+    let pending = storage.pending_recompute_mark(&mut lock, block_id).await?;
 
     let block = match storage.get_ranking_block(block_id).await? {
         Some(block) => block,
@@ -114,7 +118,16 @@ pub async fn recompute_block(
                     storage.upsert_ranking_block(&block).await?;
                     block
                 }
-                None => return Ok(()),
+                None => {
+                    // Nothing to score, so nothing left to do for a queued delete.
+                    if let Some(mark) = pending {
+                        storage
+                            .clear_pending_recompute(&mut lock, block_id, mark)
+                            .await?;
+                    }
+                    lock.commit().await?;
+                    return Ok(());
+                }
             }
         }
     };
@@ -174,6 +187,11 @@ pub async fn recompute_block(
     // until the public graph shows it.
     storage.mark_block_scoring_applied(block_id, config).await?;
 
+    if let Some(mark) = pending {
+        storage
+            .clear_pending_recompute(&mut lock, block_id, mark)
+            .await?;
+    }
     lock.commit().await?;
 
     tracing::debug!(
@@ -200,31 +218,28 @@ pub async fn apply_detected_edit(
 
     // Deletes first (GEO-3591), so a create of the same id later in the edit
     // wins, and `ranks.update`'s delete-every-old-vote + create-every-new-vote
-    // ends with exactly the new ballot whatever order its ops came in. Each
-    // returns the blocks it can have changed; a rank unlinked or deleted here
-    // is no longer found from its id, so its old block is collected now.
-    let mut deleted_from: HashSet<Uuid> = HashSet::new();
+    // ends with exactly the new ballot whatever order its ops came in. Each is
+    // scoped to the edit's space, as the kg-indexer scopes its deletes: a
+    // delete from any other space changes nothing.
+    //
+    // Each delete queues the blocks it changed in `ranks.pending_recomputes`
+    // in the same statement, and those are what get recomputed below, not
+    // what the delete returned. A retry of this edit after a failed recompute
+    // deletes nothing the second time, but the queue still holds the blocks.
+    let has_deletes =
+        !detected.deleted_entities.is_empty() || !detected.deleted_relations.is_empty();
     if !detected.deleted_entities.is_empty() {
-        deleted_from.extend(
-            storage
-                .delete_rankings(&detected.deleted_entities, space_id)
-                .await?,
-        );
+        storage
+            .delete_rankings(&detected.deleted_entities, space_id)
+            .await?;
     }
     if !detected.deleted_relations.is_empty() {
-        deleted_from.extend(
-            storage
-                .unlink_rankings_by_relation(&detected.deleted_relations)
-                .await?,
-        );
-        for ranking_id in storage
-            .delete_ranking_items_by_relation(&detected.deleted_relations)
-            .await?
-        {
-            if let Some(block_id) = storage.block_id_for_ranking(ranking_id).await? {
-                deleted_from.insert(block_id);
-            }
-        }
+        storage
+            .unlink_rankings_by_relation(&detected.deleted_relations, space_id)
+            .await?;
+        storage
+            .delete_ranking_items_by_relation(&detected.deleted_relations, space_id)
+            .await?;
     }
 
     for block in &detected.blocks {
@@ -243,7 +258,9 @@ pub async fn apply_detected_edit(
             .push(item.clone());
     }
     for (ranking_id, items) in &items_by_ranking {
-        storage.replace_ranking_items(*ranking_id, items).await?;
+        storage
+            .replace_ranking_items(*ranking_id, items, space_id)
+            .await?;
     }
 
     for link in &detected.block_links {
@@ -256,7 +273,10 @@ pub async fn apply_detected_edit(
 
     let now = Utc::now();
     let mut blocks = affected_blocks(detected, storage).await?;
-    blocks.extend(deleted_from);
+    if has_deletes {
+        // This edit's queued blocks, and any an earlier failed run left.
+        blocks.extend(storage.pending_recompute_blocks().await?);
+    }
     for block_id in blocks {
         recompute_block(block_id, detected.meta, now, storage).await?;
     }
@@ -278,6 +298,7 @@ mod tests {
             submitted_at: None,
             updated_at_block: 0,
             update_index: 0,
+            block_relation_id: None,
         }
     }
 

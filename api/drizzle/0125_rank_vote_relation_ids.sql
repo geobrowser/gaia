@@ -9,14 +9,24 @@
 -- the row, so whichever indexer runs first decides whether the lookup finds anything.
 --
 -- 1. ranks.ranking_items.relation_id: the RANK_VOTES relation the item came from. A DeleteRelation of that
---    id deletes the item.
+--    id, authored in the Rank's own space, deletes the item.
 -- 2. ranks.rankings.block_relation_id: the RANK_BLOCK relation that links the Rank to its block. A
---    DeleteRelation of that id unlinks the Rank (block_id NULL), so it stops counting in that block.
+--    DeleteRelation of that id from the Rank's space unlinks the Rank (block_id NULL).
+-- 3. ranks.pending_recomputes: blocks a delete changed that have not been recomputed yet. The delete and
+--    this row commit together; the recompute that rescored the block clears the row. A delete edit retried
+--    after a failed recompute matches nothing the second time, so without this row the retry would not
+--    know which block to rescore.
+-- 4. ranks.deleted_rankings: Rank entities deleted by an edit (DeleteEntity, in the Rank's space). The
+--    kg-indexer does not apply DeleteEntity, so the Rank's TYPES relation stays in public.relations and the
+--    hourly backfill would otherwise register the deleted Rank again. Cleared when an edit creates the Rank
+--    again.
 --
--- Both are nullable. Rows written before this migration are filled below from public.relations, and the
--- hourly backfill_blocks run repeats the same fill, which catches rows an old indexer pod writes during the
--- rollout. An item whose vote relation is already gone from the graph stays NULL: nothing can delete it
--- by id, and the next full re-submission of that ballot replaces it as before.
+-- NO FILL HERE. Existing rows get their relation ids from public.relations when the new ranking-indexer
+-- starts (Storage::fill_missing_relation_ids, before it consumes anything) and on every hourly
+-- backfill_blocks run. Doing it here would hold this migration's ACCESS EXCLUSIVE locks on both tables
+-- through two joins against public.relations, because drizzle applies every pending migration in one
+-- transaction. ROLLOUT: stop the old ranking-indexer pods before this runs and start the new image after
+-- (see the PR, GEO-3591).
 
 ALTER TABLE "ranks"."ranking_items" ADD COLUMN IF NOT EXISTS "relation_id" uuid;
 --> statement-breakpoint
@@ -28,22 +38,17 @@ CREATE INDEX IF NOT EXISTS "ranking_items_relation_id_idx" ON "ranks"."ranking_i
 CREATE INDEX IF NOT EXISTS "rankings_block_relation_id_idx" ON "ranks"."rankings" ("block_relation_id")
 	WHERE "block_relation_id" IS NOT NULL;
 --> statement-breakpoint
--- RANK_VOTES = 19a4cfff-45f2-4150-abf2-af0f43eb2eec (sdk/src/core/ids.rs). Same statement as
--- Storage::fill_missing_relation_ids.
-UPDATE "ranks"."ranking_items" i SET "relation_id" = r."id"
-FROM "relations" r
-WHERE i."relation_id" IS NULL
-	AND r."type_id" = '19a4cfff-45f2-4150-abf2-af0f43eb2eec'
-	AND r."from_entity_id" = i."ranking_id"
-	AND r."to_entity_id" = i."entity_id"
-	AND r."to_space_id" = i."space_id";
+CREATE TABLE IF NOT EXISTS "ranks"."pending_recomputes" (
+	"seq" bigserial PRIMARY KEY NOT NULL,
+	"block_id" uuid NOT NULL,
+	"queued_at" timestamp with time zone DEFAULT now() NOT NULL
+);
 --> statement-breakpoint
--- RANK_BLOCK = 09c219c1-03d1-4d2a-a5c7-8edbf2d0182a.
-UPDATE "ranks"."rankings" k SET "block_relation_id" = r."id"
-FROM "relations" r
-WHERE k."block_relation_id" IS NULL
-	AND k."block_id" IS NOT NULL
-	AND r."type_id" = '09c219c1-03d1-4d2a-a5c7-8edbf2d0182a'
-	AND r."from_entity_id" = k."id"
-	AND r."to_entity_id" = k."block_id"
-	AND r."space_id" = k."space_id";
+CREATE INDEX IF NOT EXISTS "pending_recomputes_block_id_idx" ON "ranks"."pending_recomputes" ("block_id");
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "ranks"."deleted_rankings" (
+	"id" uuid NOT NULL,
+	"space_id" uuid NOT NULL,
+	"deleted_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "deleted_rankings_id_space_id_pk" PRIMARY KEY ("id", "space_id")
+);

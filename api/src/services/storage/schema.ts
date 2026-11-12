@@ -1,6 +1,7 @@
 import {relations as drizzleRelations, type InferSelectModel, sql} from "drizzle-orm"
 import {
 	bigint,
+	bigserial,
 	boolean,
 	customType,
 	decimal,
@@ -1369,10 +1370,33 @@ export const rankingItems = ranks.table(
 	},
 	(table) => [
 		primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]}),
-		index("ranking_items_relation_id_idx")
-			.on(table.relationId)
-			.where(sql`${table.relationId} IS NOT NULL`),
+		index("ranking_items_relation_id_idx").on(table.relationId).where(sql`${table.relationId} IS NOT NULL`),
 	],
+)
+
+/**
+ * Blocks a deleted rank vote, link or Rank changed that no recompute has cleared yet (GEO-3591, 0125).
+ * Written with the delete, cleared by the recompute; a retried edit or the hourly backfill finds the rest.
+ */
+export const rankingPendingRecomputes = ranks.table(
+	"pending_recomputes",
+	{
+		seq: bigserial({mode: "number"}).primaryKey(),
+		blockId: uuid("block_id").notNull(),
+		queuedAt: timestamp("queued_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [index("pending_recomputes_block_id_idx").on(table.blockId)],
+)
+
+/** Rank entities an edit deleted, so the backfill does not register them again (GEO-3591, 0125). */
+export const deletedRankings = ranks.table(
+	"deleted_rankings",
+	{
+		id: uuid().notNull(),
+		spaceId: uuid("space_id").notNull(),
+		deletedAt: timestamp("deleted_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [primaryKey({columns: [table.id, table.spaceId]})],
 )
 
 /**

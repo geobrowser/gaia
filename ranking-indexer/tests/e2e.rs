@@ -2757,3 +2757,521 @@ async fn sdk_shaped_update_rank_clears_and_reranks() {
     apply(0, update_rank(RANKS[0], &[], &[(vote(0, 0x20), B)]), 22).await;
     assert_eq!(state().await, (vec![(u(A), 1), (u(B), 1), (u(C), 1)], 2));
 }
+
+/// A DAO block in `space` with `members`, clean of any earlier run of the
+/// same ids. `mode` is a `ranking_block_config` scoring mode, or `None` for
+/// the default (sum). GEO-3591 review tests.
+async fn fresh_dao_block(
+    storage: &Storage,
+    space: u128,
+    members: &[u128],
+    block: u128,
+    ranks: &[u128],
+    mode: Option<&str>,
+) {
+    let pool = storage.pool();
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(space)).execute(pool).await.unwrap();
+    }
+    let member_ids: Vec<Uuid> = members.iter().map(|m| u(*m)).collect();
+    sqlx::query("DELETE FROM relations WHERE space_id = ANY($1)")
+        .bind(&member_ids[..])
+        .execute(pool)
+        .await
+        .unwrap();
+    let rank_ids: Vec<Uuid> = ranks.iter().map(|r| u(*r)).collect();
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
+        "DELETE FROM ranks.rankings WHERE id = ANY($1)",
+        "DELETE FROM ranks.deleted_rankings WHERE id = ANY($1)",
+    ] {
+        sqlx::query(sql)
+            .bind(&rank_ids[..])
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_scores WHERE block_id = $1",
+        "DELETE FROM ranks.ranking_blocks WHERE id = $1",
+        "DELETE FROM ranks.ranking_block_config WHERE block_id = $1",
+        "DELETE FROM ranks.pending_recomputes WHERE block_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(block)).execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3591r')")
+        .bind(u(space))
+        .execute(pool)
+        .await
+        .unwrap();
+    for m in members {
+        sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+            .bind(u(*m))
+            .bind(u(space))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    if let Some(mode) = mode {
+        sqlx::query(
+            "INSERT INTO ranks.ranking_block_config (block_id, max_rows, scoring_mode) \
+             VALUES ($1, 2000, $2)",
+        )
+        .bind(u(block))
+        .bind(mode)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let edit = EditBuilder::new(gid(block ^ 0xB10C))
+        .create_relation(|r| {
+            r.id(gid(block ^ 0x7E))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(block))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_entity(gid(block), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "GEO-3591 review (e2e)", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&edit, u(space), 1, 0), u(space), storage)
+        .await
+        .unwrap();
+}
+
+/// A full ballot edit as the web publishes one: the Rank entity, its TYPES
+/// and RANK_BLOCK relations (ids `rel + 0xA0`, `rel + 0xB0`) and one vote per
+/// entity (ids `rel + i`).
+fn ballot_edit(
+    rank: u128,
+    block: u128,
+    rel: u128,
+    space: u128,
+    entities: &[u128],
+) -> grc_20::Edit<'static> {
+    let mut edit = EditBuilder::new(gid(rel ^ 0xED17))
+        .create_relation(|b| {
+            b.id(gid(rel + 0xA0))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(rank))
+                .to(sid(RANK_TYPE_ID))
+        })
+        .create_entity(gid(rank), |e| {
+            e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+        })
+        .create_relation(|b| {
+            b.id(gid(rel + 0xB0))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(rank))
+                .to(gid(block))
+        });
+    const POSITIONS: [&str; 4] = ["a0", "a1", "a2", "a3"];
+    for (i, entity) in entities.iter().enumerate() {
+        let position = POSITIONS[i];
+        edit = edit.create_relation(|b| {
+            b.id(gid(rel + i as u128))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(rank))
+                .to(gid(*entity))
+                .to_space(gid(space))
+                .position(position)
+        });
+    }
+    edit.build()
+}
+
+async fn apply_in(storage: &Storage, space: u128, edit: &grc_20::Edit<'static>, block_number: i64) {
+    apply_detected_edit(&detect(edit, u(space), block_number, 0), u(space), storage)
+        .await
+        .unwrap();
+}
+
+/// `(entity, ballots)` of a block's scores, by entity id.
+async fn score_rows(storage: &Storage, block: u128) -> Vec<(Uuid, i32)> {
+    sqlx::query_as(
+        "SELECT entity_id, ballots FROM ranks.ranking_scores WHERE block_id = $1 ORDER BY entity_id",
+    )
+    .bind(u(block))
+    .fetch_all(storage.pool())
+    .await
+    .unwrap()
+}
+
+/// GEO-3591 review: deletes and vote creates are scoped to the Rank's own
+/// space, as the kg-indexer scopes them. An edit in another space that
+/// deletes a ranker's votes, link or Rank, or creates votes on their Rank,
+/// changes nothing. Also: the relation-id fill takes only a relation in the
+/// Rank's space, and the lowest id when several match.
+#[tokio::test]
+async fn rank_edits_from_another_space_change_nothing() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_3593_0001;
+    const VICTIM: u128 = 0xE2E5_3593_0011;
+    const OTHER: u128 = 0xE2E5_3593_0012;
+    const BLOCK: u128 = 0xE2E5_3593_0021;
+    const RANK: u128 = 0xE2E5_3593_0041;
+    const A: u128 = 0xE2E5_3593_0031;
+    const B: u128 = 0xE2E5_3593_0032;
+    const REL: u128 = 0x3593_1000;
+    fresh_dao_block(&storage, SPACE, &[VICTIM, OTHER], BLOCK, &[RANK], None).await;
+    apply_in(
+        &storage,
+        VICTIM,
+        &ballot_edit(RANK, BLOCK, REL, SPACE, &[A, B]),
+        10,
+    )
+    .await;
+    let before = score_rows(&storage, BLOCK).await;
+    assert_eq!(before.len(), 2);
+
+    // From OTHER's space: delete both votes, the link and the Rank, and
+    // create a vote on the Rank.
+    let attack = EditBuilder::new(gid(0x3593_0A77))
+        .delete_relation(gid(REL))
+        .delete_relation(gid(REL + 1))
+        .delete_relation(gid(REL + 0xB0))
+        .delete_entity(gid(RANK))
+        .create_relation(|b| {
+            b.id(gid(REL + 0x50))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(B))
+                .to_space(gid(SPACE))
+                .position("a0")
+        })
+        .build();
+    apply_in(&storage, OTHER, &attack, 20).await;
+
+    let items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT entity_id, relation_id FROM ranks.ranking_items WHERE ranking_id = $1 \
+         ORDER BY entity_id",
+    )
+    .bind(u(RANK))
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        items,
+        vec![(u(A), Some(u(REL))), (u(B), Some(u(REL + 1)))],
+        "the victim's ballot is untouched"
+    );
+    assert_eq!(
+        storage.block_id_for_ranking(u(RANK)).await.unwrap(),
+        Some(u(BLOCK)),
+        "still linked"
+    );
+    let tombstoned: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ranks.deleted_rankings WHERE id = $1")
+            .bind(u(RANK))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(tombstoned, 0);
+    assert_eq!(score_rows(&storage, BLOCK).await, before);
+
+    // The fill: A's item loses its relation id. The graph holds a matching
+    // relation authored in OTHER's space (lower id) and two in the victim's
+    // space; the lower of the victim's two is taken.
+    sqlx::query("UPDATE ranks.ranking_items SET relation_id = NULL WHERE ranking_id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    let votes_type = Uuid::parse_str(RANK_VOTES_RELATION_TYPE_ID).unwrap();
+    for (rel, space) in [
+        (REL + 0x60, OTHER),
+        (REL + 0x72, VICTIM),
+        (REL + 0x71, VICTIM),
+    ] {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, \
+             to_space_id, space_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(votes_type)
+        .bind(u(RANK))
+        .bind(u(A))
+        .bind(u(SPACE))
+        .bind(u(space))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    storage.fill_missing_relation_ids().await.unwrap();
+    let a_rel: Option<Uuid> = sqlx::query_scalar(
+        "SELECT relation_id FROM ranks.ranking_items WHERE ranking_id = $1 AND entity_id = $2",
+    )
+    .bind(u(RANK))
+    .bind(u(A))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(a_rel, Some(u(REL + 0x71)));
+}
+
+/// GEO-3591 review, on a default (sum) block:
+/// - a cleared ranking supersedes the same ranker's older Rank (empty ballots
+///   are dropped after dedup, as 0124's `ranking_member_ballots` does);
+/// - deleting the cleared Rank entity lets the older one count again, and the
+///   delete sticks: the backfill does not register the Rank again although
+///   its TYPES relation is still in the graph;
+/// - a Rank recovered from the graph carries its RANK_BLOCK relation id.
+#[tokio::test]
+async fn deleted_rank_stays_deleted_and_a_cleared_rank_supersedes_an_older_one() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_3594_0001;
+    const M1: u128 = 0xE2E5_3594_0011;
+    const M2: u128 = 0xE2E5_3594_0012;
+    const BLOCK: u128 = 0xE2E5_3594_0021;
+    const OLD: u128 = 0xE2E5_3594_0041;
+    const NEW: u128 = 0xE2E5_3594_0042;
+    const OTHER_RANK: u128 = 0xE2E5_3594_0043;
+    const LOST: u128 = 0xE2E5_3594_0044;
+    const A: u128 = 0xE2E5_3594_0031;
+    const B: u128 = 0xE2E5_3594_0032;
+    const C: u128 = 0xE2E5_3594_0033;
+    fresh_dao_block(
+        &storage,
+        SPACE,
+        &[M1, M2],
+        BLOCK,
+        &[OLD, NEW, OTHER_RANK, LOST],
+        None,
+    )
+    .await;
+
+    // M1 ranks [A] in OLD, then [B] in NEW; M2 ranks [C].
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(OLD, BLOCK, 0x3594_1000, SPACE, &[A]),
+        10,
+    )
+    .await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(NEW, BLOCK, 0x3594_2000, SPACE, &[B]),
+        11,
+    )
+    .await;
+    apply_in(
+        &storage,
+        M2,
+        &ballot_edit(OTHER_RANK, BLOCK, 0x3594_3000, SPACE, &[C]),
+        12,
+    )
+    .await;
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(B), 1), (u(C), 1)],
+        "NEW supersedes OLD"
+    );
+
+    // M1 clears NEW. It is still M1's latest Rank, so OLD does not come back.
+    let clear = EditBuilder::new(gid(0x3594_0C1E))
+        .delete_relation(gid(0x3594_2000))
+        .build();
+    apply_in(&storage, M1, &clear, 20).await;
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(C), 1)],
+        "a cleared ranking still supersedes the same ranker's older one"
+    );
+
+    // M1 deletes the NEW Rank entity: it is gone, and OLD counts again.
+    let delete_rank = EditBuilder::new(gid(0x3594_0DE1))
+        .delete_entity(gid(NEW))
+        .build();
+    apply_in(&storage, M1, &delete_rank, 21).await;
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM ranks.rankings WHERE id = $1")
+        .bind(u(NEW))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(A), 1), (u(C), 1)]
+    );
+
+    // The kg-indexer keeps NEW's TYPES and RANK_BLOCK relations (it does not
+    // apply DeleteEntity). The backfill must not register NEW again.
+    let pid = |s: &str| Uuid::parse_str(s).unwrap();
+    for (rel, ty, to) in [
+        (
+            0x3594_20A0u128,
+            pid(TYPE_RELATION_TYPE_ID),
+            pid(RANK_TYPE_ID),
+        ),
+        (0x3594_20B0, pid(RANK_BLOCK_RELATION_TYPE_ID), u(BLOCK)),
+    ] {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(ty)
+        .bind(u(NEW))
+        .bind(to)
+        .bind(u(M1))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    assert!(!storage
+        .find_unregistered_ranks()
+        .await
+        .unwrap()
+        .contains(&u(NEW)));
+
+    // A Rank that was never registered (LOST) is recovered with its link's
+    // relation id, so a later delete of the link unlinks it.
+    for (rel, ty, to) in [
+        (
+            0x3594_40A0u128,
+            pid(TYPE_RELATION_TYPE_ID),
+            pid(RANK_TYPE_ID),
+        ),
+        (0x3594_40B0, pid(RANK_BLOCK_RELATION_TYPE_ID), u(BLOCK)),
+    ] {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(ty)
+        .bind(u(LOST))
+        .bind(to)
+        .bind(u(M2))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    assert!(storage
+        .find_unregistered_ranks()
+        .await
+        .unwrap()
+        .contains(&u(LOST)));
+    let recovered = storage
+        .get_rank_config_from_kg(u(LOST))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.block_relation_id, Some(u(0x3594_40B0)));
+    storage.upsert_ranking(&recovered).await.unwrap();
+    let unlink = EditBuilder::new(gid(0x3594_0D11))
+        .delete_relation(gid(0x3594_40B0))
+        .build();
+    apply_in(&storage, M2, &unlink, 22).await;
+    assert_eq!(storage.block_id_for_ranking(u(LOST)).await.unwrap(), None);
+
+    // Creating NEW again undoes its delete.
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(NEW, BLOCK, 0x3594_5000, SPACE, &[B]),
+        30,
+    )
+    .await;
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(B), 1), (u(C), 1)]
+    );
+    let tombstoned: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ranks.deleted_rankings WHERE id = $1")
+            .bind(u(NEW))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(tombstoned, 0);
+}
+
+/// GEO-3591 review: a deletes-only edit whose recompute fails (here: the
+/// block's lock is held, and the attempt is abandoned) is rescored when the
+/// same edit is redelivered, although the retry's deletes match nothing.
+#[tokio::test]
+async fn a_retried_clear_still_rescores_the_block() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    const SPACE: u128 = 0xE2E5_3595_0001;
+    const M1: u128 = 0xE2E5_3595_0011;
+    const M2: u128 = 0xE2E5_3595_0012;
+    const BLOCK: u128 = 0xE2E5_3595_0021;
+    const R1: u128 = 0xE2E5_3595_0041;
+    const R2: u128 = 0xE2E5_3595_0042;
+    const A: u128 = 0xE2E5_3595_0031;
+    const B: u128 = 0xE2E5_3595_0032;
+    fresh_dao_block(&storage, SPACE, &[M1, M2], BLOCK, &[R1, R2], None).await;
+    apply_in(
+        &storage,
+        M1,
+        &ballot_edit(R1, BLOCK, 0x3595_1000, SPACE, &[A, B]),
+        10,
+    )
+    .await;
+    apply_in(
+        &storage,
+        M2,
+        &ballot_edit(R2, BLOCK, 0x3595_2000, SPACE, &[B]),
+        11,
+    )
+    .await;
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(A), 1), (u(B), 2)]
+    );
+
+    let clear = EditBuilder::new(gid(0x3595_0C1E))
+        .delete_relation(gid(0x3595_1000))
+        .delete_entity(gid(0x3595_1E00))
+        .delete_relation(gid(0x3595_1001))
+        .delete_entity(gid(0x3595_1E01))
+        .build();
+    let detected = detect(&clear, u(M1), 20, 0);
+
+    // First delivery: the deletes commit, the recompute cannot get the lock.
+    let held = storage.lock_block_for_recompute(u(BLOCK)).await.unwrap();
+    let first = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        apply_detected_edit(&detected, u(M1), &storage),
+    )
+    .await;
+    assert!(first.is_err(), "the first recompute was blocked");
+    held.commit().await.unwrap();
+    assert_eq!(
+        score_rows(&storage, BLOCK).await,
+        vec![(u(A), 1), (u(B), 2)],
+        "not rescored yet"
+    );
+
+    // Redelivery: the deletes find nothing, the queued block is rescored.
+    apply_detected_edit(&detected, u(M1), &storage)
+        .await
+        .unwrap();
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(B), 1)]);
+    let queued: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ranks.pending_recomputes WHERE block_id = $1")
+            .bind(u(BLOCK))
+            .fetch_one(storage.pool())
+            .await
+            .unwrap();
+    assert_eq!(queued, 0, "the recompute cleared the queue");
+}

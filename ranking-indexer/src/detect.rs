@@ -278,6 +278,7 @@ pub fn detect(
                         submitted_at,
                         updated_at_block: block_number,
                         update_index: op_index as i64,
+                        block_relation_id: None,
                     });
                 } else if is_block {
                     // Block config (Name/Filter/Start/End as properties; the

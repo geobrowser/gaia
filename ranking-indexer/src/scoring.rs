@@ -455,6 +455,7 @@ mod tests {
             submitted_at: None,
             updated_at_block: 0,
             update_index: 0,
+            block_relation_id: None,
         }
     }
 

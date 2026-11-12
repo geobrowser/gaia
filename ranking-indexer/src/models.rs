@@ -48,6 +48,11 @@ pub struct Ranking {
     /// Update markers for dedup: most-recently-updated rank per (block, space) wins.
     pub updated_at_block: i64,
     pub update_index: i64,
+    /// The `RANK_BLOCK` relation behind `block_id`, when known at upsert time
+    /// (a rank recovered from the graph). The live path sets it with
+    /// `set_ranking_block` instead. Not read back by recompute.
+    #[sqlx(default)]
+    pub block_relation_id: Option<Uuid>,
 }
 
 /// A `ranks.ranking_items` row — keyed on (ranking, entity, space).
