@@ -180,7 +180,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:28d9d7501f
+          image: registry.digitalocean.com/geo/geodb:67b6974a5e
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -370,7 +370,7 @@ spec:
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
         # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:28d9d7501f
+          image: registry.digitalocean.com/geo/geodb:67b6974a5e
           imagePullPolicy: IfNotPresent
           command:
             - sh
