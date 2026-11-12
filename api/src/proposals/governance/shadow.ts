@@ -21,6 +21,16 @@
  * never looks at its actions.
  */
 import {type GeoDbCardClient, GeoDbError} from "../../geodb/client"
+import {
+	activateServeGate,
+	type Comparison,
+	createMatchLedger,
+	failureReason,
+	recordServed,
+	recordServeFallback,
+	type ServeGateConfig,
+	withServeTimeout,
+} from "../../geodb/serveGate"
 import {computeProposalStatus, getCurrentTimeSeconds} from "../status"
 import type {ProposalListItem, ProposalWithVotes, StatusComputationResult} from "../types"
 import {resolveEscalations} from "./escalation"
@@ -97,6 +107,35 @@ export type GovernanceLogger = {warn: (message: string, data?: Record<string, un
 export type GovernanceShadow = {
 	detail(proposal: ProposalWithVotes, nowSeconds: bigint): void
 	list(proposals: readonly ProposalListItem[], nowSeconds: bigint): void
+	/**
+	 * GEODB_GOVERNANCE_SERVE: the status geo-db computes for each proposal whose last comparison on this surface matched,
+	 * keyed by proposal id. A proposal absent from the map is answered by Postgres (counted `gaia_api_geodb_serve_fallback_total`).
+	 * Never rejects.
+	 */
+	serveStatuses(
+		surface: Surface,
+		proposals: readonly (ProposalWithVotes | ProposalListItem)[],
+		nowSeconds: bigint,
+	): Promise<Map<string, StatusComputationResult>>
+}
+
+/** The serve read's name in `gaia_api_geodb_serve_*{read}`. */
+export const GOVERNANCE_SERVE_READ = "proposal_status"
+
+/**
+ * What the router holds when GEODB_GOVERNANCE_SERVE is on but GEODB_GOVERNANCE_SHADOW is not: no comparison exists, so
+ * every proposal goes to Postgres, counted `shadow_off`.
+ */
+export function createGovernanceServeWithoutShadow(): GovernanceShadow {
+	activateServeGate("governance", [GOVERNANCE_SERVE_READ])
+	return {
+		detail: () => {},
+		list: () => {},
+		serveStatuses: async (_surface, proposals) => {
+			for (const _p of proposals) recordServeFallback("governance", GOVERNANCE_SERVE_READ, "shadow_off")
+			return new Map()
+		},
+	}
 }
 
 const OPTION: Record<string, 1 | 2 | 3> = {YES: 1, NO: 2, ABSTAIN: 3}
@@ -110,8 +149,16 @@ export function createGovernanceShadow(deps: {
 	/** Postgres's current row for the re-read of a mismatch. Absent or null: the re-read reuses the proposal as served. */
 	reloadProposal?: (proposalId: string) => Promise<ProposalWithVotes | null>
 	sleep?: (ms: number) => Promise<void>
+	/** GEODB_GOVERNANCE_SERVE; absent or disabled: nothing is served and no serve series exist. */
+	serve?: ServeGateConfig
+	now?: () => number
 }): GovernanceShadow {
 	const {config, geoDb, systemSpaceOf, log} = deps
+	const serve = deps.serve?.enabled ? deps.serve : null
+	if (serve) activateServeGate("governance", [GOVERNANCE_SERVE_READ])
+	const ledger = createMatchLedger({ttlMs: serve?.matchTtlMs ?? 0, ...(deps.now ? {now: deps.now} : {})})
+	const ledgerKey = (surface: Surface, p: ProposalWithVotes | ProposalListItem) =>
+		`${surface}:${p.id}:${p.proposalVersion}`
 	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
 	activateGovernanceMetrics()
 	let inFlight = 0
@@ -207,10 +254,14 @@ export function createGovernanceShadow(deps: {
 	async function compare(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
 		recordGovernanceUncompared(surface, "total_editors_from_postgres")
 		if (surface === "list") recordGovernanceUncompared(surface, "votes_from_postgres")
+		const remember = (outcome: Comparison) => {
+			if (serve) ledger.record(ledgerKey(surface, p), outcome)
+		}
 		try {
 			let d = await differences(surface, p, nowSeconds)
 			if (d.fields.length === 0) {
 				recordGovernanceShadow(surface, "match")
+				remember("match")
 				return
 			}
 			if (config.rereadMs > 0) {
@@ -220,11 +271,13 @@ export function createGovernanceShadow(deps: {
 				const again = await differences(surface, fresh, getCurrentTimeSeconds())
 				if (again.fields.length === 0) {
 					recordGovernanceShadow(surface, "mismatch_healed")
+					remember("match")
 					return
 				}
 				d = again
 			}
 			recordGovernanceShadow(surface, "mismatch")
+			remember("mismatch")
 			if (logged < MAX_LOGGED_MISMATCHES) {
 				logged++
 				log.warn("governance shadow mismatch", {
@@ -240,11 +293,14 @@ export function createGovernanceShadow(deps: {
 			if (error instanceof Unsupported) {
 				recordGovernanceShadow(surface, "unsupported")
 				recordGovernanceUnsupported(surface, error.reason)
+				remember("unsupported")
 			} else if (error instanceof AmbiguousRecordError) {
 				recordGovernanceShadow(surface, "unsupported")
 				recordGovernanceUnsupported(surface, "ambiguous_record")
+				remember("unsupported")
 			} else {
 				recordGovernanceShadow(surface, "failed")
+				remember("unsupported")
 				if (!(error instanceof GeoDbError)) log.warn("governance shadow failed", {error: String(error)})
 			}
 		}
@@ -268,8 +324,37 @@ export function createGovernanceShadow(deps: {
 		}
 	}
 
+	async function serveStatuses(
+		surface: Surface,
+		proposals: readonly (ProposalWithVotes | ProposalListItem)[],
+		nowSeconds: bigint,
+	): Promise<Map<string, StatusComputationResult>> {
+		const out = new Map<string, StatusComputationResult>()
+		if (!serve) return out
+		await Promise.all(
+			proposals.map(async (p) => {
+				try {
+					const verdict = ledger.check(ledgerKey(surface, p))
+					if (!verdict.ok) return recordServeFallback("governance", GOVERNANCE_SERVE_READ, verdict.reason)
+					const {result} = await withServeTimeout(fromGeoDb(surface, p, nowSeconds), serve.timeoutMs)
+					out.set(p.id, result)
+					recordServed("governance", GOVERNANCE_SERVE_READ)
+				} catch (error) {
+					const unsupported = error instanceof Unsupported || error instanceof AmbiguousRecordError
+					recordServeFallback(
+						"governance",
+						GOVERNANCE_SERVE_READ,
+						unsupported ? "unsupported" : failureReason(error),
+					)
+				}
+			}),
+		)
+		return out
+	}
+
 	return {
 		detail: (proposal, nowSeconds) => run("detail", [proposal], nowSeconds),
 		list: (proposals, nowSeconds) => run("list", proposals.slice(0, config.listMax), nowSeconds),
+		serveStatuses,
 	}
 }
