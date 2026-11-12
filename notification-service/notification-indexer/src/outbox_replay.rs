@@ -63,6 +63,71 @@ pub trait RowSource {
     ) -> impl std::future::Future<Output = Result<Vec<Row>, String>>;
 }
 
+/// A pool of one connection whose sessions are read-only (`default_transaction_read_only = on`), so
+/// the tool cannot write to Postgres even by mistake.
+pub async fn read_only_pool(url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|c, _| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(c)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(url)
+        .await
+}
+
+/// The Postgres row source: outbox rows with `from <= created_at < to` (`to` exclusive), each with
+/// the `webhook_id`s of its delivery rows.
+pub struct PgSource {
+    pub pool: sqlx::PgPool,
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
+}
+
+impl RowSource for PgSource {
+    async fn page(&mut self, after: Option<Cursor>, limit: usize) -> Result<Vec<Row>, String> {
+        use sqlx::Row as _;
+        let (at, id) = after.unzip();
+        let rows = sqlx::query(
+            r#"
+            SELECT o.created_at, o.id, o.idempotency_key, o.event_type, o.payload,
+                   ARRAY(SELECT d.webhook_id FROM notification_deliveries d
+                         WHERE d.outbox_id = o.id ORDER BY d.webhook_id) AS webhooks
+            FROM notification_outbox o
+            WHERE o.created_at >= $1 AND o.created_at < $2
+              AND ($3::timestamptz IS NULL OR (o.created_at, o.id) > ($3, $4))
+            ORDER BY o.created_at, o.id
+            LIMIT $5
+            "#,
+        )
+        .bind(self.from)
+        .bind(self.to)
+        .bind(at)
+        .bind(id)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        rows.iter()
+            .map(|r| {
+                Ok(Row {
+                    created_at: r.try_get("created_at")?,
+                    id: r.try_get("id")?,
+                    idempotency_key: r.try_get("idempotency_key")?,
+                    event_type: r.try_get("event_type")?,
+                    payload: r.try_get("payload")?,
+                    webhooks: r.try_get::<Vec<Uuid>, _>("webhooks")?,
+                })
+            })
+            .collect::<Result<_, sqlx::Error>>()
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Where units go.
 pub trait Sink {
     fn enter(
