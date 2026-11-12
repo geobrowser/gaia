@@ -262,13 +262,16 @@ spec:
           readinessProbe:
             exec:
               command: ["sh", "-c", "test -e /data/ctl/serving"]
-            periodSeconds: 5
-            failureThreshold: 6
+            # 1 s polling: the pod is Ready within a second of ctl/serving appearing, not up to 5 s later.
+            # failureThreshold 30 x 1 s keeps the old 6 x 5 s = 30 s tolerance.
+            periodSeconds: 1
+            failureThreshold: 30
           startupProbe:
             exec:
               command: ["sh", "-c", "test -e /data/ctl/serving"]
-            periodSeconds: 5
-            failureThreshold: 120
+            # Same 600 s budget as before (120 x 5 s), polled every second.
+            periodSeconds: 1
+            failureThreshold: 600
           resources:
             # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
             # growth). Plan 10.14 §10 Stage A: 5Gi/7Gi covers the 604 MB derived carve plus the backfill.
@@ -353,6 +356,15 @@ spec:
             items:
               - key: key
                 path: writer.key
+        # The CURSOR key for the applied-block mirror (GEODB_APPLIED_BLOCK). optional: absent or unread while the flag is off.
+        - name: cursor-key
+          secret:
+            secretName: geodb-cursor-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: cursor.key
       initContainers:
         # Copies geodb-client from the pinned geodb image and writes the client binding: a TCP listener
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
@@ -496,10 +508,23 @@ spec:
             # relation would fail. Turn on with the image bump that brings it.
             - name: GEODB_RELATION_POSITIONS
               value: "0"
+            # Relation facets: to-space, from-space, the two version pins and verified, written as claims on the
+            # relation's statement in the same Edit (`.statement` subject, geo-db docs/api/10 section 5.5). Off: up to
+            # five more adds per relation, and the api's GEODB_RELATION_FACETS_SHADOW has nothing to compare until a
+            # backfill writes them. The geodb-client the init container copies (2eab4e170c) already accepts the wire.
+            - name: GEODB_RELATION_FACETS
+              value: "0"
             # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES
               value: "1"
+            # Applied-block mirror (appliedBlock.ts): off. Unset already reads as off; explicit so turning it on is a
+            # one-value diff. With "1" the feeder writes the geo-db cursors row geodb-feeder-applied using the
+            # geodb-cursor-key mounted below (derived=10 only); the path is read only when the flag is on.
+            - name: GEODB_APPLIED_BLOCK
+              value: "0"
+            - name: GEODB_APPLIED_BLOCK_KEY_PATH
+              value: /etc/geodb/cursor-key/cursor.key
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
@@ -546,6 +571,9 @@ spec:
               readOnly: true
             - name: writer-key
               mountPath: /etc/geodb/writer-key
+              readOnly: true
+            - name: cursor-key
+              mountPath: /etc/geodb/cursor-key
               readOnly: true
           livenessProbe:
             httpGet:

@@ -45,15 +45,26 @@ export type Config = {
 	proposalStatus: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_RANKS (with GEODB_RECORD_KEYS): keyed ranking blocks, rankings and ranking items from `knowledge.edits` (ranksKeyed.ts). */
 	ranks: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_EDIT_META (with GEODB_RECORD_KEYS): one keyed `edit_meta` record per edit (block, sequence, name) from `knowledge.edits` (editMetaKeyed.ts). */
+	editMeta: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_SPACE_TOPICS (with GEODB_RECORD_KEYS): keyed `spaces.topic_id` from `space.topics` (spaceTopicsKeyed.ts). */
 	spaceTopics: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_SPACE_ADDRESSES (with GEODB_RECORD_KEYS): keyed `spaces.address` from `space.creations` (spaceAddressesKeyed.ts). */
 	spaceAddresses: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
-	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
+	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it. It also
+	 * writes a position change (`updateRelation`) as a `set_position`, a verb the client's ZON edit reads only from geo-db
+	 * 12707558ee (ISS-587-318 "A move"); on an older image each move is refused and dead-lettered, so roll the image first.
+	 * It also keeps `known-relations.log` on the state volume (each relation's cell and open statement id).
 	 */
 	relationPositions: boolean
+	/**
+	 * GEODB_RELATION_FACETS: write a relation's to-space, from-space, version pins and verified flag as claims on its
+	 * statement, in the same Edit (`.statement` as a subject, geo-db docs/api/10 section 5.5). Default off: it is up to
+	 * five more `add`s per relation, and the gateway's facet compare (GEODB_RELATION_FACETS_SHADOW) needs them first.
+	 */
+	relationFacets: boolean
 	/**
 	 * GEODB_ENTITY_TIMES: write each changed entity's createdAt / updatedAt (two reserved properties, from the edit's
 	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
@@ -119,6 +130,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.proposalVersions.groupId,
 	c.proposalStatus.groupId,
 	c.ranks.groupId,
+	c.editMeta.groupId,
 ]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
@@ -156,6 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
+		relationFacets: flag(env.GEODB_RELATION_FACETS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		legacyIdMap: flag(env.GEODB_LEGACY_ID_MAP),
 		appliedBlock: flag(env.GEODB_APPLIED_BLOCK)
@@ -275,6 +288,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_RANKS),
 			topic: env.KAFKA_RANKS_TOPIC ?? `${environment}.knowledge.edits`,
 			groupId: env.KAFKA_RANKS_GROUP_ID ?? `geodb-feeder-ranks-keyed-v1-${environment}`,
+		},
+		editMeta: {
+			/**
+			 * GEODB_EDIT_META: consume `knowledge.edits` on a group of its own and write one keyed record per edit
+			 * (editMetaKeyed.ts: chain block, sequence, name, the columns kg-indexer keeps in edit_versions) into the
+			 * `governance` system Space. Takes effect only with GEODB_RECORD_KEYS (editMetaKeyedEnabled). Default off.
+			 */
+			enabled: flag(env.GEODB_EDIT_META),
+			topic: env.KAFKA_EDIT_META_TOPIC ?? `${environment}.knowledge.edits`,
+			groupId: env.KAFKA_EDIT_META_GROUP_ID ?? `geodb-feeder-edit-meta-keyed-v1-${environment}`,
 		},
 		spaceTopics: {
 			/**

@@ -14,9 +14,11 @@ use delivery_worker::deliver::{
     backoff_seconds, deliver_webhook, is_success, should_retry, MAX_RETRIES,
 };
 use delivery_worker::error::WorkerError;
+use delivery_worker::geodb_claim::{self, ClaimSource, Decision, GeoDbClaimer, Settled};
 use delivery_worker::metrics::{self, Outcome};
 use delivery_worker::shadow::{self, Shadow};
 use delivery_worker::storage::Storage;
+use geodb_outbox::reader::{Claimed, OutboxReader};
 
 /// Outcome of a single delivery attempt, returned from spawned tasks.
 enum DeliveryOutcome {
@@ -152,9 +154,44 @@ async fn async_main() -> Result<(), WorkerError> {
         shutdown_tx.send(()).ok();
     });
 
+    // Off unless DELIVERY_WORKER_CLAIM_SOURCE=geodb: claim from geo-db's work class instead of
+    // Postgres. A requested but unconfigured geo-db source stops the worker rather than quietly
+    // keeping the queue where the operator did not ask for it.
+    let geodb_claimer: Option<Arc<GeoDbClaimer<OutboxReader>>> =
+        match geodb_claim::claim_source_from(env::var(geodb_claim::ENV_VAR).ok().as_deref()) {
+            ClaimSource::Postgres => None,
+            ClaimSource::GeoDb => {
+                geodb_claim::require_webhooks_file(
+                    ClaimSource::GeoDb,
+                    storage.uses_webhooks_file(),
+                )
+                .map_err(|m| WorkerError::Config(m.into()))?;
+                let cfg = geodb_claim::config_from(|k| env::var(k).ok()).ok_or_else(|| {
+                WorkerError::Config(
+                    "DELIVERY_WORKER_CLAIM_SOURCE=geodb needs GEODB_OUTBOX_KEY_PATH and GEODB_BINDING_PATH"
+                        .into(),
+                )
+            })?;
+                let lease = std::time::Duration::from_secs(geodb_claim::lease_secs_from(
+                    env::var(geodb_claim::LEASE_ENV_VAR).ok().as_deref(),
+                ));
+                geodb_claim::register();
+                warn!(
+                    lease_secs = lease.as_secs(),
+                    "Claiming deliveries from geo-db, not Postgres"
+                );
+                Some(Arc::new(GeoDbClaimer::from_config(cfg, lease)))
+            }
+        };
+
     // Off unless GEODB_OUTBOX_SHADOW_READ is on: compares each terminal delivery with geo-db's
-    // mirrored unit. Measurement only; it never delivers and never touches Postgres.
-    let shadow: Option<Shadow> = shadow::start();
+    // mirrored unit. Measurement only; it never delivers and never touches Postgres. It would
+    // complete the units the claimer is delivering, so it is off whenever the claimer is on.
+    let shadow: Option<Shadow> = if geodb_claimer.is_some() {
+        None
+    } else {
+        shadow::start()
+    };
     if shadow.is_some() {
         info!("geo-db outbox shadow reader on");
     }
@@ -230,7 +267,8 @@ async fn async_main() -> Result<(), WorkerError> {
                     "Heartbeat"
                 );
             }
-            _ = reaper_timer.tick() => {
+            // No reaper with a geo-db source: an expired lease is claimed again by the next claim.
+            _ = reaper_timer.tick(), if geodb_claimer.is_none() => {
                 match storage.reset_stale_claims(300).await {
                     Ok(count) if count > 0 => {
                         warn!(reset = count, "Reset stale in_progress deliveries to pending");
@@ -245,6 +283,35 @@ async fn async_main() -> Result<(), WorkerError> {
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(poll_interval_ms)) => {
                 // Drain completed tasks from the previous cycle
                 drain_completed(&mut join_set, &mut delivered_count, &mut failed_count);
+
+                if let Some(claimer) = &geodb_claimer {
+                    let limit = u16::try_from(batch_size).unwrap_or(u16::MAX);
+                    match claimer.claim(limit).await {
+                        Ok(units) => {
+                            if !units.is_empty() {
+                                info!(count = units.len(), "Processing geo-db claimed deliveries");
+                            }
+                            for unit in units {
+                                while join_set.len() >= max_concurrent {
+                                    if let Some(result) = join_set.join_next().await {
+                                        collect_outcome(result, &mut delivered_count, &mut failed_count);
+                                    }
+                                }
+                                let client = client.clone();
+                                let storage = Arc::clone(&storage);
+                                let claimer = Arc::clone(claimer);
+                                join_set.spawn(async move {
+                                    process_geodb_unit(&client, &storage, &claimer, unit, max_retries).await
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Failed to claim deliveries from geo-db");
+                            metrics::claim_error();
+                        }
+                    }
+                    continue;
+                }
 
                 match storage.claim_pending(batch_size).await {
                     Ok(deliveries) => {
@@ -288,6 +355,72 @@ async fn async_main() -> Result<(), WorkerError> {
     );
 
     Ok(())
+}
+
+/// Deliver one unit claimed from geo-db and settle it over the pipe. The same signing, status
+/// handling and retry policy as [`deliver_one`]; only the bookkeeping differs.
+async fn process_geodb_unit(
+    client: &reqwest::Client,
+    storage: &Storage,
+    claimer: &GeoDbClaimer<OutboxReader>,
+    unit: Claimed,
+    max_retries: i32,
+) -> DeliveryOutcome {
+    let webhook_id = uuid::Uuid::from_bytes(unit.webhook());
+    // The unit's payload is the outbox row's JSON text; a payload that is not JSON can never be
+    // delivered, as a serialization error does not on the Postgres path.
+    let payload: Option<Vec<u8>> = serde_json::from_slice::<serde_json::Value>(&unit.payload)
+        .ok()
+        .and_then(|v| serde_json::to_vec(&v).ok());
+    let target = match storage.webhook_target(webhook_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            // The webhook source is unreadable: leave the unit leased; it comes back.
+            error!(error = %e, %webhook_id, "Could not resolve webhook; unit left leased");
+            return DeliveryOutcome::Error;
+        }
+    };
+    let (decision, outcome) = match (payload, target) {
+        (None, _) => {
+            error!(%webhook_id, "Claimed unit has no JSON payload, failing it");
+            (Decision::Fail, DeliveryOutcome::Failed)
+        }
+        (_, None) => {
+            error!(%webhook_id, "Webhook not found, failing the unit");
+            (Decision::Fail, DeliveryOutcome::Failed)
+        }
+        (Some(bytes), Some((url, secret))) => {
+            let result = deliver_webhook(client, &url, &secret, &bytes).await;
+            // last_error is not stored by the work class (plan 10.16 W6); this line is its home.
+            match &result {
+                Ok(status) if !is_success(*status) => {
+                    warn!(%webhook_id, status, attempts = unit.attempts, "Webhook answered non-success")
+                }
+                Err(e) => {
+                    warn!(%webhook_id, error = %e, attempts = unit.attempts, "Webhook request failed")
+                }
+                _ => {}
+            }
+            let d = geodb_claim::decide(unit.attempts, max_retries, &result.map_err(|_| ()));
+            let o = match d {
+                Decision::Delivered => DeliveryOutcome::Delivered,
+                Decision::Retry { .. } => DeliveryOutcome::Retried,
+                Decision::Fail => DeliveryOutcome::Failed,
+            };
+            (d, o)
+        }
+    };
+    match claimer.settle(&unit, decision).await {
+        Settled::Acked => outcome,
+        Settled::LeaseLost => {
+            warn!(%webhook_id, "Lease lost before the result was recorded; another claim owns the unit");
+            DeliveryOutcome::Error
+        }
+        Settled::PipeError => {
+            error!(%webhook_id, "Could not record the result over the pipe; unit left leased");
+            DeliveryOutcome::Error
+        }
+    }
 }
 
 /// Process a single delivery: serialize, POST, update DB status.
