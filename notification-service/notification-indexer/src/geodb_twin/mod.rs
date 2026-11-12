@@ -60,7 +60,7 @@ pub const FLAG: &str = "NOTIFICATION_INDEXER_GEODB_TWIN";
 pub const TIMEOUT_VAR: &str = "NOTIFICATION_INDEXER_GEODB_TWIN_TIMEOUT_MS";
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(5000);
-const COOLDOWN: Duration = Duration::from_secs(30);
+const COOLDOWN: Duration = Duration::from_secs(5);
 /// Most entities one batch card read names (geo-db's bound).
 const MAX_CARD_IDS: usize = 32;
 /// Most backlinks one read asks for (geo-db's `MAX_TOPK_LIMIT`); that many back means there may be more.

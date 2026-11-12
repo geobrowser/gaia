@@ -34,6 +34,7 @@ use ranking_indexer::external_interest_mirror::{self, Ident, Signal};
 use ranking_indexer::metrics::PgWriteSite;
 use ranking_indexer::not_interested;
 use ranking_indexer::pg_bin_writes;
+use ranking_indexer::user_topic_signals_mirror as signals_mirror;
 
 #[derive(Debug, Default, PartialEq)]
 struct Options {
@@ -148,6 +149,17 @@ async fn run() -> Result<(), IndexerError> {
     } else {
         Vec::new()
     };
+    // The recompute below deletes and rewrites `user_topic_signals` rows for every user whose Not
+    // interested set changed (an undo drops that user's rows). The two-minute sweep only deletes
+    // identities it saw before its own run, so a delete made here is its blind spot: read the
+    // identities first and mirror the plan after, or geo-db keeps the dropped rows forever and the
+    // private readers' weights disagree with Postgres.
+    let topic_mirror = if options.dry_run {
+        None
+    } else {
+        signals_mirror::from_env_private()
+    };
+    let signals_prior = signals_mirror::read_idents(&pool, topic_mirror.as_ref()).await;
     // Any error (including the SQL's refusal of a wholly unplaced snapshot) returns Err: the Job fails, and
     // nothing was written.
     // Off: the replace is skipped and counted; the mirror below still runs.
@@ -196,6 +208,15 @@ async fn run() -> Result<(), IndexerError> {
             }
             Err(e) => warn!(error = %e, "external interest mirror skipped: read failed"),
         }
+    }
+    if let (Some(m), Some(prior)) = (&topic_mirror, signals_prior) {
+        signals_mirror::mirror_since(
+            &pool,
+            m,
+            &prior,
+            signals_mirror::sweep_since(chrono::Utc::now()),
+        )
+        .await;
     }
     if let (true, Some(r)) = (options.dry_run, &applied) {
         println!(

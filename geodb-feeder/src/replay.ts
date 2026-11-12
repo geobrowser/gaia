@@ -95,6 +95,61 @@ export async function loadPools(pg: Pick<ReadOnlyPg, "read">, spaces: string[], 
 	}
 }
 
+/** Where pairs come from: `postgres` (default, REPLAY_PAIR_SOURCE unset) or `api` (needs no DATABASE_URL). */
+export type PairSource = "postgres" | "api"
+
+export function parsePairSource(raw: string | undefined): PairSource {
+	const v = raw?.trim().toLowerCase()
+	if (v === undefined || v === "" || v === "postgres") return "postgres"
+	if (v === "api") return "api"
+	throw new Error(`REPLAY_PAIR_SOURCE must be postgres or api, not ${raw}`)
+}
+
+type ApiPair = {entity?: unknown; space?: unknown; score?: unknown}
+
+const isId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v)
+
+/**
+ * The same pools as `loadPools`, from the api's POST /geodb/replay-pairs (GEODB_REPLAY_PAIRS=on there), through
+ * Service `api` only. Rows that are not 32-hex ids, or name a Space outside \`spaces\`, are dropped; a malformed
+ * answer or a non-2xx throws, so the caller keeps its last pools.
+ */
+export async function loadPoolsFromApi(
+	fetchImpl: Fetch,
+	target: URL,
+	spaces: string[],
+	perSpace = 50,
+	limit = 1500,
+	timeoutMs = 90_000,
+): Promise<Pools> {
+	if (spaces.length === 0) return {top: [], recent: [], random: []}
+	const allowed = new Set(spaces)
+	const res = await fetchImpl(new URL("/geodb/replay-pairs", target).toString(), {
+		method: "POST",
+		headers: {"content-type": "application/json"},
+		body: JSON.stringify({spaces, perSpace, limit}),
+		signal: AbortSignal.timeout(timeoutMs),
+	})
+	const text = await res.text()
+	if (res.status < 200 || res.status >= 300) throw new Error(`replay-pairs answered ${res.status}`)
+	const body = JSON.parse(text) as Record<string, unknown>
+	const rows = (k: string): ApiPair[] => {
+		const v = body[k]
+		if (!Array.isArray(v)) throw new Error(`replay-pairs answer has no ${k}`)
+		return v as ApiPair[]
+	}
+	const ok = (r: ApiPair) => isId(r.entity) && isId(r.space) && allowed.has(r.space)
+	const plain = (r: ApiPair): Pair => ({entity: r.entity as string, space: r.space as string, weight: 1})
+	const top = rows("top")
+		.filter((r) => ok(r) && r.score !== undefined && Number.isFinite(Number(r.score)))
+		.map((r) => ({entity_id: r.entity as string, space_id: r.space as string, score: String(r.score)}))
+	return {
+		top: zipfBySpace(top).map(([r, rank]) => ({entity: r.entity_id, space: r.space_id, weight: 1 / rank})),
+		recent: rows("recent").filter(ok).map(plain),
+		random: rows("random").filter(ok).map(plain),
+	}
+}
+
 /** Each row with its 1-based rank by score within its Space. */
 export function zipfBySpace<R extends {space_id: string; score: string}>(rows: R[]): [R, number][] {
 	const bySpace = new Map<string, R[]>()
@@ -138,7 +193,10 @@ export function pick(pools: Pools, rand: () => number = Math.random): Pair | nul
 	return pickWeighted(pools[chosen], rand())
 }
 
-export type Fetch = (url: string, init: {signal: AbortSignal}) => Promise<{status: number; text(): Promise<string>}>
+export type Fetch = (
+	url: string,
+	init: {signal: AbortSignal; method?: string; headers?: Record<string, string>; body?: string},
+) => Promise<{status: number; text(): Promise<string>}>
 
 export type ReplayCounters = {requests: Series}
 

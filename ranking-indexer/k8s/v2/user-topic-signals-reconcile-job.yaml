@@ -1,0 +1,170 @@
+# One-off Job: reconcile geo-db collection 28 (`user_topic_signals`) with Postgres. Binary
+# `user_topic_signals_reconcile`; why and how it judges are in
+# ranking_indexer::user_topic_signals_reconcile. Rows `not_interested_sync` deleted from Postgres before
+# gaia#1501 were never deleted from geo-db and inflate users' private `weights`; this finds and removes them.
+#
+# DRY RUN BY DEFAULT (no args but `--sample 10`): reads both stores, prints counts and a sample of kinds, never
+# an id, writes nothing. Exit 0 = nothing to change, 2 = it found changes, 1 = could not read.
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them.
+# Needs an image that contains the binary and the `_PRIVATE` switch on (RUNBOOK section 2f-private).
+#
+#   sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" \
+#     ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/ranking-indexer-signals-reconcile
+#
+# To apply the plan, change the container's args to ["--apply"] (RUNBOOK section 2f-reconcile), delete the
+# finished dry-run Job first (kubectl -n gaia delete job ranking-indexer-signals-reconcile), then apply as above.
+# The Job holds one user's rows at a time, so the 1Gi limit is ample; raise it rather than removing it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ranking-indexer-signals-reconcile
+  namespace: gaia
+  labels:
+    app: ranking-indexer-signals-reconcile
+    environment: testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        geodb-client: "true"
+        app: ranking-indexer-signals-reconcile
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-scores-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: scores.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest.
+          image: registry.digitalocean.com/geo/geodb:2eab4e170c
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: signals-reconcile
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/user_topic_signals_reconcile"]
+          args: ["--sample", "10"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            # This Job's whole purpose, so on here regardless of the writers' flags. The binary exits
+            # non-zero if either is off or the wiring is missing.
+            - name: GEODB_DERIVED_MIRROR
+              value: "1"
+            - name: GEODB_DERIVED_MIRROR_PRIVATE
+              value: "1"
+            - name: GEODB_DERIVED_BATCH
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/scores.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
