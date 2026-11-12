@@ -4197,3 +4197,127 @@ async fn legacy_items_are_attributed_to_their_ranks_space_and_none_is_dropped() 
             .unwrap();
     assert_eq!(r4, Some(u(S1)));
 }
+
+/// Round-5 review: an unregistered Rank's unattributed row (written by an
+/// indexer older than 0125) whose vote is gone must not come back when the
+/// ranker re-submits and the backfill later registers the Rank. The new write
+/// clears that id's unattributed rows while no space has it registered.
+#[tokio::test]
+async fn a_resubmission_clears_an_unregistered_ranks_stale_unattributed_votes() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_359F_0001;
+    const S: u128 = 0xE2E5_359F_0011;
+    const BLOCK: u128 = 0xE2E5_359F_0021;
+    const R: u128 = 0xE2E5_359F_0041;
+    const OLD: u128 = 0xE2E5_359F_0031;
+    const NEW: u128 = 0xE2E5_359F_0032;
+    fresh_dao_block(&storage, SPACE, &[S], BLOCK, &[R], None).await;
+    sqlx::query("DELETE FROM relations WHERE from_entity_id = $1")
+        .bind(u(R))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // 1. R is unregistered. An old pod wrote its vote for OLD (no rank space);
+    //    that vote relation is gone from the graph, so no fill attributes it.
+    sqlx::query(
+        "INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position) \
+         VALUES ($1, $2, $3, 'a0')",
+    )
+    .bind(u(R))
+    .bind(u(OLD))
+    .bind(u(SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+    storage.fill_missing_relation_ids().await.unwrap();
+
+    // 2. The ranker re-submits R from S with NEW (votes only: R's TYPES
+    //    relation arrives in another edit, so R stays unregistered here).
+    let resubmit = EditBuilder::new(gid(0x359F_0E01))
+        .create_relation(|b| {
+            b.id(gid(0x359F_1000))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(R))
+                .to(gid(NEW))
+                .to_space(gid(SPACE))
+                .position("a0")
+        })
+        .build();
+    apply_in(&storage, S, &resubmit, 10).await;
+
+    // 3. The kg-indexer has R's TYPES and RANK_BLOCK relations (in S) and the
+    //    new vote; the backfill recovers R and runs the fill.
+    let pid = |s: &str| Uuid::parse_str(s).unwrap();
+    for (rel, ty, to, to_space) in [
+        (
+            0x359F_10A0u128,
+            pid(TYPE_RELATION_TYPE_ID),
+            pid(RANK_TYPE_ID),
+            None,
+        ),
+        (
+            0x359F_10B0,
+            pid(RANK_BLOCK_RELATION_TYPE_ID),
+            u(BLOCK),
+            None,
+        ),
+        (
+            0x359F_1000,
+            pid(RANK_VOTES_RELATION_TYPE_ID),
+            u(NEW),
+            Some(u(SPACE)),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, \
+             to_space_id, space_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(u(rel))
+        .bind(u(rel ^ 0xE))
+        .bind(ty)
+        .bind(u(R))
+        .bind(to)
+        .bind(to_space)
+        .bind(u(S))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    assert!(storage
+        .find_unregistered_ranks()
+        .await
+        .unwrap()
+        .contains(&(u(R), u(S))));
+    let config = storage
+        .get_rank_config_from_kg(u(R), u(S))
+        .await
+        .unwrap()
+        .expect("typed in S");
+    assert!(storage.recover_ranking(&config).await.unwrap());
+    storage.fill_missing_relation_ids().await.unwrap();
+    recompute_block(u(BLOCK), BlockMeta::default(), Utc::now(), &storage)
+        .await
+        .unwrap();
+
+    // 4. R's ballot holds only the new vote.
+    let items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT entity_id, rank_space_id FROM ranks.ranking_items WHERE ranking_id = $1 \
+         ORDER BY entity_id",
+    )
+    .bind(u(R))
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        items,
+        vec![(u(NEW), Some(u(S)))],
+        "the cleared vote is not back"
+    );
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(NEW), 1)]);
+}
