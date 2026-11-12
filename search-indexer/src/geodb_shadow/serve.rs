@@ -9,8 +9,12 @@
 //! Known limit of `entities_for_spaces`: geo-db holds a gaia entity id as the feeder conformed it
 //! (see [`super::ids::conforming_id`]). A UUIDv4 passes through unchanged, so the id read back is the
 //! gaia id; a non-v4 gaia id was remapped through a hash, which cannot be reversed here, and would
-//! come back as a different (valid) id. Enable the read only once the Spaces served hold v4 ids
-//! (or the shadow's `entities_for_spaces` series is at zero mismatches on them).
+//! come back as a different (valid) id. The shadow's `entities_for_spaces` series is NOT a gate for
+//! this: it conforms the Postgres ids forward and compares in geo-db's id space, so it reads zero
+//! mismatches whether or not non-v4 ids are present. Do not list `entities_for_spaces` unless every
+//! entity id in the Spaces served is a v4 id, or geo-db holds the original (`GEODB_LEGACY_ID_MAP`
+//! written by the feeder and backfilled) and this read reverses it; see geodb/RUNBOOK.md,
+//! "search-indexer: serving entities_for_spaces from geo-db".
 
 use std::collections::BTreeSet;
 use std::sync::Mutex;

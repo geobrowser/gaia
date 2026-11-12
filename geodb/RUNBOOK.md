@@ -2243,3 +2243,27 @@ or other-space proposal also has such an action).
 Not covered, each named in `_uncompared_total`: which proposals a Space has and their order and cursor (no Space index in
 the records), the list's status filter (the status shadow covers status) and vote counts (records are keyed by voter),
 UpdateVotingSettings fields of an action, and the active checks' Space scope and vote tallies.
+
+## search-indexer: serving entities_for_spaces from geo-db
+
+`SEARCH_INDEXER_GEODB_SERVE=entities_for_spaces` must stay off (leave it out of the list; `applied_block` alone is safe)
+unless one of these holds for every Space the indexer serves.
+
+1. Every entity id in those Spaces is a UUID v4. geo-db holds an entity under `conformingId` (`geodb-feeder/src/ids.ts`):
+   a v4 id as itself, any other id as a sha256 remap that nothing can invert. The served read returns geo-db's ids
+   (`search-indexer/src/geodb_shadow/serve.rs`, `Uuid::parse_str(entity)`), so a non-v4 entity would be indexed
+   under a different id than Postgres gives it, and its search document would be orphaned and duplicated.
+   Non-v4 ids exist: system ids from `uuidV5` (`geodb-feeder/src/proposals.ts`), the language ids (`languages.ts`,
+   a sha256 slice) and any entity a client minted without v4 bits.
+2. Or geo-db holds the original and the read reverses it. The original is stored only as the map statement
+   `(keyed, sys.legacy.Id, Bytes(original))` that `GEODB_LEGACY_ID_MAP` makes the feeder write
+   (`geodb-feeder/src/legacyMap.ts`, written only for entities the feeder creates after the flag is on). As of 2026-11-12 the
+   live feeder does not set `GEODB_LEGACY_ID_MAP`, so no map statement exists, and the backfill in
+   `docs/plans/2026-11-07-feat-geodb-legacy-id-map-backfill-plan.md` is a plan only. Even with the statements, the
+   read the clients expose is gaia id to keyed id (`by_legacy`); the keyed id to original direction prints a Bytes value as
+   `<bytes>` (`api/src/geodb/client.ts`, `readLegacyIds`), so the search-indexer cannot reverse until geo-db's client prints
+   or returns the original bytes.
+
+The shadow is not a gate: `search_indexer_geodb_shadow_total{lookup="entities_for_spaces"}` conforms Postgres ids forward and
+compares in geo-db's id space, so it shows zero mismatches with non-v4 ids present. The only evidence for condition 1 is a
+scan of the served Spaces' entity ids for non-v4 bits (Postgres read, run by someone with that access).
