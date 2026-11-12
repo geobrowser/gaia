@@ -262,6 +262,47 @@ $K rollout status deployment/geodb-feeder
 
 If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
 
+### 2b-quater. Replaying one dropped edit (`geodb-replay-edit`)
+
+When kg-indexer drops an edit (a statement timeout rolls the block back, a false `is_errored` in `ipfs_cache`), the
+feeder never sees it either: it only consumes `knowledge.edits`. `replay_edit` re-applies such an edit to Postgres from
+`ipfs_cache`; Job `geodb-replay-edit` (`geodb/k8s/v2/geodb-replay-edit-job.yaml`, same image,
+`node dist/replay-edit-main.js`) is the geo-db side (plan 22 section 21, row B1). It fetches the payload from the IPFS
+gateway (`REPLAY_EDIT_IPFS_GATEWAY`) or `--file`, translates it through the feeder's own `translateOps` with the
+feeder's flags, and writes geo-db only. No Postgres, no Kafka.
+
+Arguments: `--uri ipfs://<cid>`, `--space <gaia space id>`, `--block <n>`, `--created-at <block time, unix seconds>`
+(the edit's block time: kg-indexer's `--created-at`), optional `--sequence`, `--file`, and `--apply`. Without `--apply` it
+is a dry run: fetch, decode, translate, safety check, log counts.
+
+**The refusal rule** (what `check_replay_safety` does by hand, in geo-db terms): the Job exits 2 and writes nothing when
+any entity the edit touches already holds an `updatedAt` newer than the edit's block time, or holds one it cannot read
+(or none: the entity was never stamped, so it cannot be shown older). An entity geo-db does not hold is a creation and
+passes; an `updatedAt` equal to the edit's time is the edit itself and passes. The unit is the entity, not the
+(entity, property) pair Postgres versions on, so it can refuse an edit `check_replay_safety` would pass, never the
+reverse. It also refuses a Space not yet in geo-db (it founds none). Resolve a refusal by hand; do not widen the rule.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+# dry run: the feeder may keep running.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
+    -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__MODE__|--dry-run|" \
+    geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit plan" (intents, touched, conflicts), then "replay-edit dry-run" or "refused"
+$K delete job geodb-replay-edit
+# real run, only after a clean dry run: stop the feeder (it shares the state volume) as in §2b-ter, then __MODE__ -> --apply
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed ... -e "s|__MODE__|--apply|" geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit applied" with deadLettered 0
+$K delete job geodb-replay-edit
+$K scale deployment/geodb-feeder --replicas=1
+```
+
+Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
+The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
+under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
+
 ### 2b-bis. Proposal system entities
 
 The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
