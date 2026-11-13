@@ -226,6 +226,27 @@ export function parseDone(text: string): Set<string> {
 	return out
 }
 
+/**
+ * The entry ids a chunk was about to send when the process died: `startedLine` is appended before each apply. geo-db
+ * may or may not have committed that chunk, so a rerun cannot tell its own write from a later one by reading; it
+ * exempts these entries' entities from the newer-state rule (the resend is under the same key, so a committed chunk
+ * answers its first receipt and writes nothing).
+ */
+export function parseStarted(text: string): Set<string> {
+	const out = new Set<string>()
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue
+		try {
+			const r = JSON.parse(line) as {inflight?: unknown; entries?: unknown}
+			if (r.inflight === true && Array.isArray(r.entries)) for (const id of r.entries) if (typeof id === "string") out.add(id)
+		} catch {}
+	}
+	return out
+}
+
+export const startedLine = (doc: DeadLetterDoc, chunk: readonly DeadLetterEntry[], key: string, now: number): string =>
+	`${JSON.stringify({t: now, inflight: true, doc: doc.id, key, entries: chunk.map((e) => e.id)})}\n`
+
 export const doneLines = (doc: DeadLetterDoc, sent: readonly DeadLetterEntry[], key: string, now: number): string =>
 	sent.map((e) => `${JSON.stringify({t: now, entry: e.id, doc: doc.id, key})}\n`).join("")
 
@@ -354,12 +375,13 @@ async function stateCheck(
 	target: Target,
 	intents: readonly string[],
 	sleep: (ms: number) => Promise<void>,
+	ours: ReadonlySet<string> = new Set(),
 ): Promise<DocPlan["check"]> {
 	if (!deps.reader) return {kind: "unchecked", why: "no reader"}
 	if (doc.source === "edit") {
 		if (args.createdAt === undefined || args.edit === undefined) return {kind: "unchecked", why: "an edit document needs --edit and --created-at for the newer-state rule"}
 		const micros = BigInt(blockInstant(args.createdAt) ?? "0")
-		const r = await findConflicts(deps.reader, target.geo, editEntities(intents), micros, sleep)
+		const r = await findConflicts(deps.reader, target.geo, editEntities(intents).filter((e) => !ours.has(e)), micros, sleep)
 		return {kind: "updated-at", ...r}
 	}
 	const cells = await putCellStates(deps.reader, target.geo, intents, sleep)
@@ -394,6 +416,7 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 	if (parsed.notJson) skipped["not-json"] = parsed.notJson
 	const docs = groupDocuments(selected)
 	const done = parseDone(deps.done)
+	const started = parseStarted(deps.done)
 
 	const plans: {doc: DeadLetterDoc; target: Target | {error: string}; plan: DocPlan}[] = []
 	for (const doc of docs) {
@@ -417,10 +440,13 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 			// The whole document, as the original message held it: a pair across a done/pending split still counts.
 			pairs: findHazardPairs(intents),
 		}
+		// Entities an earlier run of this tool wrote (or was writing when it died) now carry a newer updatedAt: its own work,
+		// not later state to stomp. An entity only a later writer touched is still checked.
+		const ours = new Set(editEntities(doc.entries.filter((e) => done.has(e.id) || started.has(e.id)).map((e) => e.intent)))
 		const check: DocPlan["check"] =
 			"error" in target || pendingEntries.length === 0
 				? {kind: "unchecked", why: "error" in target ? "no target" : "nothing pending"}
-				: await stateCheck(deps, args, doc, target, pendingEntries.map((e) => e.intent), sleep)
+				: await stateCheck(deps, args, doc, target, pendingEntries.map((e) => e.intent), sleep, ours)
 		const refuse = pendingEntries.length === 0 ? null : refusalOf({...base, check}, target, args.apply)
 		const plan: DocPlan = {...base, check, refuse, state: pendingEntries.length === 0 ? "done" : refuse ? "refused" : "pending"}
 		plans.push({doc, target, plan})
@@ -462,6 +488,7 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 			const slice = pending.slice(lo, lo + deps.chunk)
 			const key = replayKey(doc.id, slice.map((e) => e.id))
 			const text = zonDoc(target.geo, key, slice.map((e) => e.intent))
+			deps.appendDone(startedLine(doc, slice, key, now()))
 			let delay = 1000
 			for (let attempt = 1; ; attempt++) {
 				const r = await deps.db.apply(text)
