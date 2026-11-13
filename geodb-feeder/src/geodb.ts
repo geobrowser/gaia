@@ -49,6 +49,14 @@ export function classify(message: string): Failure {
 	// prints `error: Refused\nconnect: Refused`. 192 intents were dead-lettered on this text on 2026-11-12. Anchored on
 	// `connect:` because a bare `Refused` can also be geo-db's verdict on an intent.
 	if (/connect: Refused/.test(message)) return "transient"
+	// The rest of what geodb-client can print that leaves an apply safe to repeat (the intent carries an idempotency
+	// key). Enumerated against the pinned client in __tests__/errorTable.test.ts, which fails on any name it lacks:
+	// a connection that dropped or timed out mid-apply, and geo-db's own retryable refusals (`refused: <category>
+	// <code>`: facade `retryable`, plus OutcomeUnknown, which its callers resolve by re-sending the transaction).
+	if (/TransportFailed|TransportClosed|DeadlineExceeded|TimedOut|EndOfStream|UnknownHostName|TemporaryNameServerFailure/.test(message))
+		return "transient"
+	if (/StoreLocked|PredecessorVersionMismatch|WatermarkNotYetReached|OutcomeUnknown|refused: \w+ IoError/.test(message))
+		return "transient"
 	return "permanent"
 }
 
