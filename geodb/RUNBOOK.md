@@ -662,6 +662,22 @@ Secret reference hermes-ipfs-cache uses; no one reads the value. The Job manifes
 omit `GEODB_RELATION_FACETS`; it now copies the live feeder (positions 1, facets 1), and `replay-edit-main.ts` passes `facets` to the
 translator as the live consumer does.
 
+**Replaying an applied edit is not always a no-op (geo-db ISS-679-318).** Every single intent is idempotent, but six ordered
+pairs inside one chunk are not when the chunk is sent a second time, which replay-edit does under a fresh idempotency key:
+`put;unset` (same cell), `put;delete_entity`, `relation_move;delete_entity`, `delete_entity;relation_move` (same entity), and
+`relation_retract;relation_move`, `relation_move;relation_move` (same relation; these two diverge only when a prefix of the chunk
+applied first). So the replay-edit dry run splits the edit into the chunks `--apply` would send (`GEODB_CHUNK`), and for each
+reads the feeder's dead-letter record, `/data/feeder/errors.jsonl` on the shared state volume (read only), filtered to
+`--edit` and `--space`. A chunk whose every intent is dead-lettered there never applied: a first apply, safe. Any intent of the
+chunk not in the record counts as applied (this includes an intent the replay translates differently from the original). An
+applied chunk that holds one of the pairs refuses the replay, in the dry run and with `--apply`, and a `replay-edit chunk` line
+says which chunk, which pair and which intents. Without `--edit` every chunk counts as applied. For edit 742e60d9 the expected
+plan is every chunk `first-apply` (the dead letters were `connect: Refused`, so nothing of it reached geo-db) with
+`deadLetteredMatched` equal to the record's count for the edit; a smaller match means the replay translates differently from the
+original (the overlay was committed after the dead letters), and that needs reading before any `--apply`. The keyed families
+(`geodb-replay-keyed`) write add, set_active true and put only, so no chunk of theirs can hold a pair; each document is still checked
+before it is sent.
+
 Run in this order, from `geodb/k8s/v2` (`K="kubectl -n gaia"` in bash; zsh users write the command out):
 
 ```bash
@@ -676,8 +692,9 @@ $K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l          # 
 # 1. Dry runs (the feeder keeps running; nothing is written).
 sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg|" \
     -e "s|__SPACE__|c9f267dcb0d270718c2a3c45a64afd32|" -e "s|__BLOCK__|120865|" -e "s|__CREATED_AT__|1794524471|" \
-    -e "s|__MODE__|--dry-run|" geodb-replay-edit-job.yaml | $K apply -f -
-$K logs -f job/geodb-replay-edit        # "replay-edit plan": conflicts 0 (a refusal: resolve by hand, section 2b-quater), then "dry-run"
+    -e "s|__EDIT__|742e60d91fc0490ea4cd3579bd19c72c|" -e "s|__MODE__|--dry-run|" geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit        # "replay-edit plan": conflicts 0 and chunks.applied 0 (see below), then "dry-run";
+                                        # a refusal: resolve by hand, section 2b-quater; never --apply past it
 $K delete job geodb-replay-edit
 for fam in "governance 0 172829-172833" "edit-meta 0 98657"; do set -- $fam
   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" -e "s|__FAMILY__|$1|" \
