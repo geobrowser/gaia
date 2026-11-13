@@ -17,6 +17,7 @@
 #   GeoDbFeederProposalVersionsStalled same, for the proposal-versions consumer
 #   GeoDbFeederProposalStatusStalled  same, for the proposal-status consumer
 #   GeoDbFeederRanksStalled           same, for the ranks consumer
+#   GeoDbFeederMemoryHeadroom         the feeder container's working set is over 90% of its memory limit for 15m
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -279,6 +280,29 @@ spec:
               the family (geodb/RUNBOOK.md 2c-decies). Read the feeder log for the repeating error; if founded is
               at the serve config's spaces, raise the cap (RUNBOOK 2d).
 
+        - alert: GeoDbFeederMemoryHeadroom
+          # cAdvisor working set over kube-state-metrics' limit, both for the feeder container only (the pod name
+          # keeps the seed/backfill Jobs out). Warning only: it never pages. The Node heap
+          # (NODE_OPTIONS --max-old-space-size) is set below the limit, so a working set near the limit means
+          # the heap plus the geodb-client child is about to be OOM-killed.
+          expr: |
+            max by (namespace, pod) (container_memory_working_set_bytes{namespace="gaia", container="feeder", pod=~"geodb-feeder-.*"})
+            /
+            max by (namespace, pod) (kube_pod_container_resource_limits{namespace="gaia", container="feeder", pod=~"geodb-feeder-.*", resource="memory"})
+            > 0.9
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: The geo-db feeder is using more than 90% of its memory limit
+            description: >-
+              The feeder container's working set has been over 90% of its limit for 15m, so an OOM kill (and a
+              restart that replays from the stored offset) is close. Read the working set against the limit and
+              the Node heap, then decide whether to raise the limit; see geodb/RUNBOOK.md section 6
+              (GeoDbFeederMemoryHeadroom). Never restart geodb-0 (serve) during a seed.
+
         - alert: GeoDbFeederConsumerStartFailed
           # Only a labelled series can fire: the gauge has one only for an optional consumer that is enabled
           # (membership_keyed with GEODB_RECORD_KEYS, votes with GEODB_VOTES, proposal_votes with GEODB_PROPOSAL_VOTES, proposal_actions with GEODB_PROPOSAL_ACTIONS, subspaces with GEODB_SUBSPACES, space_voting_settings with GEODB_SPACE_VOTING_SETTINGS, space_topics with GEODB_SPACE_TOPICS, space_addresses with GEODB_SPACE_ADDRESSES, proposal_versions with GEODB_PROPOSAL_VERSIONS, proposal_status with GEODB_PROPOSAL_STATUS, ranks with GEODB_RANKS),
@@ -298,15 +322,25 @@ spec:
               for "consumer failed to start", fix the cause, then restart the feeder.
 
         - alert: GeoDbFeederDeadLetters
-          expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m]) > 0
+          # The counter is labelled by kind (message, intent, space_cap) and a labelled series does not exist
+          # until its first increment, so a burst from nothing (192 intents with "connect: Refused" at 23:01Z
+          # on 11-12) makes increase() see one sample and return 0. The second arm catches a series that is
+          # new in the last 30m and already above 0.
+          expr: |
+            sum by (kind) (increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m])) > 0
+            or
+            sum by (kind) (geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}) > 0
+            unless
+            sum by (kind) (geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"} offset 30m)
           labels:
             severity: warning
             service: geodb-feeder
             namespace: gaia
           annotations:
-            summary: The geo-db feeder skipped an edit or an intent
+            summary: "The geo-db feeder skipped something ({{ $labels.kind }})"
             description: >-
-              A message could not be decoded or geo-db refused an intent for good; it is written to
+              kind {{ $labels.kind }} (intent = geo-db refused one write, message = a whole message was skipped,
+              space_cap = founding a Space hit the cap). A message could not be decoded or geo-db refused an intent for good; it is written to
               /data/feeder/errors.jsonl and skipped. Read it with
               kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
               is a card that can differ in shadow mode.

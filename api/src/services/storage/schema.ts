@@ -1402,11 +1402,32 @@ export const rankingScores = ranks.table(
 		spaceId: uuid("space_id").notNull(),
 		score: doublePrecision().notNull(),
 		position: integer().notNull(),
+		/** Eligible ballots that include the row (GEO-3676, 0123). 0 until the block is next recomputed. */
+		ballots: integer().notNull().default(0),
 	},
 	(table) => [
 		primaryKey({columns: [table.blockId, table.entityId, table.spaceId]}),
 		index("ranking_scores_block_position_idx").on(table.blockId, table.position),
 	],
+)
+
+/**
+ * Per-block scoring shape (GEO-3676, 0123): row cap and scoring mode ('sum' | 'average'). No row = 200 rows,
+ * 'sum'. `applied_*` are written by the ranking-indexer once a recompute applied the row; a row whose applied
+ * values differ is recomputed by the hourly backfill_blocks run.
+ */
+export const rankingBlockConfig = ranks.table(
+	"ranking_block_config",
+	{
+		blockId: uuid("block_id").primaryKey(),
+		maxRows: integer("max_rows").notNull().default(200),
+		scoringMode: text("scoring_mode").notNull().default("sum"),
+		appliedMaxRows: integer("applied_max_rows"),
+		appliedScoringMode: text("applied_scoring_mode"),
+		appliedAt: timestamp("applied_at", {withTimezone: true}),
+		updatedAt: timestamp("updated_at", {withTimezone: true}).notNull().defaultNow(),
+	},
+	// CHECKs (max_rows 1..10000, scoring_mode 'sum' | 'average') are in 0123.
 )
 
 /**

@@ -14,6 +14,10 @@
 #
 #   GeoDbWorkRowsHigh         geodb_work_rows above 80% of geodb_work_rows_max for 15m (serve >= geo-db
 #                             5fbf4ad5ee; printed only while the work class is on)
+#   GeoDbClaimsNearPeak       geodb_claims_in_use at 90% of geodb_claims_in_use_max (a high-water mark) and at
+#                             least 4 claims, for 10m, per claim_class (serve >= geo-db 2103bd8335)
+#   GeoDbClaimsRefused        geodb_claims_refused_total rose in the last 15m, per claim_class
+#   GeoDbClaimParkedSustained geodb_requests_claim_parked_total above 0.2/s for 10m, per class
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -156,3 +160,61 @@ spec:
               Check vote_indexer_votes_count_mirror_rows_total{collection} is rising, and
               geodb_derived_mirror_errors_total / _unacknowledged_total / _dropped_total{table="votes_count"}
               for why. A vote-indexer restart re-copies the whole table (the start-up snapshot).
+
+        # The claim region (serve >= geo-db 2103bd8335; live serve geodb:8050918d2f does not export these,
+        # so all three stay silent until the pin lands). Baseline, from geo-db ISS-675-721 (Metrics) and
+        # tests/server/http.zig: in_use returns at idle to a standing value, the live room's one
+        # long-lived claim (0 or 1 a class), never the requests' own. in_use_max is the high-water mark
+        # since open, not a capacity, so a ratio to it only means "at the peak this process has seen";
+        # the floor of 4 claims keeps a quiet node (in_use == in_use_max == baseline) from reading as 1.0.
+        - alert: GeoDbClaimsNearPeak
+          expr: |
+            max by (claim_class) (
+              geodb_claims_in_use{namespace="gaia", job="geodb"}
+                / geodb_claims_in_use_max{namespace="gaia", job="geodb"}
+            ) >= 0.9
+            and
+            max by (claim_class) (geodb_claims_in_use{namespace="gaia", job="geodb"}) >= 4
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's {{ $labels.claim_class }} claim region has held its peak number of claims for 10 minutes
+            description: >-
+              At least 4 claims held, within 10% of the most this process has held at once, for 10m. Requests
+              are done in seconds, so claims that stay held are leaked or lent to parked requests (ISS-675-721:
+              parked records filled the region and a running request waited 10s for its own claim). Check
+              geodb_requests_claim_parked_total and geodb_claims_refused_total; a serve restart clears it.
+
+        - alert: GeoDbClaimsRefused
+          # The rows print at 0 from the first scrape, so increase() always has an earlier sample.
+          expr: |
+            sum by (claim_class) (increase(geodb_claims_refused_total{namespace="gaia", job="geodb"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused a {{ $labels.claim_class }} claim in the last 15m
+            description: >-
+              An acquisition found no room and returned ResourceExhausted, so a request failed or a job
+              backed off. Look at geodb_claims_in_use{claim_class} against geodb_claims_in_use_max and at
+              geodb_requests_claim_parked_total; the region is full or held by parked requests (ISS-675-721).
+
+        - alert: GeoDbClaimParkedSustained
+          # Above 0.2 a second for 10m is 120 parks in the window; the claim wait ends at ten seconds.
+          expr: |
+            sum by (class) (rate(geodb_requests_claim_parked_total{namespace="gaia", job="geodb"}[10m])) > 0.2
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db is parking {{ $labels.class }} requests for want of a claim, steadily
+            description: >-
+              Requests wait for a claim in the region instead of taking one. A burst is normal; ten minutes
+              of it means the region is too small for the load or claims are held too long. Compare
+              geodb_claims_in_use{claim_class} with its _max and check geodb_claims_refused_total.

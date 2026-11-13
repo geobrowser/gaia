@@ -68,7 +68,7 @@ spec:
       initContainers:
         # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:8050918d2f
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -109,15 +109,21 @@ spec:
               containerPort: 9090
               protocol: TCP
           env:
-            # The feeder's deployed values (geodb.yaml); the translation must match what the live consumer would write.
+            # The feeder's deployed values (geodb.yaml, checked live 2026-11-13); the translation must match what the live consumer would write.
             - name: GEODB_ENTITY_TIMES
               value: "1"
             - name: GEODB_RELATION_POSITIONS
-              value: "0"
+              value: "1"
+            - name: GEODB_RELATION_FACETS
+              value: "1"
             - name: GEODB_RECORD_KEYS
               value: "1"
+            # The gateway hermes-ipfs-cache reads with (a secret reference; the public mesh3 URL answers 404 for these CIDs).
             - name: REPLAY_EDIT_IPFS_GATEWAY
-              value: https://gateway.mesh3.network/ipfs
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: IPFS_GATEWAY_URL
             - name: ENVIRONMENT
               value: testnet
             - name: DATA_DIR

@@ -136,6 +136,7 @@ export type ReplayEditDeps = Omit<ApplyDeps, "allowPut"> & {
 	payload: Uint8Array
 	chunk: number
 	positions?: boolean
+	facets?: boolean
 	entityTimes?: boolean
 	legacyMap?: boolean
 	allowPut?: boolean
@@ -158,6 +159,7 @@ export async function runReplayEdit(deps: ReplayEditDeps, args: ReplayEditArgs, 
 	const overlay = new Overlay(overlayStore, args.space)
 	const {intents, touched, stats} = translateOps(ops, overlay, {
 		positions: deps.positions,
+		facets: deps.facets,
 		legacyMap: deps.legacyMap,
 		blockSeconds: deps.entityTimes ? args.createdAt : undefined,
 	})

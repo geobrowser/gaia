@@ -323,6 +323,106 @@ $K logs job/geodb-relation-seed | grep '"relation-seed progress"' | tail -1   # 
 
 If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
 
+#### Record of the testnet run (11-12): the not-open relations
+
+Job `geodb-relation-seed`, real run (`dryRun:false`), image of the feeder at the time, finished 2026-11-12 22:05:12Z in 269 s
+(Job age and logs read 11-13 00:15Z; counts only):
+
+```
+relation-seed done  spaces=387 spacesUnmapped=0 entities=184648 relations=796610
+  alreadyRecorded=0  notOpen=322  toSeed=796288  seeded=796288  withFacets=0  statementsMarked=0  facetsUnreadable=0
+  stoppedAtLimit=false  seconds=269
+```
+
+`796,288 + 322 = 796,610`: every relation read was either seeded or not open, none was already recorded (the first run).
+The last progress line says `spacesDone` 1602 of `spacesTotal` 1602; `spaces` in the done line counts only the Spaces that
+had entities to visit.
+
+- **What a not-open relation is** (`relationSeed.ts`, the `notOpen++` branch). Postgres lists the relation for an entity, but
+  the entity's card read from geo-db has no open statement under the id the feeder derives from the gaia relation id
+  (`cid("statement", relation id)`). The record is skipped. Two causes fit that read and the seed cannot tell them apart:
+  geo-db has not applied that relation's `createRelation` yet, or the statement is absent or closed in geo-db (a relation
+  deleted or replaced there, or one the feeder never wrote). A relation whose record the feeder already holds is counted as
+  `alreadyRecorded` first, so it is never counted as not open.
+- **Does the feeder's normal path give it a position later? No, not by itself.** The feeder records a relation's cell only in
+  `createRelation` (`translate.ts`, `markRelation` under `GEODB_RELATION_POSITIONS`) and, for an older one, from this seed.
+  A later position move (`updateRelation` with a `position`) of a relation with no record is dropped and counted as
+  `relation-position-update-dropped` plus `relation-move-cell-unknown`; geo-db keeps the old position. The two exceptions are a relation the
+  feeder creates after this point (recorded at creation) and a relation the seed records on a later run, once geo-db holds its
+  statement open. A relation that geo-db never holds open stays without a record. The 322 are 0.04% of the relations read.
+- **Is a re-run safe and idempotent? Safe, yes; it does nothing as things stand.** It never replaces a record the feeder holds
+  and writes nothing to geo-db (only `known-relations.log` and, for an unjournaled statement, `known-statements.log`), so a
+  rerun cannot move or duplicate a record. But the cursor `/data/feeder/relation-seed/cursor.json` now marks every Space done and
+  `entities-<space>.txt` holds each Space's entity list, so a plain re-apply (real or dry) starts at the end of every Space
+  and reports zeros: it does not re-read the 322. Reading them again needs the cursor directory moved aside first.
+  `SeedState` reads an existing cursor even in a dry run, so the dry run needs it moved too. Move it, do not delete it.
+- **Cost of a re-run that does re-read.** A full pass over about 184,648 entities and 796,610 relations: 269 s at about
+  687 entities per second on 11-12, read-only against Postgres and geo-db (one card read per entity with relations), plus
+  `BACKFILL_PAUSE_MS` of 100 per batch. A dry run needs no stopped feeder. A real run needs the feeder at 0 for the
+  duration, so the feeder's consumer lag grows by that time and falls again after the start. With 796,288 records already held, a rerun
+  adds only `toSeed` new lines (at most 322 here), so the feeder's in-memory map and journal barely grow.
+- **Safe re-run, in this order.** First, a dry run with the feeder running: it answers whether any of the 322 is now open
+  (`toSeed` above 0) and, if `toSeed` is 0, nothing more is needed.
+
+```bash
+K="kubectl -n gaia"
+# 1. Move the finished cursor aside (a one-off pod on the feeder's node mounting geodb-feeder-state, see "Where the Job runs"):
+#    mv /data/feeder/relation-seed /data/feeder/relation-seed.done-20261112     # never rm: it is the proof of the first run
+# 2. dry run, feeder running; read "relation-seed done": alreadyRecorded should be about 796,288, notOpen at most 322, toSeed = newly open
+TAG=<the feeder tag deployed now>
+sed -e "s|geodb-feeder:latest|geodb-feeder:${TAG}|" -e "s|__DRY_RUN__|1|" \
+  geodb/k8s/v2/geodb-relation-seed-job.yaml | $K apply -f -
+$K logs -f job/geodb-relation-seed | grep '"relation-seed done"'
+$K delete job geodb-relation-seed
+# 3. only if toSeed > 0: scale the feeder to 0, wait for the group to empty (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder to 1.
+```
+
+**Not-open pass (`RELATION_SEED_NOT_OPEN_ONLY=1`).** Each full pass now appends the entities that had a not-open relation to
+`/data/feeder/relation-seed/not-open-<space>.txt`. With the env set to `"1"` the Job reads only those entities (seconds, not 269 s), keeps no
+cursor and so needs no move-aside, and records the ones geo-db has opened since. The 11-12 run predates the list, so one full pass with the
+cursor moved aside (above) is needed once to write it; after that the not-open pass is the cheap repeat. A move that arrives before a pass
+records its relation is still dropped (`relation-move-cell-unknown`), so run it before relying on moves of those relations.
+
+Do not restart `geodb` (serve) during either run (see "Where the Job runs").
+
+### 2b-quater-post. After the relation-seed: first post-roll readout (11-13)
+
+The feeder was rolled to `geodb-feeder:bdada8fb` after the seed. Read 2026-11-13 00:15Z to 00:16Z with read-only kubectl and
+the feeder's `/metrics` through the apiserver proxy (no Secret read; only plain `value:` env entries printed).
+
+| what | value |
+| -- | -- |
+| pod | `geodb-feeder-9858cb779-w75bl`, created 2026-11-12 22:35:59Z, age 99 min at the read, `restartCount` 0, memory 3308Mi, CPU 112m |
+| image | `geodb-feeder:bdada8fb` |
+| applied block | `geodb_feeder_last_applied_offset`: partition 0 = 98666, partition 1 = 41187 (edits topic `testnet.knowledge.edits`); 17 `applied-block` puts, all ok (`applied_block_puts_total{result="ok"}`) |
+| lag | `geodb_feeder_consumer_lag` 0 on both partitions; the membership, proposals, space-entities, votes, proposal-votes consumers also 0. `offset_gaps_total` 0. The last message finished at 23:48:42Z (a quiet topic: 17 edits in 99 min, not a stall) |
+| dead letters since the roll | `dead_letters_total{kind="intent"}` 192, `chunks_total{result="dead_letter"}` 192 (167 ok); per consumer: proposal-votes 1, proposal-versions 2, proposal-status 2, edit-meta 1 |
+| flags (plain values on the Deployment) | `GEODB_RELATION_POSITIONS` 1, `GEODB_RELATION_FACETS` 1, `GEODB_APPLIED_BLOCK` 1, `GEODB_ENTITY_TIMES` 1, `GEODB_EDIT_META` 1, `GEODB_RANKS` 1, `GEODB_RECORD_KEYS` 1, `GEODB_VOTES` 1, `GEODB_PROPOSAL_VOTES` 1, `GEODB_PROPOSAL_ACTIONS` 1, `GEODB_PROPOSAL_STATUS` 1, `GEODB_PROPOSAL_VERSIONS` 1, `GEODB_SUBSPACES` 1, `GEODB_SPACE_*` 1, `GEODB_MEMBERSHIP_DUAL_WRITE` 1, `GEODB_MEMBERSHIP_SHADOW_COMPARE` 1; `NODE_OPTIONS --max-old-space-size=6144`; memory request 3Gi, limit 7Gi |
+
+The feeder's log has no per-edit line for a relation position or facet; the first evidence is the `geodb_feeder_translate_total` counters
+since the roll: `createRelation` 2079, `relation-entity-claims` 2079, `relation-position-kept` 558 (positions written on the new
+relation's `add`), `relation-facet-claims` 26, `deleteRelation` 2227. Zero for `relation-position-moved`,
+`relation-move-cell-unknown` and `relation-position-update-dropped`: no position move of any relation has arrived yet, so
+the seeded records are not yet exercised. Log lines read: `state loaded` (22:36:44Z: 1602 spaces, 2,231,103 entities, 6,691,056
+statements, `hadOffsets` true), then each consumer's "running" line, two `founded space` lines, and a `membership shadow
+comparison` every 5 minutes: `compared` 862, `mismatched` 0, `errors` 0 through 00:11:51Z.
+
+Unexpected, to follow up:
+
+1. **192 intents dead-lettered, 23:01:33Z to 23:01:42Z**, all `error: Refused / connect: Refused` from geo-db ("intent refused by
+   geo-db, skipped"), on edit offsets 98656 and 98657 of partition 0 (146 of them) and offsets 172829 to 172833 (46; the
+   log line does not name the consumer) across 5 Spaces. A skipped intent is not retried, so those writes are missing from geo-db
+   until replayed. Follow-up: read `errors.jsonl` on the feeder's volume and replay the two edits with `geodb-replay-edit` (next
+   section). The `Refused` points at serve being unreachable at that moment.
+2. **`geodb-0` is 24 min old at the read (created 23:51:01Z), 0 restarts**: it was replaced about 50 min after the refusals, so serve
+   was down or being rolled around 23:01Z. Find who rolled it; the runbook says not to restart serve during a seed or a Job.
+3. **The heap does not match what the queue recorded for #1557**: the Deployment runs `--max-old-space-size=6144` with a 7Gi limit, not
+   3584 MB in 4Gi. Working set is 3308Mi, 47% of the limit. Check the manifest and the live Deployment agree (a patch not committed, or a later change).
+4. **Seed `withFacets` was 0**: none of the 796,288 older relations held a facet claim in geo-db, so no seeded record carries
+   facets. New relations do (26 facet claims since the roll). Confirm that is expected for relations that predate `GEODB_RELATION_FACETS`.
+5. **Position moves are unproven.** Re-read the counters after the first real position move arrives: `relation-position-moved` should rise and
+   `relation-move-cell-unknown` should stay near the 322 not-open relations, no more.
+
 ### 2b-quater. Replaying one dropped edit (`geodb-replay-edit`)
 
 When kg-indexer drops an edit (a statement timeout rolls the block back, a false `is_errored` in `ipfs_cache`), the
@@ -363,6 +463,80 @@ $K scale deployment/geodb-feeder --replicas=1
 Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
 The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
 under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
+
+### 2b-quater-replay. Replaying the 192 dead letters of 2026-11-12 23:01Z
+
+Read from `/data/feeder/errors.jsonl` on the feeder pod (`cat` only). The 192 intents of this event were dead-lettered while serve
+was unreachable. #1566 makes the feeder retry that class from now on; it does not replay what was already skipped. What the 192 are:
+
+| consumer | topic, partition 0, offsets | intents | what to replay with |
+| -- | -- | -- | -- |
+| edits consumer | `knowledge.edits` 98656, edit `742e60d91fc0490ea4cd3579bd19c72c`, Space `c9f267dcb0d270718c2a3c45a64afd32` | 140 | `geodb-replay-edit` |
+| edit-meta consumer | `knowledge.edits` 98657, the `edit_meta` records of the next edit | 6 | `geodb-replay-keyed --family edit-meta` |
+| proposal-status, -versions, -votes consumers | `space.governance` 172829 to 172833 (status 172829 and 172832, versions 172830 and 172833, votes 172831) | 46 | `geodb-replay-keyed --family governance` |
+
+Offsets 172829 to 172833 are not on `knowledge.edits` (its partition 0 ends near 98666): they are `space.governance`, which three keyed
+consumers read, each in its own group.
+
+**Why not rewind the consumer groups.** A keyed consumer keeps its own offset file on the state volume and skips every offset at or below
+its last done offset (`keyedBatchHandler`); a group rewind changes only Kafka's copy. The consumers would have to restart from a deleted
+offsets directory (`BACKFILL_KEYED_RESET_CONSUMER`), which replays the whole retained topic. The smaller path is `geodb-replay-keyed`
+(`geodb/k8s/v2/geodb-replay-keyed-job.yaml`, `replay-keyed-main.ts`): it reads just the named offsets with a throwaway group that commits
+nothing and runs them through the handlers (each ignores events that are not its own), moving no offset. Keyed records are written to ids
+fixed by their key, so a rerun is a no-op.
+
+**Edit 742e60d9** (read from the public testnet GraphQL, no Secret): `--uri ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg`
+(the PUBLISH action's contentUri of the proposal executed at that time),
+`--block 120865` and `--created-at 1794524471` (`editVersions`: block 120865, sequence 3, `2026-11-12T23:01:11Z`). The CID must still be checked against the payload: the dry run's `replay-edit plan` shows its op
+count (it should account for the 140 intents). The public mesh3 gateway answers 404 for this CID, so the Job reads the gateway from the same
+Secret reference hermes-ipfs-cache uses; no one reads the value. The Job manifest used to hardcode `GEODB_RELATION_POSITIONS=0` and
+omit `GEODB_RELATION_FACETS`; it now copies the live feeder (positions 1, facets 1), and `replay-edit-main.ts` passes `facets` to the
+translator as the live consumer does.
+
+Run in this order, from `geodb/k8s/v2` (`K="kubectl -n gaia"` in bash; zsh users write the command out):
+
+```bash
+# 0. Merge #1566 and the PR that added this section, deploy the feeder, and use the tag that deploy built.
+TAG=<geodb-feeder tag built from a main containing both>
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
+$K get deploy geodb-feeder -o jsonpath='{.spec.template.spec.containers[0].image}'   # = geodb-feeder:$TAG, pod Ready
+$K get pod -l app=geodb -o wide     # serve must be Ready and not rolling: a refusal here is the original failure
+$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l          # baseline line count; note it
+# baseline of geodb_feeder_dead_letters_total (apiserver proxy, as in 2b-quater-post); note it.
+
+# 1. Dry runs (the feeder keeps running; nothing is written).
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg|" \
+    -e "s|__SPACE__|c9f267dcb0d270718c2a3c45a64afd32|" -e "s|__BLOCK__|120865|" -e "s|__CREATED_AT__|1794524471|" \
+    -e "s|__MODE__|--dry-run|" geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit        # "replay-edit plan": conflicts 0 (a refusal: resolve by hand, section 2b-quater), then "dry-run"
+$K delete job geodb-replay-edit
+for fam in "governance 0 172829-172833" "edit-meta 0 98657"; do set -- $fam
+  sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" -e "s|__FAMILY__|$1|" \
+      -e "s|__PARTITION__|$2|" -e "s|__OFFSETS__|$3|" -e "s|__MODE__|--dry-run|" geodb-replay-keyed-job.yaml | $K apply -f -
+  $K logs -f job/geodb-replay-keyed      # one "replay-keyed message" per offset, with its event type, then "dry-run: nothing written"
+  $K delete job geodb-replay-keyed
+done
+
+# 2. Stop the feeder (the Jobs share its state volume).
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+
+# 3. Apply: the edit first, then the keyed families (same commands as step 1 with --apply instead of --dry-run).
+#    replay-edit logs "replay-edit applied" with deadLettered 0; replay-keyed logs "replay-keyed applied" with deadLettered 0.
+#    Delete each Job before the next apply.
+
+# 4. Start the feeder again.
+$K scale deployment/geodb-feeder --replicas=1
+
+# 5. Verify.
+#    - dead-letter delta 0: geodb_feeder_dead_letters_total at the baseline value after 10 minutes, and errors.jsonl line count unchanged
+#      (the replay Jobs' own dead letters would append: a growth means a refusal, read the new lines).
+#    - the entities edit 742e60d9 touches are in geo-db: rerun the geodb-replay-edit dry run (feeder running): "plan" shows
+#      absent 0 and conflicts 0 (every touched entity is held, its updatedAt equal to or newer than the edit's block time).
+#    - feeder lag still 0 on every consumer; no GeoDbFeederStalled alert.
+```
+
+If a replay Job fails midway, the feeder stays at 0 until its log is read: a rerun is safe.
 
 ### 2b-bis. Proposal system entities
 
@@ -1828,6 +2002,28 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceTopicsStalled` | `space.topics` lag above 0 and nothing handled by the space-topics consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-undecies) |
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederMemoryHeadroom` | the feeder container's working set over 90% of its memory limit for 15m (warning, never pages) | see "Feeder memory headroom" below |
+
+### Feeder memory headroom (GeoDbFeederMemoryHeadroom)
+
+The rule is `container_memory_working_set_bytes` (cAdvisor) divided by `kube_pod_container_resource_limits{resource="memory"}`
+(kube-state-metrics) for container `feeder` in pods `geodb-feeder-*`, above 0.9 for 15m. Severity is warning and the rule has no
+page route.
+
+- What to read: the ratio and the two series in Prometheus; `$K top pod -l app=geodb-feeder --containers`; the restart count and
+  last state (`OOMKilled`) from `$K get pod -l app=geodb-feeder -o wide` and `$K describe pod -l app=geodb-feeder`; the feeder log
+  for what it was doing (a relation seed, a large replay) and the dead-letter counter. The working set includes the Node heap, the
+  `geodb-client` child and page cache, so it can sit above the heap size.
+- Sizing history: #1551 set a 3584 MB heap (`--max-old-space-size=3584`) in a 4Gi limit; #1557 raised it to a 6144 MB heap in a
+  7Gi limit (request 3Gi) for the relation-seed journals, which is what `geodb/k8s/v2/geodb.yaml` and the live Deployment hold. Keep the
+  heap below the limit with room for the child process. The 90% line is therefore about 6.3 GiB against 7Gi.
+- What raising the limit touches: `resources.limits.memory` on the `feeder` container in `geodb/k8s/v2/geodb.yaml`, and the heap in
+  `NODE_OPTIONS` beside it (raise both together; the heap alone does not help). Applying it rolls the Deployment (strategy
+  `Recreate`: the feeder is down for the restart and resumes from `/data/feeder/offsets.json`), and the pod must still fit on its
+  node, so check the node's allocatable memory first. It does not touch serve (`geodb-0`) or the volume.
+- Never restart serve (`statefulset/geodb`, pod `geodb-0`) during a seed: the seed and replays write through it, and a restart
+  mid-seed drops the connection the feeder retries against and can leave the seed to be re-run. Restart or resize only the feeder, and
+  wait for a seed to finish first.
 
 ### serve's own metrics and the outbox mirror (geodb-serve-alerts.yaml)
 
@@ -1865,6 +2061,14 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
   so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
   configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
+- Applied-block holds (`GEODB_APPLIED_BLOCK`): a dead letter of the edits consumer (a refused intent, an undecodable
+  message, a `space_cap` edit) holds its partition in the `geodb-feeder-applied` row one block below the dead-lettered
+  edit's, so the row never claims rows the store lacks (log line "applied block held below a dead-lettered edit").
+  Holds persist in `/data/feeder/applied-holds.json` as `{"<partition>": <highest claimable block>}` and are never
+  released automatically: after a replay applies every dead-lettered edit of a partition, scale the feeder to 0,
+  remove that partition's key (or the file), and scale back to 1. A hold freezes the row's block, not the feeder.
+  Dead letters from before this existed are not held: edit 742e60d9 (partition 0, block 120865, 2026-11-12) needs
+  `{"0": 120864}` written into the file (`kubectl exec`) before the image with holds rolls out, or the row stays past it.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
   `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 

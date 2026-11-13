@@ -1,0 +1,92 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  - name: feeder memory headroom fires only after 15m over 90%
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="gaia", container="feeder", pod="geodb-feeder-abc"}'
+        values: '5000x10 6800x40'
+      - series: 'kube_pod_container_resource_limits{namespace="gaia", container="feeder", pod="geodb-feeder-abc", resource="memory"}'
+        values: '7000x50'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbFeederMemoryHeadroom, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbFeederMemoryHeadroom
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia, pod: geodb-feeder-abc}
+            exp_annotations:
+              summary: The geo-db feeder is using more than 90% of its memory limit
+              description: >-
+                The feeder container's working set has been over 90% of its limit for 15m, so an OOM kill (and a
+                restart that replays from the stored offset) is close. Read the working set against the limit and
+                the Node heap, then decide whether to raise the limit; see geodb/RUNBOOK.md section 6
+                (GeoDbFeederMemoryHeadroom). Never restart geodb-0 (serve) during a seed.
+
+  - name: a feeder under 90% stays silent
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="gaia", container="feeder", pod="geodb-feeder-abc"}'
+        values: '5000x60'
+      - series: 'kube_pod_container_resource_limits{namespace="gaia", container="feeder", pod="geodb-feeder-abc", resource="memory"}'
+        values: '7000x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbFeederMemoryHeadroom, exp_alerts: []}
+
+  - name: dead letters, no series at all stays silent
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="gaia", job="geodb-feeder"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+
+  - name: dead letters, a flat counter stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder", kind="message"}'
+        values: '4x90'
+    alert_rule_test:
+      - {eval_time: 80m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+
+  - name: dead letters, a burst on a counter that already existed fires and then clears
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder", kind="message"}'
+        values: '4x40 9x60'
+    alert_rule_test:
+      - {eval_time: 35m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+      - eval_time: 45m
+        alertname: GeoDbFeederDeadLetters
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia, kind: message}
+            exp_annotations:
+              summary: "The geo-db feeder skipped something (message)"
+              description: >-
+                kind message (intent = geo-db refused one write, message = a whole message was skipped,
+                space_cap = founding a Space hit the cap). A message could not be decoded or geo-db refused an intent for good; it is written to
+                /data/feeder/errors.jsonl and skipped. Read it with
+                kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
+                is a card that can differ in shadow mode.
+      - {eval_time: 90m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+
+  - name: dead letters, a burst from an absent series (first sample already 192) fires
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder", kind="intent"}'
+        values: '_x25 192x75'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbFeederDeadLetters
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia, kind: intent}
+            exp_annotations:
+              summary: "The geo-db feeder skipped something (intent)"
+              description: >-
+                kind intent (intent = geo-db refused one write, message = a whole message was skipped,
+                space_cap = founding a Space hit the cap). A message could not be decoded or geo-db refused an intent for good; it is written to
+                /data/feeder/errors.jsonl and skipped. Read it with
+                kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
+                is a card that can differ in shadow mode.
+      - {eval_time: 70m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
