@@ -9,6 +9,9 @@
  * Dry run unless --apply: it reads the messages and prints their event types; it writes nothing and needs no stopped
  * feeder. --apply writes geo-db and the feeder's state volume (system-space map), so the feeder must be scaled to 0:
  * it refuses while any feeder consumer group has members. It never reads or moves a consumer's offsets.
+ * Replay hazard (geo-db ISS-679-318): the keyed families here write add, set_active true and put only, none of which ends
+ * one of the six non-idempotent pairs; every document is still checked before it is sent and refused if it holds one
+ * (replayHazard.ts refusingHazardPairs), since no record says which keyed records already applied.
  * Exit 0: replayed with no dead letter. Exit 1: failed, or a handler dead-lettered (see errors.jsonl).
  * Env: the feeder's (Kafka, geodb-client, DATA_DIR, the GEODB_* flags, which must equal the live feeder's).
  */
@@ -25,6 +28,7 @@ import {handleProposalVersionMessage, proposalVersionsOffsetsDir} from "./propos
 import {handleProposalVoteMessage, proposalVotesOffsetsDir} from "./proposalVotesKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
+import {refusingHazardPairs} from "./replayHazard.js"
 import {type ReplayHandler, type ReplayMessage, describeMessage, parseRange, replayKeyedMessages} from "./replayKeyed.js"
 import {readSealer} from "./spaces.js"
 import {Store} from "./state.js"
@@ -110,7 +114,10 @@ async function main(): Promise<void> {
 	const messages = await readRange(kafka, topic, args.partition, args.from, args.to)
 	for (const m of messages) log("info", "replay-keyed message", describeMessage(m))
 	if (!args.apply) {
-		log("info", "replay-keyed dry-run: nothing written", {messages: messages.length})
+		log("info", "replay-keyed dry-run: nothing written", {
+			messages: messages.length,
+			hazard: "ISS-679-318: these families write add/set_active/put only, so no chunk can hold one of the six pairs; --apply refuses any chunk that does",
+		})
 		return
 	}
 	if (config.recordKeys !== true) throw new Error("GEODB_RECORD_KEYS=1 is required, as for the live feeder")
@@ -131,6 +138,7 @@ async function main(): Promise<void> {
 		{runDir: config.runDir},
 		spawnRunner({clientBin: config.clientBin, keyPath: config.keyPath, bindingPath: config.bindingPath, cwd: config.runDir}),
 	)
+	db.apply = refusingHazardPairs(db.apply.bind(db))
 	const systemSpaces = new SystemSpaces(`${config.dataDir}/feeder`)
 	const systemPublisher = new SpaceMapPublisher(config.systemSpaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics, SYSTEM_SPACE_MAP_KEY)
 	systemPublisher.start()

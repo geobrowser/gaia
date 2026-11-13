@@ -2,17 +2,20 @@
 # (plan 22 section 21 row B1; the geo-db twin of kg-indexer's `replay_edit`, with `check_replay_safety` built in).
 # Same image, volume, keys and guards as geodb-held-repair-job.yaml. It fetches the payload from the IPFS gateway,
 # translates it as the live consumer does, and REFUSES (exit 2) when any entity the edit touches already holds an
-# `updatedAt` newer than the edit's block time, or holds none it can read. It reads and writes no Postgres and needs
+# `updatedAt` newer than the edit's block time, or holds none it can read; and when a chunk that already applied holds
+# one of geo-db ISS-679-318's six non-idempotent intent pairs (applied = not in the feeder's errors.jsonl for `--edit`;
+# see geodb-feeder/src/replayHazard.ts). It reads and writes no Postgres and needs
 # no Kafka. See geodb/RUNBOOK.md §2b-quater and geodb-feeder/src/replayEdit.ts.
 #
 # NOT in deploy-v2: it runs by hand. The first run is a dry run (it needs no stopped feeder); `--apply` needs the
 # feeder scaled to 0, because the Job mounts the feeder's RWO state volume and writes its journals. Placeholders are
 # replaced at run time and the Job refuses to start if one is left in:
 #   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
-#       -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__MODE__|--dry-run|" \
+#       -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__EDIT__|<edit id>|" -e "s|__MODE__|--dry-run|" \
 #       geodb-replay-edit-job.yaml | kubectl apply -f -
-# Delete the Job before applying it again: a Job's pod template is immutable. A rerun of an applied edit is a no-op
-# (equal updatedAt passes the check, and each chunk is sent under an idempotency key).
+# Delete the Job before applying it again: a Job's pod template is immutable. A rerun of an applied edit is NOT always
+# a no-op: its chunks go under a fresh idempotency key, and a chunk holding an ISS-679-318 pair changes visible state on
+# a second apply. The Job refuses such a chunk (dry run included); chunks without a pair are idempotent.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -103,7 +106,7 @@ spec:
           image: registry.digitalocean.com/geo/geodb-feeder:latest
           imagePullPolicy: Always
           command: ["node", "dist/replay-edit-main.js"]
-          args: ["--uri", "__URI__", "--space", "__SPACE__", "--block", "__BLOCK__", "--created-at", "__CREATED_AT__", "__MODE__"]
+          args: ["--uri", "__URI__", "--space", "__SPACE__", "--block", "__BLOCK__", "--created-at", "__CREATED_AT__", "--edit", "__EDIT__", "__MODE__"]
           ports:
             - name: metrics
               containerPort: 9090
