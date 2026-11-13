@@ -377,6 +377,12 @@ $K delete job geodb-relation-seed
 # 3. only if toSeed > 0: scale the feeder to 0, wait for the group to empty (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder to 1.
 ```
 
+**Not-open pass (`RELATION_SEED_NOT_OPEN_ONLY=1`).** Each full pass now appends the entities that had a not-open relation to
+`/data/feeder/relation-seed/not-open-<space>.txt`. With the env set to `"1"` the Job reads only those entities (seconds, not 269 s), keeps no
+cursor and so needs no move-aside, and records the ones geo-db has opened since. The 11-12 run predates the list, so one full pass with the
+cursor moved aside (above) is needed once to write it; after that the not-open pass is the cheap repeat. A move that arrives before a pass
+records its relation is still dropped (`relation-move-cell-unknown`), so run it before relying on moves of those relations.
+
 Do not restart `geodb` (serve) during either run (see "Where the Job runs").
 
 ### 2b-quater-post. After the relation-seed: first post-roll readout (11-13)

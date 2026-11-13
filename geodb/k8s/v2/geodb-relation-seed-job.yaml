@@ -118,6 +118,10 @@ spec:
               value: "100"
             - name: BACKFILL_PAUSE_MS
               value: "100"
+            # "1": visit only the entities an earlier run listed as having a not-open relation (relation-seed/not-open-<space>.txt).
+            # No cursor, so it can be repeated. A run before this flag existed left no list; one full pass writes it.
+            - name: RELATION_SEED_NOT_OPEN_ONLY
+              value: "0"
             # 0 = no limit. Set it for a staged first run.
             - name: BACKFILL_MAX_ENTITIES
               value: "0"
