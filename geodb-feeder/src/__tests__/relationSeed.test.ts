@@ -149,6 +149,34 @@ describe("runRelationSeed", () => {
 		expect(r.intents[1]).toContain(`.statement = "${replacement}"`)
 	})
 
+	it("a later not-open pass records a relation geo-db has opened since, reading only the entities that had one", async () => {
+		const s = store()
+		await runRelationSeed(mk(s, world()), OPTS)
+		expect(s.relationOf(sidOf(3))).toBeUndefined()
+		// geo-db applies relation 3's createRelation afterwards
+		const later = world()
+		geoRows.set(cid("entity", hex(2)), [row(3, 2), row(4, 2)])
+		try {
+			const fresh = new Store(s.dir)
+			const stats = await runRelationSeed(mk(fresh, later), {...OPTS, notOpenOnly: true})
+			// only entity 2 (which held relation 3) is read, and the cursor of the full run is untouched
+			expect(later.reads).toEqual([`${GEO}|${cid("entity", hex(2))}`])
+			expect(stats).toMatchObject({entities: 1, relations: 2, alreadyRecorded: 1, notOpen: 0, toSeed: 1, seeded: 1})
+			expect(fresh.relationOf(sidOf(3))).toEqual({from: cid("entity", hex(2)), prop: typ, current: sidOf(3)})
+			// the pass keeps no cursor, so it can run again; the second finds nothing new
+			const again = await runRelationSeed(mk(new Store(s.dir), world()), {...OPTS, notOpenOnly: true})
+			expect(again).toMatchObject({entities: 1, alreadyRecorded: 2, toSeed: 0})
+		} finally {
+			geoRows.set(cid("entity", hex(2)), [row(4, 2)])
+		}
+	})
+
+	it("the not-open pass does nothing for a Space whose first run left no list", async () => {
+		const s = store()
+		const stats = await runRelationSeed(mk(s, world()), {...OPTS, notOpenOnly: true})
+		expect(stats).toMatchObject({entities: 0, toSeed: 0})
+	})
+
 	it("stops at the entity limit and resumes from the cursor", async () => {
 		const s = store()
 		const first = await runRelationSeed(mk(s, world()), {...OPTS, batch: 1, maxEntities: 1})

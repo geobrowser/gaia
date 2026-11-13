@@ -53,6 +53,7 @@ async function main(): Promise<void> {
 				payload,
 				chunk: config.chunk,
 				positions: config.relationPositions,
+				facets: config.relationFacets,
 				entityTimes: config.entityTimes,
 				legacyMap: config.legacyIdMap,
 				allowPut: config.recordKeys,

@@ -94,6 +94,176 @@ The first start founds one geo-db Space per gaia Space, online over the wire (`g
 serve is never restarted for it, but a long topic with many Spaces still takes a while before the lag
 falls. That is normal; `geodb_feeder_spaces` rises, then `geodb_feeder_consumer_lag` falls.
 
+### 1b. Deploy window of 11-13: #1566, the geodb pin, #1567, the alerts
+
+Ordered steps for the next window. Read-only checks use `K="kubectl -n gaia"` (bash; in zsh write it out); kubectl against these
+clusters is flaky, so retry a failed read two or three times before treating it as real. Nothing here reads a Secret.
+
+**State read 11-13 (before the window):**
+
+| thing | state |
+| -- | -- |
+| live `sts/geodb` serve | `geodb:8050918d2f`. Serve has never been rolled to the 2103bd8335 pin: #1569 only changed manifests. |
+| live `deploy/geodb-feeder` | `geodb-feeder:bdada8fb` (`geodb-card-replay` runs `geodb-feeder:edc7e8a4`) |
+| live `deploy/api` | `api:3a9ae1a1` |
+| #1565 (feeder memory alert) | merged |
+| #1569 (pin 2103bd8335) | merged, superseded by #1571 |
+| #1566 (feeder retries `connect: Refused`) | **unmerged**, head 2c1691ec74 |
+| #1567 (relation-seed not-open pass) | **unmerged**, head a8943b0854; it also edits this file (§2b-quater), expect a trivial rebase |
+| #1570 (replay prep, adds §2b-quater-replay) | **unmerged** |
+| #1571 (pin 37 manifests to geodb:8cba4da996) | **unmerged**, head a2a182a93e. Use this, not #1569. |
+| #1572 (claim alerts, in `geodb-serve-alerts.yaml`) | **unmerged**, head bd99723528 |
+| #1573 (dead-letter alert by kind) | **unmerged**, head 9d0e64a1d7 |
+
+**What the 8cba4da996 image carries over 8050918d2f** (`git log 8050918d2f..8cba4da996` in geo-db, read only): claim-region counters on
+serve's `/metrics` (`geodb_claims_in_use`, `geodb_claims_in_use_max`, `geodb_claims_refused_total`, each by `claim_class`); a card's
+positions looked up by statement id, so a cell over 512 statements pages (positionsOf over 512); the reactor parked-list fix
+(ISS-678-305: a record that ends while parked leaves the list, so reuse cannot cut the chain); an `inline_reads` key in `serve.cfg`
+(ISS-551-682, **off when the file does not name it**; the live `geodb-serve-config` does not); a token-dictionary builder that no read
+path uses. A `listen_before_open` switch was expected here and is **not** in that range (it appears only in later geo-db docs, no code);
+do not look for it, and read nothing about it from this window.
+
+**No read cutover.** Nothing in this window flips any `*_SERVE` flag, `GEODB_SCORES_SERVE`, `DELIVERY_WORKER_CLAIM_SOURCE=geodb`, any
+serve-mode, `GRAPHQL_GATEWAY_FIELDS=on`, `PROPOSAL_EXECUTED_AT_FROM_GEODB`, `NOTIFICATION_INDEXER_GEODB_VOTE_UPDATES` or `inline_reads`
+(do not add it to `serve.cfg`). Every step below changes an image tag or applies an alert rule, nothing else. If a check shows one of
+those values different from what it showed before the step, stop.
+
+**Do not use `deploy-v2.yml` for either roll in this window.** Since #1579, `service=geodb-feeder` applies `geodb-feeder.yaml`,
+`geodb-card-replay.yaml` and `geodb-snapshot.yaml` and no longer touches serve, and `service=geodb-serve` applies `geodb.yaml`; both still
+rewrite env and ConfigMap values the live objects may have drifted from. Never apply `geodb.yaml` whole in this window. Both rolls below are
+`set image` on one container.
+
+**The feeder is scaled or paused only as §2b-quater-replay says** (merge #1570 first; until it is merged, as the "Where the Job runs"
+and §2b-ter stop procedure says). Steps 1 and 2 never scale it: `set image` restarts its one pod and nothing more. Step 3's dry runs
+keep it running.
+
+Baseline, before step 1 (note the values):
+
+```bash
+$K get deploy geodb-feeder -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'     # geodb-feeder:bdada8fb
+$K get sts geodb -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'               # geodb:8050918d2f
+$K get pod -l app=geodb -o wide; $K get pod -l app=geodb-feeder -o wide                       # both Ready
+# the dead-letter counter, through the apiserver proxy to the feeder's metrics port
+$K get --raw "/api/v1/namespaces/gaia/services/geodb-feeder:9090/proxy/metrics" | grep -E '^geodb_feeder_dead_letters_total'
+$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l                          # cat only; the 192 of 11-12 are already in it
+# the flags that must not move: print the plain-value env of the feeder and serve's config, compare after each step
+$K get deploy geodb-feeder -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' | sort > /tmp/feeder-env.before
+$K get cm geodb-serve-config -o jsonpath='{.data.serve\.cfg}'                                  # no inline_reads line
+```
+
+#### Step 1. #1566: the feeder retries `connect: Refused`
+
+1. Merge #1566 (and #1570, so the replay section is in the runbook). Manual dispatches, in order, from `main`:
+
+```bash
+gh workflow run build-v2-images.yml --ref main -f service=geodb-feeder        # prints the 8-char TAG
+gh run list --workflow=build-v2-images.yml --limit 1                          # wait for success
+TAG=<the 8-char sha of that run>
+doctl registry repository list-tags geodb-feeder | awk -v t="$TAG" '$1==t'   # the tag exists
+$K set image deploy/geodb-feeder feeder=registry.digitalocean.com/geo/geodb-feeder:$TAG
+$K rollout status deploy/geodb-feeder --timeout=300s
+```
+
+2. Proof it is live (read only):
+
+```bash
+$K get deploy geodb-feeder -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'        # geodb-feeder:$TAG
+$K get pod -l app=geodb-feeder -o jsonpath='{.items[*].status.containerStatuses[0].imageID}{"\n"}'  # sha256 digest of that tag; note it
+$K get pod -l app=geodb-feeder                                                                  # 1/1 Running, restarts 0
+$K logs deploy/geodb-feeder --tail=30                                                           # "applied" lines, no "dead letter"
+# dead-letter delta 0 after 10 minutes: the counter equals the baseline, errors.jsonl has the baseline line count
+$K get --raw "/api/v1/namespaces/gaia/services/geodb-feeder:9090/proxy/metrics" | grep -E '^geodb_feeder_dead_letters_total|consumer_lag'
+# env unchanged: rebuild /tmp/feeder-env.after the same way and diff it against .before (empty diff)
+```
+
+   The counter is per process: a restart zeroes it, so the baseline is the value in the new pod 10 minutes after its first
+   `applied`, and the delta is measured from there. `errors.jsonl` is on the volume and survives, so its line count is the
+   cross-restart check.
+
+3. Rollback: `$K set image deploy/geodb-feeder feeder=registry.digitalocean.com/geo/geodb-feeder:bdada8fb` and `rollout status`.
+   Only the image changed, so this is the whole undo. Rolling it back means a serve restart dead-letters again (the 11-12 failure),
+   so do not roll back and then do step 2 without a replacement.
+
+4. Do not go to step 2 until the feeder is Ready on the new tag with lag 0 on every consumer.
+
+#### Step 2. The geodb pin: serve to `geodb:8cba4da996` (#1571)
+
+Use #1571. #1569's 2103bd8335 is merged but is not what this window rolls to, and serve has never run it.
+
+1. Merge #1571. The image already exists (its build run 43338886032 is green); check, do not rebuild:
+
+```bash
+doctl registry repository list-tags geodb | awk '$1=="8cba4da996"'                 # present
+# only if absent: gh workflow run build-geodb-image.yml --ref main -f geodb_ref=8cba4da996   (~1 h of compile)
+```
+
+2. The roll, serve alone, once the feeder from step 1 is Ready. Serve restarts once; its pod is the only thing the command touches:
+
+```bash
+$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:8cba4da996
+$K rollout status sts/geodb --timeout=900s
+```
+
+   While serve is down the feeder retries (step 1) instead of dead-lettering; expect `GeoDbFeederStalled` or lag to rise during the
+   restart and fall after. Do not scale the feeder for this.
+
+3. Proof it is live (read only):
+
+```bash
+$K get sts geodb -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'               # geodb:8cba4da996
+$K get pod geodb-0 -o jsonpath='{.status.containerStatuses[0].imageID}{" "}{.status.containerStatuses[0].restartCount}{"\n"}'  # digest; note it
+$K get pod geodb-0                                                                           # 1/1 Running
+$K get cm geodb-serve-config -o jsonpath='{.data.serve\.cfg}'                                 # byte-identical to the baseline: still no inline_reads
+# claim counters now on serve's /metrics (they did not exist on 8050918d2f):
+$K get --raw "/api/v1/namespaces/gaia/services/geodb:9091/proxy/metrics" | grep -E '^geodb_claims_(in_use|in_use_max|refused_total)'
+#   expect the three names, geodb_claims_in_use 0 at idle, geodb_claims_refused_total 0
+# the dead-letter delta across the roll is 0, and the feeder lag returns to 0 on every consumer:
+$K get --raw "/api/v1/namespaces/gaia/services/geodb-feeder:9090/proxy/metrics" | grep -E '^geodb_feeder_dead_letters_total|consumer_lag'
+$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l                          # unchanged
+# a card read through the api still answers (as in section 1): the api binding is untouched
+```
+
+   Do not `rollout restart` the api for this: the api's init container reads `node-id` from `geodb-space-map`, which a serve restart
+   does not change.
+
+4. Rollback: `$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:8050918d2f`, then `rollout status`. The store format
+   did not change in the range, so the older binary reopens it. Also revert #1571 in git so the manifests match what runs.
+
+5. Jobs and CronJobs that #1571 repoints (backfill, held-repair, relation-seed, replay-edit, times-backfill, the ranking and scoring
+   CronJobs, and the Deployments that carry the pinned tag) take the new tag the next time each is applied from its own workflow.
+   That is not part of this window and flips nothing.
+
+#### Step 3. #1567: the not-open pass, and its first run
+
+1. Merge #1567, then redo step 1's build and `set image deploy/geodb-feeder` with a feeder built from the new `main` (the Job uses the
+   feeder image). Same proof and rollback as step 1. The dead-letter replay of §2b-quater-replay runs on the same image, so do the
+   replay after this deploy and not before, and scale the feeder only as that section says.
+2. The first run is a full relation-seed pass with the finished cursor moved aside, because the 11-12 run left no not-open list.
+   Follow §2b-quater ("Record of the testnet run" and the move-aside steps): the pass writes
+   `/data/feeder/relation-seed/not-open-<space>.txt`; dry run first with the feeder running, and stop the feeder only if `toSeed > 0`,
+   as that section says. Then the cheap repeat is `RELATION_SEED_NOT_OPEN_ONLY` -> `"1"` in the Job manifest.
+3. Proof it ran (read only): the Job log's `relation-seed done` line with `alreadyRecorded` about 796,288, `notOpen` at most 322, and
+   the `not-open-<space>.txt` files present (`$K exec` into a pod on the feeder's node, `ls` only); the dead-letter counter delta is 0
+   and `errors.jsonl` line count is unchanged; the flags in `/tmp/feeder-env` are unchanged.
+4. Rollback: the pass writes only records for relations that already exist (a rerun is a no-op). Delete the Job, put the cursor back
+   (`mv relation-seed.done-... relation-seed`) if it was moved, and set the feeder image back as in step 1.
+
+#### Alerts, in the same window
+
+Apply after step 2, because the claim series only exist once serve runs 8cba4da996. Dry-run each on the server first; the rules are
+PrometheusRules and change no workload.
+
+```bash
+$K apply --dry-run=server -f monitoring/k8s/v2/geodb-feeder-alerts.yaml -f monitoring/k8s/v2/geodb-serve-alerts.yaml
+$K apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml     # #1565 (merged) and #1573 once it is merged
+$K apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml      # the claim alerts of #1572 once it is merged
+$K get prometheusrule -o name | grep -i geodb              # the rules are present
+```
+
+The claim alerts are `GeoDbClaimsNearPeak`, `GeoDbClaimsRefused` and `GeoDbClaimParkedSustained`. Check they are quiet 30 minutes after
+step 2 (`ALERTS{alertname=~"GeoDbClaim.*"}` through the Prometheus proxy, as in section 12). `apply -f` of these two files is the only
+`apply` in the window. Rollback: `$K delete -f` the file, or apply the previous version of it from git.
+
 ## 2. Turn on shadow mode
 
 Shadow answers every card from Postgres and compares with geo-db in the background; users see no change.
@@ -381,6 +551,12 @@ $K delete job geodb-relation-seed
 # 3. only if toSeed > 0: scale the feeder to 0, wait for the group to empty (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder to 1.
 ```
 
+**Not-open pass (`RELATION_SEED_NOT_OPEN_ONLY=1`).** Each full pass now appends the entities that had a not-open relation to
+`/data/feeder/relation-seed/not-open-<space>.txt`. With the env set to `"1"` the Job reads only those entities (seconds, not 269 s), keeps no
+cursor and so needs no move-aside, and records the ones geo-db has opened since. The 11-12 run predates the list, so one full pass with the
+cursor moved aside (above) is needed once to write it; after that the not-open pass is the cheap repeat. A move that arrives before a pass
+records its relation is still dropped (`relation-move-cell-unknown`), so run it before relying on moves of those relations.
+
 Do not restart `geodb` (serve) during either run (see "Where the Job runs").
 
 ### 2b-quater-post. After the relation-seed: first post-roll readout (11-13)
@@ -461,6 +637,80 @@ $K scale deployment/geodb-feeder --replicas=1
 Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
 The Job's `GEODB_*` flags copy `geodb-feeder.yaml`'s; change them together. The `updatedAt` it compares is the row written
 under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
+
+### 2b-quater-replay. Replaying the 192 dead letters of 2026-11-12 23:01Z
+
+Read from `/data/feeder/errors.jsonl` on the feeder pod (`cat` only). The 192 intents of this event were dead-lettered while serve
+was unreachable. #1566 makes the feeder retry that class from now on; it does not replay what was already skipped. What the 192 are:
+
+| consumer | topic, partition 0, offsets | intents | what to replay with |
+| -- | -- | -- | -- |
+| edits consumer | `knowledge.edits` 98656, edit `742e60d91fc0490ea4cd3579bd19c72c`, Space `c9f267dcb0d270718c2a3c45a64afd32` | 140 | `geodb-replay-edit` |
+| edit-meta consumer | `knowledge.edits` 98657, the `edit_meta` records of the next edit | 6 | `geodb-replay-keyed --family edit-meta` |
+| proposal-status, -versions, -votes consumers | `space.governance` 172829 to 172833 (status 172829 and 172832, versions 172830 and 172833, votes 172831) | 46 | `geodb-replay-keyed --family governance` |
+
+Offsets 172829 to 172833 are not on `knowledge.edits` (its partition 0 ends near 98666): they are `space.governance`, which three keyed
+consumers read, each in its own group.
+
+**Why not rewind the consumer groups.** A keyed consumer keeps its own offset file on the state volume and skips every offset at or below
+its last done offset (`keyedBatchHandler`); a group rewind changes only Kafka's copy. The consumers would have to restart from a deleted
+offsets directory (`BACKFILL_KEYED_RESET_CONSUMER`), which replays the whole retained topic. The smaller path is `geodb-replay-keyed`
+(`geodb/k8s/v2/geodb-replay-keyed-job.yaml`, `replay-keyed-main.ts`): it reads just the named offsets with a throwaway group that commits
+nothing and runs them through the handlers (each ignores events that are not its own), moving no offset. Keyed records are written to ids
+fixed by their key, so a rerun is a no-op.
+
+**Edit 742e60d9** (read from the public testnet GraphQL, no Secret): `--uri ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg`
+(the PUBLISH action's contentUri of the proposal executed at that time),
+`--block 120865` and `--created-at 1794524471` (`editVersions`: block 120865, sequence 3, `2026-11-12T23:01:11Z`). The CID must still be checked against the payload: the dry run's `replay-edit plan` shows its op
+count (it should account for the 140 intents). The public mesh3 gateway answers 404 for this CID, so the Job reads the gateway from the same
+Secret reference hermes-ipfs-cache uses; no one reads the value. The Job manifest used to hardcode `GEODB_RELATION_POSITIONS=0` and
+omit `GEODB_RELATION_FACETS`; it now copies the live feeder (positions 1, facets 1), and `replay-edit-main.ts` passes `facets` to the
+translator as the live consumer does.
+
+Run in this order, from `geodb/k8s/v2` (`K="kubectl -n gaia"` in bash; zsh users write the command out):
+
+```bash
+# 0. Merge #1566 and the PR that added this section, deploy the feeder, and use the tag that deploy built.
+TAG=<geodb-feeder tag built from a main containing both>
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
+$K get deploy geodb-feeder -o jsonpath='{.spec.template.spec.containers[0].image}'   # = geodb-feeder:$TAG, pod Ready
+$K get pod -l app=geodb -o wide     # serve must be Ready and not rolling: a refusal here is the original failure
+$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l          # baseline line count; note it
+# baseline of geodb_feeder_dead_letters_total (apiserver proxy, as in 2b-quater-post); note it.
+
+# 1. Dry runs (the feeder keeps running; nothing is written).
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg|" \
+    -e "s|__SPACE__|c9f267dcb0d270718c2a3c45a64afd32|" -e "s|__BLOCK__|120865|" -e "s|__CREATED_AT__|1794524471|" \
+    -e "s|__MODE__|--dry-run|" geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit        # "replay-edit plan": conflicts 0 (a refusal: resolve by hand, section 2b-quater), then "dry-run"
+$K delete job geodb-replay-edit
+for fam in "governance 0 172829-172833" "edit-meta 0 98657"; do set -- $fam
+  sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" -e "s|__FAMILY__|$1|" \
+      -e "s|__PARTITION__|$2|" -e "s|__OFFSETS__|$3|" -e "s|__MODE__|--dry-run|" geodb-replay-keyed-job.yaml | $K apply -f -
+  $K logs -f job/geodb-replay-keyed      # one "replay-keyed message" per offset, with its event type, then "dry-run: nothing written"
+  $K delete job geodb-replay-keyed
+done
+
+# 2. Stop the feeder (the Jobs share its state volume).
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+
+# 3. Apply: the edit first, then the keyed families (same commands as step 1 with --apply instead of --dry-run).
+#    replay-edit logs "replay-edit applied" with deadLettered 0; replay-keyed logs "replay-keyed applied" with deadLettered 0.
+#    Delete each Job before the next apply.
+
+# 4. Start the feeder again.
+$K scale deployment/geodb-feeder --replicas=1
+
+# 5. Verify.
+#    - dead-letter delta 0: geodb_feeder_dead_letters_total at the baseline value after 10 minutes, and errors.jsonl line count unchanged
+#      (the replay Jobs' own dead letters would append: a growth means a refusal, read the new lines).
+#    - the entities edit 742e60d9 touches are in geo-db: rerun the geodb-replay-edit dry run (feeder running): "plan" shows
+#      absent 0 and conflicts 0 (every touched entity is held, its updatedAt equal to or newer than the edit's block time).
+#    - feeder lag still 0 on every consumer; no GeoDbFeederStalled alert.
+```
+
+If a replay Job fails midway, the feeder stays at 0 until its log is read: a rerun is safe.
 
 ### 2b-bis. Proposal system entities
 
@@ -1985,8 +2235,16 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
   so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
   configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
-- Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml`, the feeder's init container pin in
-  `geodb/k8s/v2/geodb-feeder.yaml` and `api/k8s/v2/api.yaml` together, and redeploy (`geodb-serve`, then `geodb-feeder`). Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
+- Applied-block holds (`GEODB_APPLIED_BLOCK`): a dead letter of the edits consumer (a refused intent, an undecodable
+  message, a `space_cap` edit) holds its partition in the `geodb-feeder-applied` row one block below the dead-lettered
+  edit's, so the row never claims rows the store lacks (log line "applied block held below a dead-lettered edit").
+  Holds persist in `/data/feeder/applied-holds.json` as `{"<partition>": <highest claimable block>}` and are never
+  released automatically: after a replay applies every dead-lettered edit of a partition, scale the feeder to 0,
+  remove that partition's key (or the file), and scale back to 1. A hold freezes the row's block, not the feeder.
+  Dead letters from before this existed are not held: edit 742e60d9 (partition 0, block 120865, 2026-11-12) needs
+  `{"0": 120864}` written into the file (`kubectl exec`) before the image with holds rolls out, or the row stays past it.
+- Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
+  `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 
 ## 8. Migrating the store across a persistent cut
 

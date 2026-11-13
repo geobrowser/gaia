@@ -22,7 +22,7 @@
  * position, geo-db the old one, and the card read does not return positions, so this pass cannot tell which relations
  * differ. See the PR for the read that would let a later pass repair them.
  */
-import {existsSync, mkdirSync, readFileSync} from "node:fs"
+import {appendFileSync, existsSync, mkdirSync, readFileSync} from "node:fs"
 import type {RelationReader, GeoDbClaimRow} from "./geodbPipe.js"
 import {cid} from "./ids.js"
 import {log} from "./log.js"
@@ -38,6 +38,12 @@ export type RelationSeedOptions = {
 	/** Stop after this many entities this run (0: no limit). */
 	maxEntities: number
 	dryRun: boolean
+	/**
+	 * Visit only the entities an earlier run found a not-open relation on (`relation-seed/not-open-<space>.txt`), so a
+	 * later pass records the ones geo-db has opened since. Keeps no cursor of its own, so it can be run again as often as
+	 * wanted; the list is small. A Space with no list is skipped.
+	 */
+	notOpenOnly?: boolean
 }
 
 export type RelationSeedDeps = {
@@ -88,19 +94,30 @@ class SeedState {
 	constructor(
 		store: Store,
 		private readonly persist: boolean,
+		private readonly notOpenOnly = false,
 	) {
 		this.dir = `${store.dir}/relation-seed`
 		if (persist) mkdirSync(this.dir, {recursive: true})
 		const path = `${this.dir}/cursor.json`
-		this.cursor = existsSync(path) ? {done: {}, inflight: null, ...JSON.parse(readFileSync(path, "utf8"))} : {done: {}, inflight: null}
+		// The not-open pass keeps no cursor: it reads a small list and is safe to repeat.
+		this.cursor = !notOpenOnly && existsSync(path) ? {done: {}, inflight: null, ...JSON.parse(readFileSync(path, "utf8"))} : {done: {}, inflight: null}
+	}
+
+	/** Remember an entity with a not-open relation, for a later `notOpenOnly` pass. */
+	noteNotOpen(space: string, entities: string[]): void {
+		if (this.persist && !this.notOpenOnly && entities.length > 0) appendFileSync(`${this.dir}/not-open-${space}.txt`, entities.map((e) => `${e}\n`).join(""))
 	}
 
 	save(): void {
-		if (this.persist) writeFileDurable(`${this.dir}/cursor.json`, JSON.stringify(this.cursor))
+		if (this.persist && !this.notOpenOnly) writeFileDurable(`${this.dir}/cursor.json`, JSON.stringify(this.cursor))
 	}
 
 	/** A Space's entity list, taken once and kept, so the cursor indexes the same list on every rerun. */
 	async entities(space: string, fresh: () => Promise<string[]>): Promise<string[]> {
+		if (this.notOpenOnly) {
+			const list = `${this.dir}/not-open-${space}.txt`
+			return existsSync(list) ? [...new Set(readFileSync(list, "utf8").split("\n").filter(Boolean))] : []
+		}
 		const path = `${this.dir}/entities-${space}.txt`
 		if (existsSync(path)) return readFileSync(path, "utf8").split("\n").filter(Boolean)
 		const ids = await fresh()
@@ -145,7 +162,7 @@ async function readClaims(reader: RelationReader, geoSpace: string, entity: stri
 
 export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeedOptions): Promise<RelationSeedStats> {
 	const sleep = deps.sleep ?? defaultSleep
-	const state = new SeedState(deps.store, !opts.dryRun)
+	const state = new SeedState(deps.store, !opts.dryRun, opts.notOpenOnly ?? false)
 	const stats: RelationSeedStats = {
 		dryRun: opts.dryRun,
 		spaces: 0,
@@ -225,6 +242,7 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 			}
 			const records = new Map<string, RelationRecord>()
 			const statements: string[] = []
+			const notOpenEntities: string[] = []
 			for (const entity of batchIds) {
 				const k = compactId(entity)
 				const rels = relsBy.get(k) ?? []
@@ -233,6 +251,7 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 				const e = cid("entity", k)
 				const rows = await readClaims(deps.reader, geo, e, sleep)
 				const open = new Set(rows.map((r) => r.statement))
+				let anyNotOpen = false
 				for (const r of rels) {
 					stats.relations++
 					const sid = cid("statement", compactId(r.id))
@@ -242,6 +261,7 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 					}
 					if (!open.has(sid)) {
 						stats.notOpen++
+						anyNotOpen = true
 						continue
 					}
 					const held = facetsOf(rows, sid, () => void stats.facetsUnreadable++)
@@ -252,7 +272,9 @@ export async function runRelationSeed(deps: RelationSeedDeps, opts: RelationSeed
 						stats.statementsMarked++
 					}
 				}
+				if (anyNotOpen) notOpenEntities.push(entity)
 			}
+			state.noteNotOpen(space, notOpenEntities)
 			stats.toSeed += records.size
 			if (!opts.dryRun) {
 				// The journals are the feeder's own files; the feeder is stopped (see the Job), so nothing else appends.

@@ -169,7 +169,7 @@ spec:
         - name: serve
           # By tag again, like every other geodb pin. 8050918d2f is a new tag (67b6974a5e was rebuilt in place on 11-12 and
           # was pinned by digest while it was live); never rebuild a tag that is deployed, build a new one.
-          image: registry.digitalocean.com/geo/geodb:2103bd8335
+          image: registry.digitalocean.com/geo/geodb:8cba4da996
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
