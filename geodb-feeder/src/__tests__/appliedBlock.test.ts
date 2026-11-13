@@ -38,6 +38,30 @@ describe("applied block watermark", () => {
 		expect(t.watermark()).toBe(7)
 	})
 
+	it("a hold caps its partition one below the dead-lettered block, keeps the oldest, and outlives later edits", () => {
+		const t = new AppliedBlockTracker()
+		t.observe(0, 100)
+		t.observe(1, 500)
+		expect(t.hold(0, 120)).toBe(true)
+		t.observe(0, 130)
+		expect(t.watermark()).toBe(119)
+		expect(t.hold(0, 125)).toBe(false) // a newer dead letter does not lift the hold
+		expect(t.hold(0, 110)).toBe(true) // an older one lowers it
+		expect(t.value()).toBe('109:{"0":109,"1":500}')
+		expect(t.holds()).toEqual({"0": 109})
+	})
+
+	it("a hold with no block freezes the partition where it is; holds load back", () => {
+		const t = new AppliedBlockTracker()
+		t.observe(2, 40)
+		t.hold(2, null)
+		t.observe(2, 50)
+		expect(t.watermark()).toBe(40)
+		const again = new AppliedBlockTracker(t.holds())
+		again.observe(2, 60)
+		expect(again.watermark()).toBe(40)
+	})
+
 	it("renders `<block>:<per-partition json>`, the shape every cursors row has", () => {
 		const t = new AppliedBlockTracker()
 		t.observe(1, 300)
