@@ -257,6 +257,38 @@ describe("handleMessage", () => {
 		expect(store.hasStatement(hex(3))).toBe(true)
 	})
 
+	it("commits no overlay marks when every intent of the edit dead-lettered, but still finishes the message", async () => {
+		// Edit 742e60d9 (2026-11-12 23:01Z): all 140 intents dead-lettered, yet the overlay was committed, so a replay
+		// through the translator skipped what geo-db never received.
+		const dir = tmp()
+		const store = new Store(dir)
+		const refuseAll = fakeDb(() => ({rc: 1, out: "", err: "error: InvalidIntent"}))
+		expect(await handleMessage({...deps(store, refuseAll), chunk: 1}, 0, message("5"))).toBe("applied")
+		expect(refuseAll.applied).toHaveLength(0)
+		expect(store.hasEntity(GAIA, hex(1))).toBe(false)
+		expect(store.hasStatement(hex(3))).toBe(false)
+		const records = readFileSync(`${dir}/errors.jsonl`, "utf8").trim().split("\n")
+		expect(records).toHaveLength(3)
+		expect(records.every((r) => JSON.parse(r).intent)).toBe(true)
+		// A later translation of the same edit emits every intent again.
+		const again = fakeDb(() => ok)
+		await handleMessage({...deps(store, again), chunk: 1}, 0, message("6"))
+		expect(again.applied).toHaveLength(3)
+	})
+
+	it("commits no overlay marks when only some intents dead-lettered, and leaves the records as written", async () => {
+		const dir = tmp()
+		const store = new Store(dir)
+		const refuseAdd = fakeDb((zon) => (zon.includes(".add") ? {rc: 1, out: "", err: "error: InvalidIntent"} : ok))
+		expect(await handleMessage({...deps(store, refuseAdd), chunk: 1}, 0, message("5"))).toBe("applied")
+		expect(refuseAdd.applied).toHaveLength(2)
+		expect(store.hasEntity(GAIA, hex(1))).toBe(false)
+		expect(store.hasStatement(hex(3))).toBe(false)
+		const records = readFileSync(`${dir}/errors.jsonl`, "utf8").trim().split("\n")
+		expect(records).toHaveLength(1)
+		expect(JSON.parse(records[0] as string).intent).toContain(".add")
+	})
+
 	it("names the edit's chain block to the applied-block writer only after every chunk applied", async () => {
 		const store = new Store(tmp())
 		const fake = fakeDb(() => ok)

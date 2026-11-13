@@ -1,6 +1,7 @@
 import {type ApplyDeps, applyIntents} from "./apply.js"
 import type {AppliedBlockWriter} from "./appliedBlock.js"
 import {parseHermesEdit} from "./hermes.js"
+import {log} from "./log.js"
 import {deadLetterSpaceCap, ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
@@ -58,7 +59,7 @@ export async function handleMessage(
 		blockSeconds: deps.entityTimes ? blockSeconds : undefined,
 	})
 	const from = Math.min(deps.store.progress(partition, offset), intents.length)
-	await applyIntents(
+	const {deadLettered} = await applyIntents(
 		deps,
 		space,
 		{...meta, space: spaceId, edit: editId, idempotent: true},
@@ -67,7 +68,14 @@ export async function handleMessage(
 		from,
 		(done) => deps.store.saveProgress(partition, offset, done),
 	)
-	overlay.commit()
+	// The overlay's journals say "geo-db holds this". An intent that was dead-lettered never reached geo-db, and the marks
+	// are not tied to intents, so an edit with any dead letter commits none: a later translation (a replay, or the next
+	// edit touching these entities) then emits what is missing instead of skipping it as known (742e60d9: all 140
+	// intents dead-lettered, `connect: Refused`, yet committed). The offset still advances and errors.jsonl is as written.
+	// The cost is that an edit's applied entities stay unjournalled: re-emitting a create or add is idempotent per intent.
+	// (`deadLettered` counts this attempt only; a crash-resumed message loses earlier attempts' dead letters.)
+	if (deadLettered === 0) overlay.commit()
+	else log("warn", "overlay not committed: edit has dead-lettered intents", {...meta, space: spaceId, edit: editId, deadLettered, intents: intents.length})
 	for (const [k, v] of Object.entries(stats)) deps.metrics.opsDetail.inc({counter: k}, v)
 	// Every chunk of the edit is applied: the applied-block row may now name its block (appliedBlock.ts; best effort).
 	await deps.appliedBlock?.note(partition, blockNumber)
