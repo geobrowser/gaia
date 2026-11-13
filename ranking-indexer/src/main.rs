@@ -62,6 +62,12 @@ async fn main() -> Result<(), IndexerError> {
 
     let storage = Storage::new(&database_url).await?;
     storage.check_membership_view().await?;
+    // Relation ids on rows written before migration 0125 (or by an older pod),
+    // before consuming: a delete of a vote whose item has no relation id would
+    // go unnoticed, and once the kg-indexer drops the relation the fill can
+    // never match it again (GEO-3591).
+    let (items, rankings) = storage.fill_missing_relation_ids().await?;
+    info!(items, rankings, "filled missing rank relation ids");
     let consumer = KafkaConsumer::new(&brokers, &group_id)?;
     consumer.subscribe()?;
 

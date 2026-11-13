@@ -19,6 +19,12 @@ pub const MESSAGES_PROCESSED: &str = "ranking_indexer_messages_processed_total";
 pub const MESSAGES_SKIPPED: &str = "ranking_indexer_messages_skipped_total";
 pub const TRANSIENT_RETRIES: &str = "ranking_indexer_transient_retries_total";
 pub const PG_WRITES_SKIPPED: &str = "ranking_indexer_pg_writes_skipped_total";
+/// Recomputes of a queued block (`ranks.pending_recomputes`, GEO-3591) that
+/// failed while an edit drained the queue. The edit carries on; the block stays
+/// queued for the hourly backfill.
+pub const PENDING_RECOMPUTE_FAILURES: &str = "ranking_indexer_pending_recompute_failures_total";
+/// Blocks whose queue entry is dead: the backfill gave up recomputing them.
+pub const PENDING_RECOMPUTE_DEAD: &str = "ranking_indexer_pending_recompute_dead_blocks";
 pub const USER_INTEREST_SHADOW_ROWS: &str = "ranking_indexer_user_interest_shadow_rows_total";
 pub const USER_INTEREST_SHADOW_MISMATCHES: &str =
     "ranking_indexer_user_interest_shadow_mismatches_total";
@@ -50,6 +56,14 @@ pub enum PgWriteSite {
     UpsertRanking,
     SetRankingBlock,
     ReplaceRankingItems,
+    DeleteRankingItems,
+    UnlinkRankings,
+    DeleteRankings,
+    FillRelationIds,
+    ClearPendingRecompute,
+    NotePendingRecomputeFailure,
+    ReconcileClearedBallots,
+    RecoverRanking,
     ReplaceRankPositionProjection,
     ReplaceRankingScores,
     AccountExclusionsReplace,
@@ -70,7 +84,7 @@ pub enum PgWriteSite {
 }
 
 impl PgWriteSite {
-    pub(crate) const ALL: [PgWriteSite; 25] = [
+    pub(crate) const ALL: [PgWriteSite; 33] = [
         PgWriteSite::AddMember,
         PgWriteSite::RemoveMember,
         PgWriteSite::AddEditor,
@@ -79,6 +93,14 @@ impl PgWriteSite {
         PgWriteSite::UpsertRanking,
         PgWriteSite::SetRankingBlock,
         PgWriteSite::ReplaceRankingItems,
+        PgWriteSite::DeleteRankingItems,
+        PgWriteSite::UnlinkRankings,
+        PgWriteSite::DeleteRankings,
+        PgWriteSite::FillRelationIds,
+        PgWriteSite::ClearPendingRecompute,
+        PgWriteSite::NotePendingRecomputeFailure,
+        PgWriteSite::ReconcileClearedBallots,
+        PgWriteSite::RecoverRanking,
         PgWriteSite::ReplaceRankPositionProjection,
         PgWriteSite::ReplaceRankingScores,
         PgWriteSite::AccountExclusionsReplace,
@@ -108,6 +130,14 @@ impl PgWriteSite {
             PgWriteSite::UpsertRanking => "upsert_ranking",
             PgWriteSite::SetRankingBlock => "set_ranking_block",
             PgWriteSite::ReplaceRankingItems => "replace_ranking_items",
+            PgWriteSite::DeleteRankingItems => "delete_ranking_items",
+            PgWriteSite::UnlinkRankings => "unlink_rankings",
+            PgWriteSite::DeleteRankings => "delete_rankings",
+            PgWriteSite::FillRelationIds => "fill_relation_ids",
+            PgWriteSite::ClearPendingRecompute => "clear_pending_recompute",
+            PgWriteSite::NotePendingRecomputeFailure => "note_pending_recompute_failure",
+            PgWriteSite::ReconcileClearedBallots => "reconcile_cleared_ballots",
+            PgWriteSite::RecoverRanking => "recover_ranking",
             PgWriteSite::ReplaceRankPositionProjection => "replace_rank_position_projection",
             PgWriteSite::ReplaceRankingScores => "replace_ranking_scores",
             PgWriteSite::AccountExclusionsReplace => "account_exclusions_replace",
@@ -160,6 +190,8 @@ pub fn register() {
     for site in PgWriteSite::ALL {
         metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
     }
+    metrics::counter!(PENDING_RECOMPUTE_FAILURES).absolute(0);
+    metrics::gauge!(PENDING_RECOMPUTE_DEAD).set(0.0);
     metrics::counter!(USER_INTEREST_SHADOW_ROWS).absolute(0);
     metrics::counter!(USER_INTEREST_SHADOW_MISMATCHES).absolute(0);
 
@@ -172,6 +204,14 @@ pub fn register() {
 
 pub fn pg_write_skipped(site: PgWriteSite) {
     metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
+}
+
+pub fn pending_recompute_dead(blocks: i64) {
+    metrics::gauge!(PENDING_RECOMPUTE_DEAD).set(blocks as f64);
+}
+
+pub fn pending_recompute_failed() {
+    metrics::counter!(PENDING_RECOMPUTE_FAILURES).increment(1);
 }
 
 pub fn message_processed(topic: Topic) {

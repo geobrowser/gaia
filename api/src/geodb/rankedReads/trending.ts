@@ -824,7 +824,8 @@ export interface RankingInputs {
 	/** `ranks.ranking_scores` (the item space is not read). */
 	scores: {block_id: string; entity_id: string; position: number}[]
 	ballots: {id: string; block_id: string | null; space_id: string; updated_at_block: number; update_index: number}[]
-	items: {ranking_id: string; entity_id: string}[]
+	/** `rank_space_id` is the ballot's space (GEO-3591, 0125); absent where the source has no column for it. */
+	items: {ranking_id: string; entity_id: string; rank_space_id?: string}[]
 	/** `ranks.members` ∪ `ranks.editors`. */
 	members: {member_space_id: string; space_id: string}[]
 	/** `user_votes`, `voted_at_us` in microseconds since the epoch. */
@@ -883,15 +884,17 @@ export function rankingMemberBallots(sources: RankingSource[], r: RankingInputs)
 			(b.updated_at_block - cur.updated_at_block || b.update_index - cur.update_index || cmpStr(cur.id, b.id)) > 0
 		if (better) latest.set(k, b)
 	}
-	const items = new Map<string, string[]>()
-	for (const i of r.items) items.set(i.ranking_id, [...(items.get(i.ranking_id) ?? []), i.entity_id])
+	// An item belongs to the ballot (ranking, its space); one without a space matches by ranking id.
+	const items = new Map<string, {entity_id: string; rank_space_id?: string}[]>()
+	for (const i of r.items) items.set(i.ranking_id, [...(items.get(i.ranking_id) ?? []), i])
 	const out = new Map<string, [string, string, string, string]>()
 	const members = rankingMembers(sources, r)
 	for (const b of latest.values())
 		for (const [space, block, member] of members)
 			if (block === b.block_id && member === b.space_id)
-				for (const e of items.get(b.id) ?? [])
-					out.set(`${space}|${block}|${member}|${e}`, [space, block, member, e])
+				for (const i of items.get(b.id) ?? [])
+					if (i.rank_space_id === undefined || i.rank_space_id === b.space_id)
+						out.set(`${space}|${block}|${member}|${i.entity_id}`, [space, block, member, i.entity_id])
 	return [...out.values()]
 }
 

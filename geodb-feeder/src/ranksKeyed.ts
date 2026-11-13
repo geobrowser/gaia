@@ -31,6 +31,15 @@
  * - A RANK_BLOCK link writes the ranking record's block column even when the ranking was created in another edit;
  *   Postgres' `UPDATE` is a no-op until the ranking row exists, so geo-db can hold a block link Postgres lacks.
  * - Items without `to_space` are skipped, as detect.rs does.
+ * - Deletes are not ported (GEO-3591). detect.rs now records DeleteRelation/DeleteEntity ids, and storage.rs
+ *   removes the items whose vote relation was deleted, unlinks a rank whose RANK_BLOCK relation was deleted and
+ *   drops a deleted Rank, so a ranker can clear their ballot with an edit of deletes only. Here such an edit
+ *   writes nothing, and the cleared ranking keeps its items at their last generation. The ranks gate counts those
+ *   items (and a deleted Rank's record) as geo-db-only, which it already expects; a deleted RANK_BLOCK link would
+ *   show as a `block` value difference. Porting deletes needs the item's relation id in geo-db and a way to find
+ *   the ranking from a deleted relation id without a read before the write.
+ * - Items carry no rank space here. Postgres scopes items by (ranking, rank_space_id) since 0125, so one Rank id
+ *   registered from two spaces is two ballots there and one set of item records here.
  */
 import {relationEntityId} from "@geoprotocol/grc-20"
 import {parseHermesEdit} from "./hermes.js"
@@ -370,7 +379,15 @@ export type RankingRow = {
 	updated_at_block: string | null
 	update_index: string | null
 }
-export type RankingItemRow = {ranking_id: string; entity_id: string; space_id: string; position: string | null; weight: number | string | null}
+export type RankingItemRow = {
+	ranking_id: string
+	/** The Rank's space (0125); read for paging, not written to the record yet. */
+	rank_space_id?: string
+	entity_id: string
+	space_id: string
+	position: string | null
+	weight: number | string | null
+}
 
 const hex = (v: string): string => {
 	const h = v.replaceAll("-", "").toLowerCase()

@@ -1,11 +1,26 @@
 //! Detection of rank-relevant operations within a decoded GRC-20 edit.
 //!
-//! The indexer keeps only the four op patterns from the design (§5) and
-//! discards everything else:
+//! The indexer keeps only these op patterns and discards everything else:
 //!   - `CreateEntity` typed `Rank`           -> a [`Ranking`]
 //!   - `CreateEntity` typed `Ranking Block`  -> a [`RankingBlock`]
 //!   - `RANK_VOTES` relations                -> [`RankingItem`] rows
-//!   - `CreateRelation` of type `RANK_BLOCK`  -> a rank -> block link
+//!   - `CreateRelation` of type `RANK_BLOCK`  -> a rank -> block [`BlockLink`]
+//!   - `DeleteRelation`                      -> a deleted relation id
+//!   - `DeleteEntity`                        -> a deleted entity id
+//!
+//! Deletes (GEO-3591). A `DeleteRelation`/`DeleteEntity` op carries only an id,
+//! not the relation's type or endpoints, so detect() can't tell a deleted vote
+//! from any other deleted relation. It records every deleted id, and storage
+//! matches them against the relation ids it keeps per item
+//! (`ranking_items.relation_id`) and per block link
+//! (`rankings.block_relation_id`), and against Rank ids. This is what lets a
+//! ranker clear their ballot: `ranks.update` with no votes is an edit of
+//! deletes only.
+//!
+//! Within one edit the ops apply in order. A create followed by a delete of the
+//! same id is dropped here (it never reaches storage); a delete followed by a
+//! create of the same id keeps both, and [`crate::recompute::apply_detected_edit`]
+//! applies every delete before any create, so the create wins either way.
 //!
 //! Type membership is read from the `TYPES` relation (a `CreateRelation` of
 //! type `TYPE_RELATION_TYPE_ID` whose `to` is the type entity), matching how
@@ -156,14 +171,32 @@ fn window_bound(
     new.or(old)
 }
 
+/// A `RANK_BLOCK` relation: a Rank submitted to a Ranking Block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockLink {
+    pub ranking_id: Uuid,
+    pub block_id: Uuid,
+    /// The relation's own id, kept so a later `DeleteRelation` unlinks the rank.
+    pub relation_id: Uuid,
+}
+
 /// The rank-relevant ops extracted from a single edit.
 #[derive(Debug, Default)]
 pub struct DetectedEdit {
     pub blocks: Vec<RankingBlock>,
     pub rankings: Vec<Ranking>,
     pub items: Vec<RankingItem>,
-    /// `(ranking_id, block_id)` links from `RANK_BLOCK` relations.
-    pub block_links: Vec<(Uuid, Uuid)>,
+    /// Links from `RANK_BLOCK` relations.
+    pub block_links: Vec<BlockLink>,
+    /// Every relation id the edit deletes (of any type; storage keeps only the
+    /// ones it knows as a vote or a block link).
+    pub deleted_relations: Vec<Uuid>,
+    /// Every entity id the edit deletes (storage keeps only Rank ids).
+    pub deleted_entities: Vec<Uuid>,
+    /// Ranks this edit created and then deleted. They never reach storage as
+    /// rows, but are tombstoned so the backfill does not register them from
+    /// the `TYPES` relation the kg-indexer keeps.
+    pub deleted_ranks: Vec<Uuid>,
     /// Block provenance of the edit, recorded on entities the recompute mints.
     pub meta: BlockMeta,
 }
@@ -174,6 +207,8 @@ impl DetectedEdit {
             && self.rankings.is_empty()
             && self.items.is_empty()
             && self.block_links.is_empty()
+            && self.deleted_relations.is_empty()
+            && self.deleted_entities.is_empty()
     }
 }
 
@@ -247,6 +282,7 @@ pub fn detect(
                         submitted_at,
                         updated_at_block: block_number,
                         update_index: op_index as i64,
+                        block_relation_id: None,
                     });
                 } else if is_block {
                     // Block config (Name/Filter/Start/End as properties; the
@@ -318,10 +354,36 @@ pub fn detect(
                         space_id: item_space,
                         position: relation.position.as_ref().map(|p| p.to_string()),
                         weight,
+                        relation_id: Some(id_to_uuid(&relation.id)),
+                        rank_space_id: None,
                     });
                 } else if type_id == ids.rank_block_relation {
-                    out.block_links.push((from, id_to_uuid(&relation.to)));
+                    out.block_links.push(BlockLink {
+                        ranking_id: from,
+                        block_id: id_to_uuid(&relation.to),
+                        relation_id: id_to_uuid(&relation.id),
+                    });
                 }
+            }
+            Grc20Op::DeleteRelation(relation) => {
+                let id = id_to_uuid(&relation.id);
+                // A vote or link created earlier in this edit and deleted here
+                // never existed as far as the result is concerned.
+                out.items.retain(|it| it.relation_id != Some(id));
+                out.block_links.retain(|l| l.relation_id != id);
+                out.deleted_relations.push(id);
+            }
+            Grc20Op::DeleteEntity(entity) => {
+                let id = id_to_uuid(&entity.id);
+                // Likewise a Rank created earlier in this edit, with the votes
+                // and link that hang off it.
+                if out.rankings.iter().any(|r| r.id == id) {
+                    out.deleted_ranks.push(id);
+                }
+                out.rankings.retain(|r| r.id != id);
+                out.items.retain(|it| it.ranking_id != id);
+                out.block_links.retain(|l| l.ranking_id != id);
+                out.deleted_entities.push(id);
             }
             _ => {}
         }
@@ -625,8 +687,174 @@ mod tests {
         let detected = detect(&edit, space_uuid(), 100, 0);
         assert_eq!(
             detected.block_links,
-            vec![(Uuid::from_u128(RANK), Uuid::from_u128(BLOCK))]
+            vec![BlockLink {
+                ranking_id: Uuid::from_u128(RANK),
+                block_id: Uuid::from_u128(BLOCK),
+                relation_id: Uuid::from_u128(30),
+            }]
         );
+    }
+
+    /// A RANK_VOTES relation `id` from RANK to `entity` at `position`.
+    fn vote(
+        b: EditBuilder<'static>,
+        id: u128,
+        entity: u128,
+        position: &'static str,
+    ) -> EditBuilder<'static> {
+        b.create_relation(|r| {
+            r.id(gid(id))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(entity))
+                .to_space(gid(PERSPECTIVE))
+                .position(position)
+        })
+    }
+
+    #[test]
+    fn vote_items_carry_their_relation_id() {
+        let edit = vote(EditBuilder::new(gid(0)), 11, RANKED_ENTITY, "a0").build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(detected.items.len(), 1);
+        assert_eq!(detected.items[0].relation_id, Some(Uuid::from_u128(11)));
+    }
+
+    #[test]
+    fn deletes_only_edit_is_not_empty_and_records_every_id() {
+        // What `ranks.update` with no votes sends: delete each vote relation and
+        // its reified vote entity. Nothing is created.
+        let edit = EditBuilder::new(gid(0))
+            .delete_relation(gid(11))
+            .delete_entity(gid(VOTE_ENTITY))
+            .delete_relation(gid(12))
+            .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert!(!detected.is_empty(), "a deletes-only edit must be applied");
+        assert!(detected.items.is_empty());
+        assert_eq!(
+            detected.deleted_relations,
+            vec![Uuid::from_u128(11), Uuid::from_u128(12)]
+        );
+        assert_eq!(
+            detected.deleted_entities,
+            vec![Uuid::from_u128(VOTE_ENTITY)]
+        );
+    }
+
+    #[test]
+    fn update_shaped_edit_keeps_the_new_votes_in_either_order() {
+        // Deletes of the old votes before the creates (what the SDK emits)...
+        let deletes_first = vote(
+            vote(
+                EditBuilder::new(gid(0))
+                    .delete_relation(gid(11))
+                    .delete_relation(gid(12)),
+                21,
+                RANKED_ENTITY,
+                "a0",
+            ),
+            22,
+            5,
+            "a1",
+        )
+        .build();
+        // ...and after them.
+        let creates_first = vote(
+            vote(EditBuilder::new(gid(0)), 21, RANKED_ENTITY, "a0"),
+            22,
+            5,
+            "a1",
+        )
+        .delete_relation(gid(11))
+        .delete_relation(gid(12))
+        .build();
+        for edit in [deletes_first, creates_first] {
+            let detected = detect(&edit, space_uuid(), 100, 0);
+            let mut ids: Vec<Option<Uuid>> = detected.items.iter().map(|i| i.relation_id).collect();
+            ids.sort();
+            assert_eq!(
+                ids,
+                vec![Some(Uuid::from_u128(21)), Some(Uuid::from_u128(22))]
+            );
+            assert_eq!(
+                detected.deleted_relations,
+                vec![Uuid::from_u128(11), Uuid::from_u128(12)]
+            );
+        }
+    }
+
+    #[test]
+    fn a_vote_created_then_deleted_in_one_edit_is_dropped() {
+        let edit = vote(
+            vote(EditBuilder::new(gid(0)), 11, RANKED_ENTITY, "a0"),
+            12,
+            5,
+            "a1",
+        )
+        .delete_relation(gid(11))
+        .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(detected.items.len(), 1);
+        assert_eq!(detected.items[0].relation_id, Some(Uuid::from_u128(12)));
+    }
+
+    #[test]
+    fn a_vote_deleted_then_recreated_in_one_edit_is_kept() {
+        // The delete is still recorded (it removes the stored copy); applying
+        // deletes before creates puts the recreated vote back.
+        let edit = vote(
+            EditBuilder::new(gid(0)).delete_relation(gid(11)),
+            11,
+            RANKED_ENTITY,
+            "a0",
+        )
+        .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(detected.items.len(), 1);
+        assert_eq!(detected.deleted_relations, vec![Uuid::from_u128(11)]);
+    }
+
+    #[test]
+    fn a_block_link_created_then_deleted_in_one_edit_is_dropped() {
+        let edit = EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(30))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(gid(BLOCK))
+            })
+            .delete_relation(gid(30))
+            .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert!(detected.block_links.is_empty());
+        assert_eq!(detected.deleted_relations, vec![Uuid::from_u128(30)]);
+    }
+
+    #[test]
+    fn a_rank_created_then_deleted_in_one_edit_is_dropped_with_its_votes() {
+        let edit = vote(
+            EditBuilder::new(gid(0))
+                .create_relation(|r| {
+                    r.id(gid(10))
+                        .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                        .from(gid(RANK))
+                        .to(sid(RANK_TYPE_ID))
+                })
+                .create_entity(gid(RANK), |e| {
+                    e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+                }),
+            11,
+            RANKED_ENTITY,
+            "a0",
+        )
+        .delete_entity(gid(RANK))
+        .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert!(detected.rankings.is_empty());
+        assert!(detected.items.is_empty());
+        assert_eq!(detected.deleted_entities, vec![Uuid::from_u128(RANK)]);
+        assert_eq!(detected.deleted_ranks, vec![Uuid::from_u128(RANK)]);
     }
 
     #[test]

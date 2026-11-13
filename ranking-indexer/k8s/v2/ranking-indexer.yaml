@@ -15,6 +15,10 @@ metadata:
     app: ranking-indexer
 spec:
   replicas: 1
+  # One pod at a time, never two: the new pod fills rank relation ids at startup before it
+  # consumes (GEO-3591), and an old pod still consuming meanwhile would write items without them.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ranking-indexer

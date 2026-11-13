@@ -69,8 +69,10 @@ pub struct Ranks {
     /// `ranks.ranking_scores` as `(block_id, entity_id, position)` (the item space is not read).
     pub scores: Vec<(Uuid, Uuid, i32)>,
     pub ballots: Vec<Ballot>,
-    /// `ranks.ranking_items` as `(ranking_id, entity_id)`.
-    pub items: Vec<(Uuid, Uuid)>,
+    /// `ranks.ranking_items` as `(ranking_id, entity_id, rank_space_id)`: an
+    /// item belongs to the ballot `(ranking_id, rank_space_id)` (GEO-3591, 0125);
+    /// one with no space yet (written before 0125, not filled) matches by id.
+    pub items: Vec<(Uuid, Uuid, Option<Uuid>)>,
     /// `ranks.members` ∪ `ranks.editors` as `(member_space_id, space_id)`.
     pub members: Vec<(Uuid, Uuid)>,
     pub votes: Vec<Vote>,
@@ -132,15 +134,21 @@ pub fn member_ballots(sources: &[Source], ranks: &Ranks) -> BTreeSet<(Uuid, Uuid
         }
     }
     let m = members(sources, ranks);
-    let mut items: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-    for (ranking, entity) in &ranks.items {
-        items.entry(*ranking).or_default().push(*entity);
+    let mut items: HashMap<Uuid, Vec<(Uuid, Option<Uuid>)>> = HashMap::new();
+    for (ranking, entity, rank_space) in &ranks.items {
+        items
+            .entry(*ranking)
+            .or_default()
+            .push((*entity, *rank_space));
     }
     let mut out = BTreeSet::new();
     for ((block, member), ballot) in &latest {
         for (space, b, mem) in &m {
             if b == block && mem == member {
-                for entity in items.get(&ballot.id).into_iter().flatten() {
+                for (entity, rank_space) in items.get(&ballot.id).into_iter().flatten() {
+                    if rank_space.is_some_and(|s| s != ballot.space_id) {
+                        continue;
+                    }
                     out.insert((*space, *block, *member, *entity));
                 }
             }
@@ -350,6 +358,49 @@ pub fn ranked_ids(
 
 #[cfg(test)]
 mod tests {
+    /// GEO-3591: one Rank id registered from two spaces is two ballots, each
+    /// with only its own items (0125's ranking_member_ballots).
+    #[test]
+    fn a_rank_id_in_two_spaces_keeps_each_ballots_items() {
+        let u = Uuid::from_u128;
+        let (space, block, m1, m2, rank) = (u(1), u(2), u(3), u(4), u(5));
+        let sources = vec![Source {
+            name: "s".into(),
+            space_id: space,
+            block_id: block,
+            weight: 1.0,
+            window_days: None,
+            slots: 1,
+            day_factor: 1.0,
+        }];
+        let ballot = |member| Ballot {
+            id: rank,
+            block_id: Some(block),
+            space_id: member,
+            updated_at_block: 10,
+            update_index: 0,
+        };
+        let ranks = Ranks {
+            ballots: vec![ballot(m1), ballot(m2)],
+            items: vec![
+                (rank, u(100), Some(m1)),
+                (rank, u(200), Some(m2)),
+                (rank, u(300), None),
+            ],
+            members: vec![(m1, space), (m2, space)],
+            ..Ranks::default()
+        };
+        let got: Vec<(Uuid, Uuid)> = member_ballots(&sources, &ranks)
+            .into_iter()
+            .map(|(_, _, member, entity)| (member, entity))
+            .collect();
+        // The item with no space yet matches both, as in 0125's SQL.
+        assert_eq!(
+            got,
+            vec![(m1, u(100)), (m1, u(300)), (m2, u(200)), (m2, u(300))]
+        );
+    }
+
     use super::*;
 
     fn u(n: u128) -> Uuid {
@@ -491,7 +542,9 @@ mod tests {
                     updated_at_block: p[4].parse().unwrap(),
                     update_index: p[5].parse().unwrap(),
                 }),
-                "RI" => ranks.items.push((id(p[1]), id(p[2]))),
+                "RI" => ranks
+                    .items
+                    .push((id(p[1]), id(p[2]), p.get(3).map(|s| id(s)))),
                 "V" => ranks.votes.push(Vote {
                     user_id: id(p[1]),
                     object_id: id(p[2]),

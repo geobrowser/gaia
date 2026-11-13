@@ -1,6 +1,7 @@
 import {relations as drizzleRelations, type InferSelectModel, sql} from "drizzle-orm"
 import {
 	bigint,
+	bigserial,
 	boolean,
 	customType,
 	decimal,
@@ -20,6 +21,7 @@ import {
 	time,
 	timestamp,
 	unique,
+	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core"
 
@@ -1341,12 +1343,17 @@ export const rankings = ranks.table(
 		updatedAtBlock: bigint("updated_at_block", {mode: "number"}).notNull().default(0),
 		updateIndex: bigint("update_index", {mode: "number"}).notNull().default(0),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+		/** The RANK_BLOCK relation behind `block_id`, so deleting it unlinks the rank (GEO-3591, 0125). */
+		blockRelationId: uuid("block_relation_id"),
 	},
 	(table) => [
 		primaryKey({columns: [table.id, table.spaceId]}),
 		index("rankings_block_id_idx").on(table.blockId),
 		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
 		index("rankings_space_id_idx").on(table.spaceId),
+		index("rankings_block_relation_id_idx")
+			.on(table.blockRelationId)
+			.where(sql`${table.blockRelationId} IS NOT NULL`),
 	],
 )
 
@@ -1359,8 +1366,53 @@ export const rankingItems = ranks.table(
 		spaceId: uuid("space_id").notNull(),
 		position: text(),
 		weight: doublePrecision(),
+		/** The RANK_VOTES relation the item came from, so deleting it removes the item (GEO-3591, 0125). */
+		relationId: uuid("relation_id"),
+		/**
+		 * The space of the Rank the item belongs to: items are scoped by (ranking, rank space) (GEO-3591, 0125).
+		 * NULL only on rows written before 0125 and not filled yet; a later migration makes it NOT NULL.
+		 */
+		rankSpaceId: uuid("rank_space_id"),
 	},
-	(table) => [primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]})],
+	(table) => [
+		// Replaces the (ranking_id, entity_id, space_id) primary key until rank_space_id is NOT NULL (0125).
+		uniqueIndex("ranking_items_rank_space_key").on(
+			table.rankingId,
+			sql`COALESCE(${table.rankSpaceId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+			table.entityId,
+			table.spaceId,
+		),
+		index("ranking_items_relation_id_idx").on(table.relationId).where(sql`${table.relationId} IS NOT NULL`),
+	],
+)
+
+/**
+ * Blocks a deleted rank vote, link or Rank changed that no recompute has cleared yet (GEO-3591, 0125).
+ * Written with the delete, cleared by the recompute; a retried edit or the hourly backfill finds the rest.
+ */
+export const rankingPendingRecomputes = ranks.table(
+	"pending_recomputes",
+	{
+		seq: bigserial({mode: "number"}).primaryKey(),
+		blockId: uuid("block_id").notNull(),
+		queuedAt: timestamp("queued_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+		/** Failed live recomputes; the consumer stops retrying after a few, the backfill does not. */
+		attempts: integer().notNull().default(0),
+		/** Set when the backfill gives up on the block; a dead entry is skipped until reset. */
+		deadAt: timestamp("dead_at", {withTimezone: true, mode: "date"}),
+	},
+	(table) => [index("pending_recomputes_block_id_idx").on(table.blockId)],
+)
+
+/** Rank entities an edit deleted, so the backfill does not register them again (GEO-3591, 0125). */
+export const deletedRankings = ranks.table(
+	"deleted_rankings",
+	{
+		id: uuid().notNull(),
+		spaceId: uuid("space_id").notNull(),
+		deletedAt: timestamp("deleted_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [primaryKey({columns: [table.id, table.spaceId]})],
 )
 
 /**

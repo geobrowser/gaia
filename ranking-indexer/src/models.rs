@@ -48,6 +48,11 @@ pub struct Ranking {
     /// Update markers for dedup: most-recently-updated rank per (block, space) wins.
     pub updated_at_block: i64,
     pub update_index: i64,
+    /// The `RANK_BLOCK` relation behind `block_id`, when known at upsert time
+    /// (a rank recovered from the graph). The live path sets it with
+    /// `set_ranking_block` instead. Not read back by recompute.
+    #[sqlx(default)]
+    pub block_relation_id: Option<Uuid>,
 }
 
 /// A `ranks.ranking_items` row — keyed on (ranking, entity, space).
@@ -60,4 +65,14 @@ pub struct RankingItem {
     pub position: Option<String>,
     /// Weighted value (`None` for ordinal ranks).
     pub weight: Option<f64>,
+    /// The `RANK_VOTES` relation this item came from, so a later
+    /// `DeleteRelation` of it removes the item (GEO-3591). `None` for an item
+    /// written before migration 0125 whose relation could not be found.
+    pub relation_id: Option<Uuid>,
+    /// The space of the Rank this item belongs to (`ranking_items.rank_space_id`,
+    /// GEO-3591): items are scoped by `(ranking_id, rank_space_id)`, the same
+    /// pair `ranks.rankings` is keyed on. `None` on an item detect() just read
+    /// (storage writes the edit's space); `Some` on every item read back.
+    #[sqlx(default)]
+    pub rank_space_id: Option<Uuid>,
 }

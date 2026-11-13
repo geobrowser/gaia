@@ -90,7 +90,7 @@ def ballot(n, block, space, ub, ui, ents):
     rid = uid(10, n)
     ballots.append((rid, block, space, ub, ui))
     for e in ents:
-        items.append((rid, e))
+        items.append((rid, e, space))
 ballot(0, BLK, P[0], 100, 0, [RANKED_NOT_LISTED, IN_BOTH, PUSHED] + rng.sample(debates, 4))
 n = 1
 for p in P[1:11]:
@@ -181,8 +181,9 @@ def main(url):
     for rid, b, s, ub, ui in ballots:
         sql.append(f"INSERT INTO ranks.rankings (id, block_id, space_id, updated_at_block, update_index) "
                    f"VALUES ('{rid}', {q(b)}, '{s}', {ub}, {ui});")
-    for rid, e in items:
-        sql.append(f"INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id) VALUES ('{rid}', '{e}', '{S1}');")
+    for rid, e, rs in items:
+        sql.append(f"INSERT INTO ranks.ranking_items (ranking_id, rank_space_id, entity_id, space_id) "
+                   f"VALUES ('{rid}', '{rs}', '{e}', '{S1}');")
     for u, o, ot, kind, typ, at in votes:
         sql.append(f"INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at) "
                    f"VALUES ('{u}', '{o}', {ot}, '{rng.choice([DEB, S1, u])}', {typ}, {kind}, "
@@ -280,7 +281,7 @@ def main(url):
     head += [f"M|{m}|{s}" for m, s in MEMBERS + EDITORS]
     head += [f"RS|{b}|{e}|{pos}" for b, e, s, pos in scores]
     head += [f"RB|{rid}|{b or '~'}|{s}|{ub}|{ui}" for rid, b, s, ub, ui in ballots]
-    head += [f"RI|{rid}|{e}" for rid, e in items]
+    head += [f"RI|{rid}|{e}|{rs}" for rid, e, rs in items]
     # voted_at as microseconds: the clock is fixed for the transaction, so now - offset is exact.
     clock_us = None
     head += [f"C|{k}|{v}" for k, v in CASES.items()]
@@ -305,7 +306,7 @@ def main(url):
         "scores": [{"block_id": b, "entity_id": e, "position": pos} for b, e, s, pos in scores],
         "ballots": [{"id": rid, "block_id": b, "space_id": s, "updated_at_block": ub, "update_index": ui}
                     for rid, b, s, ub, ui in ballots],
-        "items": [{"ranking_id": rid, "entity_id": e} for rid, e in items],
+        "items": [{"ranking_id": rid, "entity_id": e, "rank_space_id": rs} for rid, e, rs in items],
         "votes": [{"user_id": u, "object_id": o, "object_type": ot, "vote_kind": kind, "vote_type": typ,
                    "voted_at_offset": at} for u, o, ot, kind, typ, at in votes],
         "cases": CASES,

@@ -27,12 +27,23 @@
 //! it. A config row is not an edit, so nothing else notices it; the hourly run
 //! picks it up, and running this by hand applies it at once.
 //!
+//! Also fills the vote and block-link relation ids (`ranking_items.relation_id`,
+//! `rankings.block_relation_id`, migration 0125) on rows written without them,
+//! so the live consumer can honour a later delete of those relations (GEO-3591).
+//!
 //! Exits non-zero if anything failed to recover, so a scheduled run (see
 //! `k8s/*/backfill-cronjob.yaml`) surfaces failures as a failed Job instead
 //! of a silently-green one.
 //!
 //! Usage: `DATABASE_URL=... cargo run -p ranking-indexer --bin backfill_blocks`
 //! Add `DRY_RUN=true` to list candidates without writing anything.
+//!
+//! One-off, GEO-3591: `--reconcile-cleared-ballots` (or
+//! `RECONCILE_CLEARED_BALLOTS=1`) does only this: it removes the items of
+//! ballots cleared before the delete handling was deployed (a registered Rank
+//! whose items have no relation id and with no vote relation left in its
+//! space) and rescores their blocks. With `DRY_RUN=true` it prints the counts
+//! and writes nothing.
 
 use std::collections::HashSet;
 use std::env;
@@ -66,17 +77,59 @@ async fn main() -> Result<(), IndexerError> {
     let recompute_all = env::args().any(|a| a == "--recompute-all")
         || env::var("RECOMPUTE_ALL").is_ok_and(|v| v == "true" || v == "1");
 
+    // One-off (GEO-3591): ballots cleared before the delete handling was
+    // deployed. Run once after the relation-id fill, DRY_RUN first.
+    let reconcile_cleared = env::args().any(|a| a == "--reconcile-cleared-ballots")
+        || env::var("RECONCILE_CLEARED_BALLOTS").is_ok_and(|v| v == "true" || v == "1");
+
     let storage = Storage::new(&database_url).await?;
+
+    if reconcile_cleared {
+        // A candidate has no RANK_VOTES relation left in the graph at all, so
+        // the fill cannot change which Ranks qualify; it runs first anyway on a
+        // real run, so the items it can attribute carry their ids from now on.
+        if !dry_run {
+            let (items, rankings) = storage.fill_missing_relation_ids().await?;
+            info!(items, rankings, "filled missing rank relation ids");
+        }
+        let (rankings, items, blocks) = storage.reconcile_cleared_ballots(dry_run).await?;
+        info!(
+            rankings,
+            items,
+            blocks,
+            dry_run,
+            "cleared ballots still counted (rankings, their items, blocks to rescore)"
+        );
+        if dry_run {
+            return Ok(());
+        }
+        let (recomputed, failed) = ranking_indexer::recompute::drain_pending_recomputes(
+            &storage,
+            Utc::now(),
+            ranking_indexer::recompute::DrainMode::Backfill,
+            &HashSet::new(),
+        )
+        .await;
+        info!(recomputed, failed, "rescored the reconciled blocks");
+        if failed > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
     let stale_blocks = storage.find_stale_ranking_type_blocks().await?;
     let rank_candidates = storage.find_unregistered_ranks().await?;
     let pending_configs = storage.find_pending_block_configs().await?;
+    // Blocks a delete queued whose recompute never ran or failed (GEO-3591),
+    // including ones the live consumer gave up on.
+    let queued = storage.pending_recompute_blocks(None).await?;
     info!(
         blocks = block_candidates.len(),
         stale_blocks = stale_blocks.len(),
         ranks = rank_candidates.len(),
         pending_configs = pending_configs.len(),
+        queued = queued.len(),
         dry_run,
         "found unregistered/stale blocks and unregistered ranks"
     );
@@ -99,11 +152,14 @@ async fn main() -> Result<(), IndexerError> {
         for id in &stale_blocks {
             info!(block_id = %id, "would resync stale ranking_type");
         }
-        for id in &rank_candidates {
-            info!(rank_id = %id, "would recover rank");
+        for (id, space) in &rank_candidates {
+            info!(rank_id = %id, space_id = %space, "would recover rank");
         }
         for id in &pending_configs {
             info!(block_id = %id, "would recompute (block config changed)");
+        }
+        for id in &queued {
+            info!(block_id = %id, "would recompute (queued by a delete)");
         }
         for id in &all_blocks {
             info!(block_id = %id, "would recompute (--recompute-all)");
@@ -111,12 +167,33 @@ async fn main() -> Result<(), IndexerError> {
         return Ok(());
     }
 
+    // Relation ids the live consumer needs to honour deleted votes and block
+    // links (GEO-3591), for rows written without them: by an indexer that
+    // predates migration 0125, or by the rank recovery below (filled on the
+    // next run). Writes nothing once every row that can be matched has one.
+    let fill_failed = match storage.fill_missing_relation_ids().await {
+        Ok((items, rankings)) => {
+            if items > 0 || rankings > 0 {
+                info!(items, rankings, "filled missing rank relation ids");
+            }
+            false
+        }
+        Err(e) => {
+            error!(error = %e, "failed to fill missing rank relation ids");
+            true
+        }
+    };
+
     if block_candidates.is_empty()
         && stale_blocks.is_empty()
         && rank_candidates.is_empty()
         && pending_configs.is_empty()
+        && queued.is_empty()
         && all_blocks.is_empty()
     {
+        if fill_failed {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -128,7 +205,7 @@ async fn main() -> Result<(), IndexerError> {
     let mut resynced_stale_blocks = 0;
     let mut recovered_ranks = 0;
     let mut still_unregistered_ranks = 0;
-    let mut failed = 0;
+    let mut failed = usize::from(fill_failed);
     // Blocks recomputed by the recovery/resync passes below, so the optional
     // full recompute at the end does not redo them.
     let mut handled_blocks: HashSet<uuid::Uuid> = HashSet::new();
@@ -205,16 +282,25 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     let mut affected_blocks: HashSet<uuid::Uuid> = HashSet::new();
-    for rank_id in rank_candidates {
-        match storage.get_rank_config_from_kg(rank_id).await {
+    for (rank_id, space_id) in rank_candidates {
+        match storage.get_rank_config_from_kg(rank_id, space_id).await {
             Ok(Some(rank)) => {
                 let block_id = rank.block_id;
-                if let Err(e) = storage.upsert_ranking(&rank).await {
-                    error!(rank_id = %rank_id, error = %e, "failed to upsert recovered rank");
-                    failed += 1;
-                    continue;
+                // Never over a tombstone: an edit may have deleted the Rank
+                // since it was listed above (GEO-3591).
+                match storage.recover_ranking(&rank).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        info!(rank_id = %rank_id, space_id = %space_id, "deleted or registered meanwhile — skipping");
+                        continue;
+                    }
+                    Err(e) => {
+                        error!(rank_id = %rank_id, error = %e, "failed to upsert recovered rank");
+                        failed += 1;
+                        continue;
+                    }
                 }
-                info!(rank_id = %rank_id, block_id = ?block_id, "recovered rank");
+                info!(rank_id = %rank_id, space_id = %space_id, block_id = ?block_id, "recovered rank");
                 recovered_ranks += 1;
                 if let Some(block_id) = block_id {
                     affected_blocks.insert(block_id);
@@ -228,6 +314,16 @@ async fn main() -> Result<(), IndexerError> {
                 error!(rank_id = %rank_id, error = %e, "failed to read rank config from kg");
                 failed += 1;
             }
+        }
+    }
+
+    // A recovered Rank's items may have been written with no space by an
+    // indexer older than 0125: attribute them now, so the recompute below
+    // counts them (GEO-3591).
+    if !affected_blocks.is_empty() {
+        if let Err(e) = storage.fill_missing_rank_spaces().await {
+            error!(error = %e, "failed to attribute recovered ranks' items to their space");
+            failed += 1;
         }
     }
 
@@ -261,6 +357,21 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // Blocks queued by a delete (GEO-3591) that no recompute has cleared,
+    // whatever their failed attempts. A block recomputed above already cleared
+    // its entries.
+    let (drained, drain_failed) = ranking_indexer::recompute::drain_pending_recomputes(
+        &storage,
+        now,
+        ranking_indexer::recompute::DrainMode::Backfill,
+        &handled_blocks,
+    )
+    .await;
+    failed += drain_failed;
+    for block_id in queued {
+        handled_blocks.insert(block_id);
+    }
+
     // Full recompute last, so anything recovered above is included rather than
     // recomputed twice. Blocks already handled above are skipped for the same
     // reason — recompute_block is idempotent, but doing it twice doubles the
@@ -292,6 +403,7 @@ async fn main() -> Result<(), IndexerError> {
         recovered_ranks,
         still_unregistered_ranks,
         applied_configs,
+        drained,
         recomputed_all,
         failed,
         "backfill complete"
