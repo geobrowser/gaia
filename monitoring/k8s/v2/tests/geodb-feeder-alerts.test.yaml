@@ -1,0 +1,34 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  - name: feeder memory headroom fires only after 15m over 90%
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="gaia", container="feeder", pod="geodb-feeder-abc"}'
+        values: '5000x10 6800x40'
+      - series: 'kube_pod_container_resource_limits{namespace="gaia", container="feeder", pod="geodb-feeder-abc", resource="memory"}'
+        values: '7000x50'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbFeederMemoryHeadroom, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbFeederMemoryHeadroom
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia, pod: geodb-feeder-abc}
+            exp_annotations:
+              summary: The geo-db feeder is using more than 90% of its memory limit
+              description: >-
+                The feeder container's working set has been over 90% of its limit for 15m, so an OOM kill (and a
+                restart that replays from the stored offset) is close. Read the working set against the limit and
+                the Node heap, then decide whether to raise the limit; see geodb/RUNBOOK.md section 6
+                (GeoDbFeederMemoryHeadroom). Never restart geodb-0 (serve) during a seed.
+
+  - name: a feeder under 90% stays silent
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="gaia", container="feeder", pod="geodb-feeder-abc"}'
+        values: '5000x60'
+      - series: 'kube_pod_container_resource_limits{namespace="gaia", container="feeder", pod="geodb-feeder-abc", resource="memory"}'
+        values: '7000x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbFeederMemoryHeadroom, exp_alerts: []}

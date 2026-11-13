@@ -1922,6 +1922,28 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceTopicsStalled` | `space.topics` lag above 0 and nothing handled by the space-topics consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-undecies) |
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederMemoryHeadroom` | the feeder container's working set over 90% of its memory limit for 15m (warning, never pages) | see "Feeder memory headroom" below |
+
+### Feeder memory headroom (GeoDbFeederMemoryHeadroom)
+
+The rule is `container_memory_working_set_bytes` (cAdvisor) divided by `kube_pod_container_resource_limits{resource="memory"}`
+(kube-state-metrics) for container `feeder` in pods `geodb-feeder-*`, above 0.9 for 15m. Severity is warning and the rule has no
+page route.
+
+- What to read: the ratio and the two series in Prometheus; `$K top pod -l app=geodb-feeder --containers`; the restart count and
+  last state (`OOMKilled`) from `$K get pod -l app=geodb-feeder -o wide` and `$K describe pod -l app=geodb-feeder`; the feeder log
+  for what it was doing (a relation seed, a large replay) and the dead-letter counter. The working set includes the Node heap, the
+  `geodb-client` child and page cache, so it can sit above the heap size.
+- Sizing history: #1551 set a 3584 MB heap (`--max-old-space-size=3584`) in a 4Gi limit; #1557 raised it to a 6144 MB heap in a
+  7Gi limit (request 3Gi) for the relation-seed journals, which is what `geodb/k8s/v2/geodb.yaml` and the live Deployment hold. Keep the
+  heap below the limit with room for the child process. The 90% line is therefore about 6.3 GiB against 7Gi.
+- What raising the limit touches: `resources.limits.memory` on the `feeder` container in `geodb/k8s/v2/geodb.yaml`, and the heap in
+  `NODE_OPTIONS` beside it (raise both together; the heap alone does not help). Applying it rolls the Deployment (strategy
+  `Recreate`: the feeder is down for the restart and resumes from `/data/feeder/offsets.json`), and the pod must still fit on its
+  node, so check the node's allocatable memory first. It does not touch serve (`geodb-0`) or the volume.
+- Never restart serve (`statefulset/geodb`, pod `geodb-0`) during a seed: the seed and replays write through it, and a restart
+  mid-seed drops the connection the feeder retries against and can leave the seed to be re-run. Restart or resize only the feeder, and
+  wait for a seed to finish first.
 
 ### serve's own metrics and the outbox mirror (geodb-serve-alerts.yaml)
 
