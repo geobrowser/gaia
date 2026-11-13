@@ -368,6 +368,17 @@ export type ReplayDeadLettersResult = {
 	reason?: string
 }
 
+/** Every entity an intent creates, deletes or names as its subject (set, put, add, unset, set_position). */
+export const touchedEntities = (intents: readonly string[]): string[] => [
+	...new Set(
+		intents.flatMap((i) => {
+			const created = /^\.\{\s*\.(?:create_entity|delete_entity)\s*=\s*"([0-9a-f]{32})"/.exec(i)?.[1]
+			const subject = /\.entity\s*=\s*"([0-9a-f]{32})"/.exec(i)?.[1]
+			return [created, subject].filter((x): x is string => x !== undefined)
+		}),
+	),
+]
+
 async function stateCheck(
 	deps: ReplayDeadLettersDeps,
 	args: ReplayDeadLettersArgs,
@@ -442,7 +453,7 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 		}
 		// Entities an earlier run of this tool wrote (or was writing when it died) now carry a newer updatedAt: its own work,
 		// not later state to stomp. An entity only a later writer touched is still checked.
-		const ours = new Set(editEntities(doc.entries.filter((e) => done.has(e.id) || started.has(e.id)).map((e) => e.intent)))
+		const ours = new Set(touchedEntities(doc.entries.filter((e) => done.has(e.id) || started.has(e.id)).map((e) => e.intent)))
 		const check: DocPlan["check"] =
 			"error" in target || pendingEntries.length === 0
 				? {kind: "unchecked", why: "error" in target ? "no target" : "nothing pending"}

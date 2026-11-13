@@ -332,7 +332,7 @@ describe("runReplayDeadLetters --apply", () => {
 			const again = harness({record, chunk: 4, done: first.done.join(""), rows: await newer(ents)})
 			const r2 = await runReplayDeadLetters(again.deps, args)
 			expect(r2.outcome).toBe("applied")
-			expect(r2.sent).toBe(8)
+			expect(r2.sent).toBe(12)
 		})
 
 		it("resends the chunk that was in flight when the process died, under the same key", async () => {
