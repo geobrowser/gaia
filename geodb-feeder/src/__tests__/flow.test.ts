@@ -67,6 +67,9 @@ describe("classify", () => {
 		expect(classify("error: FileNotFound")).toBe("transient")
 		// Seen live during a serve restart (2026-11-12): dead-lettered 28 intents before this was transient.
 		expect(classify("error: IoError\n--binding /geodb/binding.txt: connect: IoError\n")).toBe("transient")
+		expect(classify("error: Refused\nconnect: Refused\n")).toBe("transient")
+		// A Refused that is not a failed connect is geo-db's verdict on the intent.
+		expect(classify("error: Refused\nintent: Refused")).toBe("permanent")
 		// An IoError outside connect is not known to be safe to repeat.
 		expect(classify("error: IoError")).toBe("permanent")
 		expect(classify("error: StreamTooLong")).toBe("permanent")

@@ -45,6 +45,10 @@ export function classify(message: string): Failure {
 	// geodb-client reports a failed connect as `--binding <file>: connect: IoError` (serve restarting: the binding's
 	// address is gone or not listening yet). Nothing was sent, so the apply is safe to repeat.
 	if (/connect: IoError/.test(message)) return "transient"
+	// The same failed connect when nothing is listening at the binding's address (serve down or rolling): geodb-client
+	// prints `error: Refused\nconnect: Refused`. 192 intents were dead-lettered on this text on 2026-11-12. Anchored on
+	// `connect:` because a bare `Refused` can also be geo-db's verdict on an intent.
+	if (/connect: Refused/.test(message)) return "transient"
 	return "permanent"
 }
 
