@@ -14,7 +14,7 @@
 //! | [`participation_score`] | `public.entity_participation_score` | 0078 |
 //! | [`ranking_score`] | `public.entity_ranking_score` | 0079 |
 //! | [`score`] | the `computed` CTE and the upsert's `CASE` | 0113 |
-//! | [`trending_terms`] | the `inputs` and `terms` CTEs of `trending.entity_trending_terms` | 0113, 0118, 0122 |
+//! | [`trending_terms`] | the `inputs` and `terms` CTEs of `trending.entity_trending_terms` | 0113, 0118, 0122, 0124 |
 //!
 //! `public.wilson_lower_bound` is [`crate::sql_helpers::wilson_lower_bound`].
 //!
@@ -193,6 +193,9 @@ pub struct TrendConfig {
     pub position_step: f64,
     pub position_slots: i32,
     pub position_day_factor: f64,
+    /// `ranking_places_mode = 2` (migration 0124): the ranking place and the push-down are served and the agenda
+    /// position term is not. Off and shadow are both `false`: they score exactly as 0122.
+    pub ranking_on: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -210,6 +213,14 @@ pub struct TrendInputs {
     /// A debate's place on its newest ordered day (`trending.debate_positions`), and the days since that day.
     pub position: Option<i32>,
     pub position_days: Option<i64>,
+    /// The debate's best weighted Best debates place value (`trending.ranking_place_values`, 0124), 0 when unplaced.
+    /// Read only while `ranking_on`.
+    pub ranking_place: f64,
+    /// `ranking_pushdown` for a pushed-down debate (`trending.ranking_pushdowns`, 0124), else 0. Read only while
+    /// `ranking_on`.
+    pub pushdown: f64,
+    /// The debate is pushed down (0124): while `ranking_on` it also gets no age credit.
+    pub pushed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -235,7 +246,9 @@ fn position_term(cfg: &TrendConfig, t: &TrendInputs, beyond: &impl Fn(i64) -> bo
 }
 
 pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
-    let age_credit = if t.listed {
+    let age_credit = if cfg.ranking_on && t.pushed {
+        0.0
+    } else if t.listed {
         let listed = t.listed_epoch.unwrap_or(0) as f64;
         (((listed - t.created_epoch.unwrap_or(0) as f64) / cfg.tau_seconds.max(1.0)).max(0.0))
             .max(0.0)
@@ -248,7 +261,11 @@ pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
             cfg.boost
                 * cfg.day_factor.powi(d as i32)
                 * cfg.debate_factor.powi(t.debates.unwrap_or(0) as i32)
-                + position_term(cfg, t, &beyond)
+                + if cfg.ranking_on {
+                    0.0
+                } else {
+                    position_term(cfg, t, &beyond)
+                }
         }
         _ => 0.0,
     };
@@ -256,7 +273,14 @@ pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
         Some(d) if !beyond(d) => cfg.topic_boost * cfg.day_factor.powi(d as i32),
         _ => 0.0,
     };
-    let source = if listing_score > 0.0 && listing_score >= topic_score {
+    // 0124: the ranking place inside the GREATEST (reported as a listing), the push-down after it.
+    let (place, pushdown) = if cfg.ranking_on {
+        (t.ranking_place, t.pushdown)
+    } else {
+        (0.0, 0.0)
+    };
+    let listed = listing_score.max(place);
+    let source = if listed > 0.0 && listed >= topic_score {
         Some("listing")
     } else if topic_score > 0.0 {
         Some("topic")
@@ -265,7 +289,7 @@ pub fn trending_terms(cfg: &TrendConfig, t: &TrendInputs) -> TrendTerms {
     };
     TrendTerms {
         age_credit,
-        trending_score: listing_score.max(topic_score),
+        trending_score: listing_score.max(topic_score).max(place) - pushdown,
         source,
         listing_score,
         topic_score,
@@ -518,6 +542,7 @@ mod tests {
         position_step: 100.0,
         position_slots: 50,
         position_day_factor: 0.3,
+        ranking_on: false,
     };
 
     /// The listing score with the position term (migration 0122), over a grid of configs, days, places and

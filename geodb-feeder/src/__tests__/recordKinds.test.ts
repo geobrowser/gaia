@@ -126,6 +126,11 @@ describe("record columns", () => {
 				trendingPositionStep: "f3a7f5dd554e40319ca94dd77c2c2c91",
 				trendingPositionSlots: "8ef101e5e2ff45519677eb8de7208be3",
 				trendingPositionDayFactor: "a68b8359f702468cb0dae2165ce8e417",
+				rankingPlacesMode: "f1905a9d3e3745a79f90e2037f90861b",
+				rankingPlaceBase: "9d76ae49d9124cbaa6502a8ac387695e",
+				rankingPlaceStep: "175cfab0e5554449b928efc12b720184",
+				rankingPushdown: "d7fbcef7d34d4c3bbcc1afd31b5a2848",
+				rankingPushdownSince: "541e7823a0774ac9ae6a25c1345d97c4",
 			},
 			forYouConfig: {
 				id: "054f9998f5204c85a2eeadc923fc614c",

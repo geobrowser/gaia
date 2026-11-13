@@ -1,0 +1,183 @@
+# geodb-replay-deadletters: a one-shot Job that sends the feeder's dead-lettered intents again, VERBATIM, from its own
+# record (/data/feeder/errors.jsonl, read only). For dead letters that never reached geo-db (`connect: Refused`: serve
+# unreachable, nothing sent). Re-translating the edit cannot restore them: the edits consumer committed its overlay
+# although every intent dead-lettered (handle.ts), so replay-edit skips the creates as already known. This Job groups the
+# record per original document, finds each document's target (the gaia Space's geo-db Space from spaces.json, or a keyed
+# record's family system Space from system-spaces.json), checks the ISS-679-318 pairs and the target's current state
+# (read only, the api's reader key), and with --apply sends the pending entries under a stable key and records each in
+# /data/feeder/replay-deadletters.done.jsonl, so a rerun skips it. See geodb/RUNBOOK.md section 2b-quater-replay and
+# geodb-feeder/src/replayDeadLetters.ts.
+#
+# NOT in deploy-v2: it runs by hand. The dry run needs no stopped feeder; --apply needs Deployment geodb-feeder scaled to
+# 0 (the Job mounts the feeder's RWO state volume and refuses while any feeder consumer group has members). Placeholders
+# are filled at apply time; `-` means "not given". The Job refuses to start if one is left in:
+#   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
+#   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
+#       -e "s|__SOURCE__|edit|" -e "s|__EDIT__|<edit id>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__OFFSETS__|-|" \
+#       -e "s|__MODE__|--dry-run|" geodb-replay-deadletters-job.yaml | kubectl apply -f -
+# For the keyed records: __SOURCE__ keyed, __EDIT__ -, __CREATED_AT__ -. Delete the Job before applying it again: a
+# Job's pod template is immutable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: geodb-replay-deadletters
+  namespace: gaia
+  labels:
+    app: geodb-replay-deadletters
+spec:
+  # A failure stops here and is read from the logs; a rerun is a deliberate, fresh apply.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        geodb-client: "true"
+        app: geodb-replay-deadletters
+    spec:
+      serviceAccountName: geodb
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: geodb-feeder-state
+        - name: geodb-bin
+          emptyDir: {}
+        - name: space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: writer-key
+          secret:
+            secretName: geodb-writer-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: writer.key
+        # The read-back of known entities uses the api's read-only key: the same grant the card route reads with.
+        - name: reader-key
+          secret:
+            secretName: geodb-reader-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
+      initContainers:
+        # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:GEODB_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /usr/local/bin/geodb-client /geodb/geodb-client
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -z "$node" ] || [ -z "$ip" ]; then
+                echo "geodb-setup: serve has not published node-id yet, or no geodb Service"
+                exit 1
+              fi
+              printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: replay-deadletters
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/replay-deadletters-main.js"]
+          args: ["--source", "__SOURCE__", "--edit", "__EDIT__", "--created-at", "__CREATED_AT__", "--offsets", "__OFFSETS__", "__MODE__"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # --apply requires it, as the live feeder does (a keyed record's put is sent only under it).
+            - name: GEODB_RECORD_KEYS
+              value: "1"
+            - name: ENVIRONMENT
+              value: testnet
+            - name: KAFKA_GROUP_ID
+              value: geodb-feeder-v1-testnet
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/writer-key/writer.key
+            - name: GEODB_READER_KEY_PATH
+              value: /etc/geodb/reader-key/reader.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SEALER_FILE
+              value: /etc/geodb/space-map/sealer-id
+            - name: METRICS_PORT
+              value: "9090"
+            # Only --apply's guard reads Kafka: it refuses while any feeder consumer group has members.
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: writer-key
+              mountPath: /etc/geodb/writer-key
+              readOnly: true
+            - name: reader-key
+              mountPath: /etc/geodb/reader-key
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "3Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

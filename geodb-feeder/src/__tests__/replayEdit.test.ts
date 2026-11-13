@@ -7,8 +7,8 @@ import type {EntityReader, GeoDbRow} from "../geodbPipe.js"
 import {cid} from "../ids.js"
 import {createMetrics} from "../metrics.js"
 import {gatewayUrl, loadPayload, parseArgs, runReplayEdit, type ReplayEditArgs, type ReplayEditDeps} from "../replayEdit.js"
-import {Store} from "../state.js"
-import type {GrcOp} from "../translate.js"
+import {Overlay, Store} from "../state.js"
+import {type GrcOp, translateOps} from "../translate.js"
 
 const GAIA = "a19c345ab9866679b001d7d2138d88a1"
 const GEO = "daf0bc83ca744e1a9ee0377967846846"
@@ -132,12 +132,96 @@ describe("replay-edit refusal", () => {
 	})
 })
 
+describe("replay-edit ISS-679-318 chunk check", () => {
+	const EDIT = "742e60d91fc0490ea4cd3579bd19c72c"
+	// Edit A made a positioned relation from entity 1 and applied; edit B moves it, then deletes entity 1: one chunk
+	// holding relation_move;delete_entity on entity 1.
+	const opsA: GrcOp[] = [{type: "createRelation", id: id(9), from: id(1), to: id(4), relationType: id(5), position: "a0"}]
+	const opsB: GrcOp[] = [
+		{type: "updateRelation", id: id(9), unset: [], position: "b0"},
+		{type: "deleteEntity", id: id(1)},
+	]
+
+	async function afterA() {
+		const w = world(micros(EDIT_SECONDS - 60))
+		w.deps.positions = true
+		w.deps.decode = async () => ({ops: opsA})
+		expect(await runReplayEdit(w.deps, args({apply: true}), w.store)).toMatchObject({outcome: "applied"})
+		w.applied.length = 0
+		w.deps.decode = async () => ({ops: opsB})
+		// What runReplayEdit will translate edit B to, without touching the journals.
+		const intentsB = translateOps(opsB, new Overlay(w.store, GAIA), {positions: true, blockSeconds: EDIT_SECONDS}).intents
+		const letters = (texts: string[]) =>
+			texts.map((intent) => JSON.stringify({t: 1, partition: 0, offset: "98656", space: GAIA, edit: EDIT, idempotent: true, intent, err: "connect: Refused"})).join("\n")
+		return {w, intentsB, letters}
+	}
+
+	it("the fixture really holds the pair", async () => {
+		const {intentsB} = await afterA()
+		expect(intentsB.some((i) => i.startsWith(".{ .set_position"))).toBe(true)
+		expect(intentsB.some((i) => i.startsWith(".{ .delete_entity"))).toBe(true)
+	})
+
+	it("refuses --apply when the chunk already applied (nothing dead-lettered for the edit), says why, and writes nothing", async () => {
+		const {w} = await afterA()
+		w.deps.deadLetters = ""
+		const r = await runReplayEdit(w.deps, args({apply: true, edit: EDIT}), w.store)
+		expect(r.outcome).toBe("refused")
+		if (r.outcome !== "refused") return
+		expect(r.reason).toMatch(/1 chunk already applied and hold an ISS-679-318 pair: chunk \[0,\d+\) already applied .*relation_move;delete_entity/)
+		expect(r.chunks).toMatchObject({chunks: 1, firstApply: 0, applied: 1, deadLetteredMatched: 0, deadLettersInRecord: 0})
+		expect(r.chunks?.withPairs[0]?.pairs.map((p) => p.pair)).toEqual(["relation_move;delete_entity"])
+		expect(w.applied).toEqual([])
+	})
+
+	it("refuses in the dry run too, so the operator sees it before stopping the feeder", async () => {
+		const {w} = await afterA()
+		w.deps.deadLetters = ""
+		expect((await runReplayEdit(w.deps, args({edit: EDIT}), w.store)).outcome).toBe("refused")
+	})
+
+	it("refuses when a single intent of the chunk applied (a bisected chunk)", async () => {
+		const {w, intentsB, letters} = await afterA()
+		w.deps.deadLetters = letters(intentsB.slice(1))
+		const r = await runReplayEdit(w.deps, args({apply: true, edit: EDIT}), w.store)
+		expect(r).toMatchObject({outcome: "refused", chunks: {applied: 1, deadLetteredMatched: intentsB.length - 1}})
+		expect(w.applied).toEqual([])
+	})
+
+	it("without --edit no chunk can be shown never applied, so a chunk with a pair refuses", async () => {
+		const {w, intentsB, letters} = await afterA()
+		w.deps.deadLetters = letters(intentsB)
+		const r = await runReplayEdit(w.deps, args({apply: true}), w.store)
+		expect(r.outcome).toBe("refused")
+		if (r.outcome === "refused") expect(r.reason).toMatch(/no --edit given/)
+	})
+
+	it("passes, and applies, when every intent of the chunk was dead-lettered: a first apply", async () => {
+		const {w, intentsB, letters} = await afterA()
+		w.deps.deadLetters = letters(intentsB)
+		const dry = await runReplayEdit(w.deps, args({edit: EDIT}), w.store)
+		expect(dry).toMatchObject({outcome: "dry-run", chunks: {chunks: 1, firstApply: 1, applied: 0, deadLetteredMatched: intentsB.length}})
+		const r = await runReplayEdit(w.deps, args({apply: true, edit: EDIT}), w.store)
+		expect(r).toMatchObject({outcome: "applied", deadLettered: 0})
+		expect(w.applied).toHaveLength(1)
+	})
+
+	it("ignores another edit's dead letters", async () => {
+		const {w, intentsB, letters} = await afterA()
+		w.deps.deadLetters = letters(intentsB)
+		expect((await runReplayEdit(w.deps, args({edit: "0".repeat(32)}), w.store)).outcome).toBe("refused")
+	})
+})
+
 describe("replay-edit arguments and payload", () => {
 	const good = ["--uri", "ipfs://bafyexample", "--space", "a19c345a-b986-6679-b001-d7d2138d88a1", "--block", "7", "--created-at", "9"]
 
 	it("parses the flags; dry run unless --apply", () => {
 		expect(parseArgs(good)).toMatchObject({space: GAIA, block: 7, sequence: 0, createdAt: 9, apply: false})
 		expect(parseArgs([...good, "--apply"]).apply).toBe(true)
+		expect(parseArgs(good).edit).toBeUndefined()
+		expect(parseArgs([...good, "--edit", "742E60D9-1FC0-490E-A4CD-3579BD19C72C"]).edit).toBe("742e60d91fc0490ea4cd3579bd19c72c")
+		expect(() => parseArgs([...good, "--edit", "742e60d9"])).toThrow(/--edit/)
 	})
 
 	it("rejects missing, unknown, conflicting and placeholder arguments", () => {

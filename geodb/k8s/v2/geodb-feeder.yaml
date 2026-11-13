@@ -1,0 +1,338 @@
+# geo-db feeder: the feeder-only objects of the read replica (split out of geodb.yaml; see geodb/RUNBOOK.md §1).
+#   Service geodb-feeder              its metrics port (9090).
+#   PersistentVolumeClaim geodb-feeder-state   offsets and journals; one RWO volume, one pod.
+#   Deployment geodb-feeder           reads <env>.knowledge.edits and applies each edit to serve over TCP.
+# deploy-v2 `service=geodb-feeder` applies this file (plus geodb-card-replay.yaml and geodb-snapshot.yaml) and
+# nothing of the serve: StatefulSet geodb, its ConfigMap, Service, RBAC and NetworkPolicy stay in geodb.yaml
+# (deploy-v2 `service=geodb-serve`). The feeder image is :latest, rewritten to the gaia tag at apply time; the geodb
+# image in the geodb-setup init container is pinned and must match geodb.yaml's serve pin (change them together).
+apiVersion: v1
+kind: Service
+metadata:
+  name: geodb-feeder
+  namespace: gaia
+  labels:
+    app: geodb-feeder
+spec:
+  type: ClusterIP
+  selector:
+    app: geodb-feeder
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: geodb-feeder-state
+  namespace: gaia
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: do-block-storage
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geodb-feeder
+  namespace: gaia
+  labels:
+    app: geodb-feeder
+spec:
+  replicas: 1
+  # One consumer on one RWO volume (offsets, journals): never two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: geodb-feeder
+  template:
+    metadata:
+      labels:
+        geodb-client: "true"
+        app: geodb-feeder
+    spec:
+      serviceAccountName: geodb
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: geodb-feeder-state
+        - name: geodb-bin
+          emptyDir: {}
+        # serve's node-id and sealer-id (public), written by the supervisor; the feeder's own space-map.json
+        # lands here too. optional: the pod can start before serve has ever published.
+        - name: space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: writer-key
+          secret:
+            secretName: geodb-writer-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: writer.key
+        # The CURSOR key for the applied-block mirror (GEODB_APPLIED_BLOCK). optional: absent or unread while the flag is off.
+        - name: cursor-key
+          secret:
+            secretName: geodb-cursor-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: cursor.key
+      initContainers:
+        # Copies geodb-client from the pinned geodb image and writes the client binding: a TCP listener
+        # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
+        # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:8cba4da996
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /usr/local/bin/geodb-client /geodb/geodb-client
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -z "$node" ] || [ -z "$ip" ]; then
+                echo "geodb-setup: serve has not published node-id yet, or no geodb Service; retrying"
+                exit 1
+              fi
+              printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: feeder
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: testnet
+            - name: KAFKA_GROUP_ID
+              value: geodb-feeder-v1-testnet
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/writer-key/writer.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SEALER_FILE
+              value: /etc/geodb/space-map/sealer-id
+            - name: METRICS_PORT
+              value: "9090"
+            # Membership (space members and editors) into geo-db. Both are off: the feeder reads only "1" or
+            # "true" as on (anything else, including "off", is off). To turn them on, in this order:
+            #   1. run the membership backfill Job (geodb-membership-backfill-job.yaml, RUNBOOK §2c) with the
+            #      feeder scaled to 0;
+            #   2. set GEODB_MEMBERSHIP_DUAL_WRITE to "1" and roll the feeder: it consumes space.membership;
+            #   3. once its lag is ~0, set GEODB_MEMBERSHIP_SHADOW_COMPARE to "1": it compares the member and
+            #      editor id sets per Space against Postgres (geodb_feeder_membership_shadow_* metrics).
+            - name: GEODB_MEMBERSHIP_DUAL_WRITE
+              value: "1"
+            - name: GEODB_MEMBERSHIP_SHADOW_COMPARE
+              value: "1"
+            # Keyed membership records (RUNBOOK §2c-bis): the keyed consumer replaces the legacy one, on its own
+            # group, writing natural-key records into the governance system Space. On since 2026-11-05, after the
+            # keyed membership backfill Job ran with the feeder at 0. Rollback: "0" (the legacy consumer resumes
+            # from its own offsets).
+            - name: GEODB_RECORD_KEYS
+              value: "1"
+            # Proposal system entities: the kg-indexer writes one per proposal straight to Postgres, no edit
+            # carries it. The feeder consumes PROPOSAL_CREATED on space.governance (its own group, needs
+            # consume on that topic) and writes them into Spaces geo-db already holds.
+            - name: GEODB_PROPOSAL_ENTITIES
+              value: "1"
+            # Space system entities: the kg-indexer writes one per registered Space straight to Postgres, no
+            # edit carries it. The feeder consumes space.creations (its own group, needs consume on that topic)
+            # and writes them into Spaces geo-db holds; one for a Space not founded yet waits until it is.
+            - name: GEODB_SPACE_ENTITIES
+              value: "1"
+            # Keyed user votes (curation.votes into the votes system Space). Takes effect only with
+            # GEODB_RECORD_KEYS: RUNBOOK §2c-ter. On since 2026-11-05, after the votes backfill Job
+            # (geodb-votes-backfill-job.yaml) ran with the feeder at 0. Rollback: "0".
+            - name: GEODB_VOTES
+              value: "1"
+            # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Takes
+            # effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-quater. On since 2026-11-05, after the
+            # proposal-votes backfill Job (geodb-proposal-votes-backfill-job.yaml) ran with the feeder at 0
+            # (49518 rows, 0 dead letters). Rollback: "0".
+            - name: GEODB_PROPOSAL_VOTES
+              value: "1"
+            # Keyed proposal actions (PROPOSAL_CREATED / PROPOSAL_UPDATED on space.governance, into the governance
+            # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-quinquies. OFF until the
+            # proposal-actions backfill Job (geodb-proposal-actions-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_PROPOSAL_ACTIONS
+              value: "1"
+            # Keyed subspaces and subspace topics (TRUST_EXTENSION on space.trust.extensions, into the governance
+            # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-sexies. OFF until the
+            # subspaces backfill Job (geodb-subspaces-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SUBSPACES
+              value: "1"
+            # Keyed space voting settings (VOTING_SETTINGS_UPDATED on space.governance, into the governance system
+            # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-septies. OFF until the space-voting-settings
+            # backfill Job (geodb-space-voting-settings-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_VOTING_SETTINGS
+              value: "1"
+            # Keyed space topics (TOPIC_DECLARED / TOPIC_REMOVED on space.topics, into the governance system Space).
+            # Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-undecies. OFF until the space-topics backfill Job
+            # (geodb-space-topics-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_TOPICS
+              value: "1"
+            # Keyed space addresses (SPACE_ADDRESS_UPDATED and creates on space.creations, into the governance system
+            # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-duodecies. OFF until the space-addresses
+            # backfill Job (geodb-space-addresses-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_ADDRESSES
+              value: "1"
+            # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
+            # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
+            # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_PROPOSAL_VERSIONS
+              value: "1"
+            # Also write each version's proposer and owning Space (references) for the notification-indexer twin to compare.
+            # On since 2026-11-12, after the proposal-versions backfill Job reran with the same value on (RUNBOOK §2c-octies).
+            # Write-side only. Rollback: "0".
+            - name: GEODB_PROPOSAL_VERSION_PROPOSER_SPACE
+              value: "1"
+            # Keyed proposal status facts (executed_at from PROPOSAL_EXECUTED on space.governance, unexecutable_at from the
+            # backfill only, into the governance system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-novies.
+            # OFF until the proposal-status backfill Job (geodb-proposal-status-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_PROPOSAL_STATUS
+              value: "1"
+            # Keyed ranking blocks, rankings and items (ranking-indexer's ranks tables, from knowledge.edits, into the votes
+            # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-decies.
+            # OFF until the ranks backfill Job (geodb-ranks-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_RANKS
+              value: "1"
+            # Relation positions (`.position` on a relation's add). On since 2026-11-12: the geodb image (67b6974a5e)
+            # carries a geodb-client with ISS-587-318, and the relation-seed Job wrote the existing positions with the
+            # feeder at 0. Write-side only. Rollback: "0".
+            - name: GEODB_RELATION_POSITIONS
+              value: "1"
+            # Relation facets: to-space, from-space, the two version pins and verified, written as claims on the
+            # relation's statement in the same Edit (`.statement` subject, geo-db docs/api/10 section 5.5). Off: up to
+            # five more adds per relation, and the api's GEODB_RELATION_FACETS_SHADOW has nothing to compare until a
+            # backfill writes them. The geodb-client the init container copies already accepts the wire. On since
+            # 2026-11-12 for new relations (write-side only; the shadow stays off). Rollback: "0".
+            - name: GEODB_RELATION_FACETS
+              value: "1"
+            # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
+            # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
+            - name: GEODB_ENTITY_TIMES
+              value: "1"
+            # Applied-block mirror (appliedBlock.ts): on since 2026-11-12. The feeder writes the geo-db cursors row
+            # geodb-feeder-applied using the geodb-cursor-key mounted below (derived=10 only). Write-side only:
+            # nothing reads the row for serving yet. Rollback: "0".
+            - name: GEODB_APPLIED_BLOCK
+              value: "1"
+            # Edit meta (editMetaConsumer.ts, RUNBOOK §2c-duodecies): on since 2026-11-12. Takes effect only with
+            # GEODB_RECORD_KEYS. Own consumer group geodb-feeder-edit-meta-keyed-v1-testnet; no backfill needed.
+            # Write-side only. Rollback: "0".
+            - name: GEODB_EDIT_META
+              value: "1"
+            - name: GEODB_APPLIED_BLOCK_KEY_PATH
+              value: /etc/geodb/cursor-key/cursor.key
+            # Read only; used by the membership comparison, ignored while it is off.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+            # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
+            # after a backfill (RUNBOOK §2b): give the heap room below the limit. The relation seed adds a
+            # known-relations record per relation (~1M on testnet); the seed Job loading the same journals
+            # needed more than a 2 GiB heap and ran at ~3 GiB RSS, so the feeder gets the seed Job's sizing.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=6144"
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: writer-key
+              mountPath: /etc/geodb/writer-key
+              readOnly: true
+            - name: cursor-key
+              mountPath: /etc/geodb/cursor-key
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # No readinessProbe on purpose: the Service only scrapes metrics, and a Kafka outage must not make
+          # the series vanish. /health/readiness is there for humans and for the alert on the feeder's series.
+          resources:
+            requests:
+              memory: "3Gi"
+              cpu: "100m"
+            limits:
+              memory: "7Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

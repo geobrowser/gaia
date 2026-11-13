@@ -13,7 +13,7 @@ const k8s = join(dirname(fileURLToPath(import.meta.url)), "../../../geodb/k8s/v2
 const read = (f: string) => readFileSync(join(k8s, f), "utf8")
 const geodbImages = (yaml: string) => [...yaml.matchAll(/^ *image: registry\.digitalocean\.com\/geo\/geodb:(\S+)$/gm)].map((m) => m[1])
 
-// The serve container's tag: the client must match serve. geodb.yaml also pins an older tag on the feeder's geodb-setup
+// The serve container's tag: the client must match serve. geodb-feeder.yaml also pins an older tag on the feeder's geodb-setup
 // init container (left behind by targeted serve bumps), so the Jobs must not take "the" tag from every image line.
 const serveTag = () => {
 	const yaml = read("geodb.yaml")

@@ -6,7 +6,8 @@
  *
  * Functions covered: trending.claims_and_debates, debate_links, current_agendas, agenda_contents, current_agenda_listings,
  * newest_listings, claim_listings, entity_listings, entity_topic_listings, public.current_debate_agendas and
- * public.topic_suggestions_for_spaces.
+ * public.topic_suggestions_for_spaces; and (0124, at the end of the file) ranking_member_ballots, current_ranking_pushdowns,
+ * current_ranking_places and ranking_place_values.
  *
  * Fidelity notes (each is a place the SQL is subtle, and each is exercised by the golden grid):
  *  - `position_order`: bytewise compare of `lower(pos) || ' ' || swapcase(pos)`, NULL last. ASCII-only case folding, as in the
@@ -800,4 +801,185 @@ export class Trending {
 			return e ? [{id: e.id, created_at: e.created_at}] : []
 		})
 	}
+}
+
+// ---- Best debates ranking places and push-downs (migration 0124, GEO-3681) -------------------------------------------
+//
+// Twins of trending.ranking_member_ballots, current_ranking_pushdowns, current_ranking_places and ranking_place_values,
+// held to `__tests__/fixtures/ranking-places-golden.json` (api/scripts/rankingplaces/gen_golden.py, the migrations' own
+// SQL on a scratch Postgres). `rankable` is trending.rankable_debates: the Debate-typed entities present in `entities`
+// and not on the feed blocklist, with their created epoch (null unless `created_at` is all digits).
+
+/** A `trending.ranking_place_sources` row. */
+export interface RankingSource {
+	name: string
+	space_id: string
+	block_id: string
+	weight: number
+	window_days: number | null
+	slots: number
+	day_factor: number
+}
+export interface RankingInputs {
+	/** `ranks.ranking_scores` (the item space is not read). */
+	scores: {block_id: string; entity_id: string; position: number}[]
+	ballots: {id: string; block_id: string | null; space_id: string; updated_at_block: number; update_index: number}[]
+	items: {ranking_id: string; entity_id: string}[]
+	/** `ranks.members` ∪ `ranks.editors`. */
+	members: {member_space_id: string; space_id: string}[]
+	/** `user_votes`, `voted_at_us` in microseconds since the epoch. */
+	votes: {
+		user_id: string
+		object_id: string
+		object_type: number
+		vote_kind: number
+		vote_type: number
+		voted_at_us: number
+	}[]
+	rankable: Map<string, number | null>
+}
+/** A `trending.ranking_places` row. */
+export interface RankingPlace {
+	source: string
+	entity_id: string
+	place: number
+}
+
+/** `trending.epoch_day`: the New York calendar day of an epoch in seconds. */
+export function epochDay(epoch: number): string {
+	return nyParts(epoch * 1000).date
+}
+/** `a - b` for two `YYYY-MM-DD` dates, in days. */
+function dayDiff(a: string, b: string): number {
+	const ms = (d: string) => {
+		const [y, m, dd] = d.split("-").map(Number)
+		return Date.UTC(y!, m! - 1, dd!)
+	}
+	return Math.round((ms(a) - ms(b)) / 86_400_000)
+}
+
+/** `(space, block, member)` of each source's (space, block). */
+function rankingMembers(sources: RankingSource[], r: RankingInputs): [string, string, string][] {
+	const pairs = new Map(sources.map((s) => [`${s.space_id}|${s.block_id}`, [s.space_id, s.block_id] as const]))
+	const out = new Map<string, [string, string, string]>()
+	for (const [space, block] of pairs.values())
+		for (const m of r.members)
+			if (m.space_id === space)
+				out.set(`${space}|${block}|${m.member_space_id}`, [space, block, m.member_space_id])
+	return [...out.values()]
+}
+
+/** `trending.ranking_member_ballots`: `(space, block, member, entity)` for each member's latest ballot on a source block. */
+export function rankingMemberBallots(sources: RankingSource[], r: RankingInputs): [string, string, string, string][] {
+	const blocks = new Set(sources.map((s) => s.block_id))
+	const latest = new Map<string, RankingInputs["ballots"][number]>()
+	for (const b of r.ballots) {
+		if (b.block_id === null || !blocks.has(b.block_id)) continue
+		const k = `${b.block_id}|${b.space_id}`
+		const cur = latest.get(k)
+		// Newest updated_at_block, then update_index, then the lower id.
+		const better =
+			!cur ||
+			(b.updated_at_block - cur.updated_at_block || b.update_index - cur.update_index || cmpStr(cur.id, b.id)) > 0
+		if (better) latest.set(k, b)
+	}
+	const items = new Map<string, string[]>()
+	for (const i of r.items) items.set(i.ranking_id, [...(items.get(i.ranking_id) ?? []), i.entity_id])
+	const out = new Map<string, [string, string, string, string]>()
+	const members = rankingMembers(sources, r)
+	for (const b of latest.values())
+		for (const [space, block, member] of members)
+			if (block === b.block_id && member === b.space_id)
+				for (const e of items.get(b.id) ?? [])
+					out.set(`${space}|${block}|${member}|${e}`, [space, block, member, e])
+	return [...out.values()]
+}
+
+/** `trending.current_ranking_pushdowns`: per pushed-down debate, its downvoters and rankers. `since` in epoch seconds. */
+export function currentRankingPushdowns(
+	sources: RankingSource[],
+	r: RankingInputs,
+	since: number,
+): {entity_id: string; downvoters: number; rankers: number}[] {
+	const down = new Map<string, {space: string; block: string; entity: string; voters: Set<string>}>()
+	if (since > 0) {
+		const members = rankingMembers(sources, r)
+		for (const v of r.votes) {
+			if (v.object_type !== 0 || v.vote_kind !== 0 || v.vote_type !== 1 || v.voted_at_us < since * 1_000_000)
+				continue
+			for (const [space, block, member] of members) {
+				if (member !== v.user_id) continue
+				const k = `${space}|${block}|${v.object_id}`
+				const d = down.get(k) ?? {space, block, entity: v.object_id, voters: new Set<string>()}
+				d.voters.add(v.user_id)
+				down.set(k, d)
+			}
+		}
+	}
+	const ranked = new Map<string, Set<string>>()
+	for (const [space, block, member, e] of rankingMemberBallots(sources, r)) {
+		const k = `${space}|${block}|${e}`
+		ranked.set(k, (ranked.get(k) ?? new Set()).add(member))
+	}
+	const cands = [...down.entries()].flatMap(([k, d]) => {
+		const n = d.voters.size
+		const rk = ranked.get(k)?.size ?? 0
+		return n > rk && r.rankable.has(d.entity) ? [{...d, n, rk}] : []
+	})
+	const best = distinctOn(
+		cands,
+		(c) => c.entity,
+		(a, b) => b.n - b.rk - (a.n - a.rk) || b.n - a.n || cmpStr(a.space, b.space) || cmpStr(a.block, b.block),
+	)
+	return best
+		.map((c) => ({entity_id: c.entity, downvoters: c.n, rankers: c.rk}))
+		.sort((a, b) => cmpStr(a.entity_id, b.entity_id))
+}
+
+/** `trending.current_ranking_places`: each source's ranking deduped by entity, rankable, not pushed down, in the window. */
+export function currentRankingPlaces(
+	sources: RankingSource[],
+	r: RankingInputs,
+	pushed: Set<string>,
+	today: string,
+): RankingPlace[] {
+	const out: RankingPlace[] = []
+	for (const s of sources) {
+		const best = new Map<string, number>()
+		for (const x of r.scores)
+			if (x.block_id === s.block_id)
+				best.set(x.entity_id, Math.min(best.get(x.entity_id) ?? x.position, x.position))
+		const rows = [...best.entries()].filter(([e]) => {
+			if (pushed.has(e) || !r.rankable.has(e)) return false
+			if (s.window_days === null) return true
+			const created = r.rankable.get(e)
+			return created != null && dayDiff(today, epochDay(created)) < s.window_days
+		})
+		rows.sort(([ea, pa], [eb, pb]) => pa - pb || cmpStr(ea, eb))
+		rows.slice(0, Math.max(0, s.slots)).forEach(([e], i) => out.push({source: s.name, entity_id: e, place: i + 1}))
+	}
+	return out
+}
+
+/** `trending.ranking_place_values`: per placed entity of `ids` with a numeric created time, its best weighted value. */
+export function rankingPlaceValues(
+	base: number,
+	step: number,
+	sources: RankingSource[],
+	places: RankingPlace[],
+	created: Map<string, number | null>,
+	ids: Set<string>,
+	today: string,
+): Map<string, number> {
+	const byName = new Map(sources.map((s) => [s.name, s]))
+	const out = new Map<string, number>()
+	for (const p of places) {
+		const s = byName.get(p.source)
+		const c = created.get(p.entity_id)
+		if (!ids.has(p.entity_id) || !s || p.place > s.slots || c == null) continue
+		const age = Math.max(0, dayDiff(today, epochDay(c)))
+		const v = s.weight * (base + step * (s.slots - p.place + 1)) * s.day_factor ** age
+		out.set(p.entity_id, Math.max(out.get(p.entity_id) ?? v, v))
+	}
+	return out
 }

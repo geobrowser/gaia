@@ -153,6 +153,73 @@ struct RescoreBefore {
     terms: Vec<rescore::StoredTerm>,
     last_full_pass_on: Option<chrono::NaiveDate>,
     cfg: RescoreConfig,
+    /// The Best debates ranking (0124): `ranking_places_mode`, `ranking_place_base`, `ranking_place_step`,
+    /// `ranking_pushdown`, and its two tables before the refresh.
+    ranking_cfg: (i32, f64, f64, f64),
+    ranking_places: std::collections::BTreeSet<ranking_indexer::ranking_places_compute::Place>,
+    ranking_pushdowns: std::collections::BTreeSet<uuid::Uuid>,
+}
+
+/// `trending.ranking_places` and `trending.ranking_pushdowns` (migration 0124).
+async fn read_ranking_rows(
+    pool: &sqlx::PgPool,
+) -> Result<
+    (
+        std::collections::BTreeSet<ranking_indexer::ranking_places_compute::Place>,
+        std::collections::BTreeSet<uuid::Uuid>,
+    ),
+    IndexerError,
+> {
+    let places: Vec<(String, uuid::Uuid, i32)> =
+        sqlx::query_as("SELECT source, entity_id, place FROM trending.ranking_places")
+            .fetch_all(pool)
+            .await?;
+    let pushdowns: Vec<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT entity_id FROM trending.ranking_pushdowns")
+            .fetch_all(pool)
+            .await?;
+    Ok((
+        places
+            .into_iter()
+            .map(
+                |(source, entity_id, place)| ranking_indexer::ranking_places_compute::Place {
+                    source,
+                    entity_id,
+                    place,
+                },
+            )
+            .collect(),
+        pushdowns.into_iter().map(|(e,)| e).collect(),
+    ))
+}
+
+/// `trending.ranking_place_sources` (migration 0124).
+async fn read_ranking_sources(
+    pool: &sqlx::PgPool,
+) -> Result<Vec<ranking_indexer::ranking_places_compute::Source>, IndexerError> {
+    type Row = (String, uuid::Uuid, uuid::Uuid, f64, Option<i32>, i32, f64);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT name, space_id, block_id, weight::float8, window_days, slots, day_factor::float8 \
+         FROM trending.ranking_place_sources",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(name, space_id, block_id, weight, window_days, slots, day_factor)| {
+                ranking_indexer::ranking_places_compute::Source {
+                    name,
+                    space_id,
+                    block_id,
+                    weight,
+                    window_days,
+                    slots,
+                    day_factor,
+                }
+            },
+        )
+        .collect())
 }
 
 /// The `entity_ranking_config` columns the re-scoring reads: boost, topic boost, day factor, debate factor,
@@ -243,6 +310,14 @@ async fn rescore_before(pool: &sqlx::PgPool) -> Result<RescoreBefore, IndexerErr
     )
     .fetch_one(pool)
     .await?;
+    let ranking_cfg = sqlx::query_as(
+        "SELECT ranking_places_mode, ranking_place_base::float8, ranking_place_step::float8, \
+                ranking_pushdown::float8 \
+         FROM public.entity_ranking_config WHERE id",
+    )
+    .fetch_one(pool)
+    .await?;
+    let (ranking_places, ranking_pushdowns) = read_ranking_rows(pool).await?;
     Ok(RescoreBefore {
         stored: read_listings(pool).await?,
         positions: read_positions(pool).await?,
@@ -256,6 +331,9 @@ async fn rescore_before(pool: &sqlx::PgPool) -> Result<RescoreBefore, IndexerErr
             .collect(),
         last_full_pass_on: last,
         cfg,
+        ranking_cfg,
+        ranking_places,
+        ranking_pushdowns,
     })
 }
 
@@ -312,6 +390,18 @@ async fn rescore_shadow(
         position_slots,
         position_day_factor,
     ) = before.cfg;
+    let (ranking_mode, place_base, place_step, pushdown) = before.ranking_cfg;
+    let (places, pushdowns) = read_ranking_rows(pool).await?;
+    let ranking = rescore::RankingRows {
+        place_base,
+        place_step,
+        pushdown,
+        sources: read_ranking_sources(pool).await?,
+        stored_places: before.ranking_places.clone(),
+        stored_pushdowns: before.ranking_pushdowns.clone(),
+        places,
+        pushdowns,
+    };
     let now = chrono::Utc::now();
     let today = ranking_indexer::sql_helpers::today(now);
     let sweep = rescore::Sweep {
@@ -322,6 +412,7 @@ async fn rescore_shadow(
         position_step,
         position_slots,
         full_pass: rescore::is_full_pass(before.last_full_pass_on, today),
+        ranking_mode,
     };
     let ids = rescore::rescore_ids(
         &graph,
@@ -330,6 +421,7 @@ async fn rescore_shadow(
         &before.positions,
         &incoming_positions,
         &before.terms,
+        &ranking,
         &sweep,
     );
     let want_ids: HashSet<uuid::Uuid> = ids.iter().copied().collect();
@@ -344,10 +436,12 @@ async fn rescore_shadow(
         position_step,
         position_slots,
         position_day_factor,
+        ranking_on: ranking_mode == 2,
     };
     let terms = graph.trending_terms(
         &incoming,
         &incoming_positions,
+        &ranking,
         &want_ids,
         &cfg,
         window,
