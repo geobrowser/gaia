@@ -13,7 +13,7 @@
  *   - REFUSAL_CATEGORIES / REFUSAL_CODES: `OutcomeCategory` and `code_names` in src/format/wire/error_frame.zig,
  *     printed as `refused: <category> <code>`.
  */
-export const GEODB_COMMIT = "8cba4da996"
+export const GEODB_COMMIT = "57e34f06df"
 
 export const CONN_ERRORS = [
 	"TransportFailed",

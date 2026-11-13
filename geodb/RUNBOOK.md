@@ -111,17 +111,26 @@ clusters is flaky, so retry a failed read two or three times before treating it 
 | #1566 (feeder retries `connect: Refused`) | **unmerged**, head 2c1691ec74 |
 | #1567 (relation-seed not-open pass) | **unmerged**, head a8943b0854; it also edits this file (§2b-quater), expect a trivial rebase |
 | #1570 (replay prep, adds §2b-quater-replay) | **unmerged** |
-| #1571 (pin 37 manifests to geodb:8cba4da996) | **unmerged**, head a2a182a93e. Use this, not #1569. |
+| #1571 (pin 37 manifests to geodb:8cba4da996) | merged, superseded by the opening pin (geodb:57e34f06df) |
 | #1572 (claim alerts, in `geodb-serve-alerts.yaml`) | **unmerged**, head bd99723528 |
 | #1573 (dead-letter alert by kind) | **unmerged**, head 9d0e64a1d7 |
 
-**What the 8cba4da996 image carries over 8050918d2f** (`git log 8050918d2f..8cba4da996` in geo-db, read only): claim-region counters on
+**What the 8cba4da996 image carried over 8050918d2f** (`git log 8050918d2f..8cba4da996` in geo-db, read only): claim-region counters on
 serve's `/metrics` (`geodb_claims_in_use`, `geodb_claims_in_use_max`, `geodb_claims_refused_total`, each by `claim_class`); a card's
 positions looked up by statement id, so a cell over 512 statements pages (positionsOf over 512); the reactor parked-list fix
 (ISS-678-305: a record that ends while parked leaves the list, so reuse cannot cut the chain); an `inline_reads` key in `serve.cfg`
 (ISS-551-682, **off when the file does not name it**; the live `geodb-serve-config` does not); a token-dictionary builder that no read
-path uses. A `listen_before_open` switch was expected here and is **not** in that range (it appears only in later geo-db docs, no code);
-do not look for it, and read nothing about it from this window.
+path uses. A `listen_before_open` switch was **not** in that range; it is in 57e34f06df (next paragraph).
+
+**What the 57e34f06df image carries over 8cba4da996** (`git log 8cba4da996..57e34f06df`, 52 commits, read only): the opening phase
+(`listen_before_open`, 4b34261b7b: serve binds its listeners before the store opens and answers a typed retryable refusal until it has;
+the key is off unless `serve.cfg` names it, and this pin does not name it); the client's refusals now name where they were met,
+`refused: <category> <code> [opening|claim <class>]` (bf2e8c177e, 1cda80199a), so a node still opening prints
+`refused: ResourceExhausted ResourceExhausted opening` and a `derived put` past its class cap prints `... claim derived`; the client's
+error list is unchanged (the golden list in geodb-feeder's geodbClientErrors.ts is re-derived and its commit moved); a `check-replay`
+verb (read-only, needs no key) over the ISS-679-318 replay-hazard pairs; acceptor fixes (a connection accepted after the opening's stop
+gets the refusal, the hand-over retries a failed wake, the refusing thread survives a transient accept error); server-init fixes (a failed
+listener start closes every listener once; a start sweep under refused allocations, binds and threads); reactor SEGV fixes.
 
 **No read cutover.** Nothing in this window flips any `*_SERVE` flag, `GEODB_SCORES_SERVE`, `DELIVERY_WORKER_CLAIM_SOURCE=geodb`, any
 serve-mode, `GRAPHQL_GATEWAY_FIELDS=on`, `PROPOSAL_EXECUTED_AT_FROM_GEODB`, `NOTIFICATION_INDEXER_GEODB_VOTE_UPDATES` or `inline_reads`
@@ -186,21 +195,21 @@ $K get --raw "/api/v1/namespaces/gaia/services/geodb-feeder:9090/proxy/metrics" 
 
 4. Do not go to step 2 until the feeder is Ready on the new tag with lag 0 on every consumer.
 
-#### Step 2. The geodb pin: serve to `geodb:8cba4da996` (#1571)
+#### Step 2. The geodb pin: serve to `geodb:57e34f06df` (the opening pin)
 
-Use #1571. #1569's 2103bd8335 is merged but is not what this window rolls to, and serve has never run it.
+Use the opening-pin PR. #1569's 2103bd8335 and #1571's 8cba4da996 are merged but are not what this window rolls to.
 
-1. Merge #1571. The image already exists (its build run 43338886032 is green); check, do not rebuild:
+1. Merge the opening-pin PR. The image for 57e34f06df did NOT exist at 2026-11-13 when the PR was opened (build-geodb-image.yml is manual only), so the build is a held dispatch; check first:
 
 ```bash
-doctl registry repository list-tags geodb | awk '$1=="8cba4da996"'                 # present
-# only if absent: gh workflow run build-geodb-image.yml --ref main -f geodb_ref=8cba4da996   (~1 h of compile)
+doctl registry repository list-tags geodb | awk '$1=="57e34f06df"'                 # present
+# if absent (held for Patrick): gh workflow run build-geodb-image.yml --ref main -f geodb_ref=57e34f06df   (~1 h of compile)
 ```
 
 2. The roll, serve alone, once the feeder from step 1 is Ready. Serve restarts once; its pod is the only thing the command touches:
 
 ```bash
-$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:8cba4da996
+$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:57e34f06df
 $K rollout status sts/geodb --timeout=900s
 ```
 
@@ -210,7 +219,7 @@ $K rollout status sts/geodb --timeout=900s
 3. Proof it is live (read only):
 
 ```bash
-$K get sts geodb -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'               # geodb:8cba4da996
+$K get sts geodb -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'               # geodb:57e34f06df
 $K get pod geodb-0 -o jsonpath='{.status.containerStatuses[0].imageID}{" "}{.status.containerStatuses[0].restartCount}{"\n"}'  # digest; note it
 $K get pod geodb-0                                                                           # 1/1 Running
 $K get cm geodb-serve-config -o jsonpath='{.data.serve\.cfg}'                                 # byte-identical to the baseline: still no inline_reads
@@ -227,9 +236,9 @@ $K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l            
    does not change.
 
 4. Rollback: `$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:8050918d2f`, then `rollout status`. The store format
-   did not change in the range, so the older binary reopens it. Also revert #1571 in git so the manifests match what runs.
+   did not change in the range, so the older binary reopens it. Also revert the pin PR in git so the manifests match what runs.
 
-5. Jobs and CronJobs that #1571 repoints (backfill, held-repair, relation-seed, replay-edit, times-backfill, the ranking and scoring
+5. Jobs and CronJobs that the pin PR repoints (backfill, held-repair, relation-seed, replay-edit, times-backfill, the ranking and scoring
    CronJobs, and the Deployments that carry the pinned tag) take the new tag the next time each is applied from its own workflow.
    That is not part of this window and flips nothing.
 
@@ -250,7 +259,7 @@ $K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l            
 
 #### Alerts, in the same window
 
-Apply after step 2, because the claim series only exist once serve runs 8cba4da996. Dry-run each on the server first; the rules are
+Apply after step 2, because the claim series only exist once serve runs 57e34f06df. Dry-run each on the server first; the rules are
 PrometheusRules and change no workload.
 
 ```bash
