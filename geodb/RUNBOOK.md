@@ -58,7 +58,11 @@ Each step is a manual dispatch from `main` after the PR is merged. Wait for gree
 gh workflow run build-geodb-image.yml --ref main -f geodb_ref=4d3b31dff4
 # b. feeder image
 gh workflow run build-v2-images.yml --ref main -f service=geodb-feeder
-# c. the replica: StatefulSet geodb, Deployment geodb-feeder, Services, RBAC, serve config. TAG = the 8-char sha of the run in (b).
+# c. the replica, two dispatches. Serve first (StatefulSet geodb, its Service, RBAC, serve config, NetworkPolicy: geodb.yaml, pinned
+#    geodb image, the tag input is ignored). Then the feeder (Deployment geodb-feeder, its Service and PVC, card-replay, snapshot:
+#    geodb-feeder.yaml). TAG = the 8-char sha of the run in (b). A feeder dispatch never touches serve; a serve dispatch rolls serve to
+#    whatever geodb.yaml pins on main and nothing else.
+gh workflow run deploy-v2.yml --ref main -f service=geodb-serve -f tag=pinned -f cluster=geo-testnet-k8s
 gh workflow run deploy-v2.yml --ref main -f service=geodb-feeder -f tag=<TAG> -f cluster=geo-testnet-k8s
 $K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 # d. alerts
@@ -125,7 +129,7 @@ published space map: 50% from each Space's top `local_scores` entities (Zipf by 
 people open), 30% recently edited entities, 20% a uniform sample. A Space mapped out since the last refresh
 is skipped and counted (`result="skipped_unmapped"`), never requested.
 
-It ships with the feeder (`deploy-v2 -f service=geodb-feeder` applies both files). If the feeder was deployed
+It ships with the feeder (`deploy-v2 -f service=geodb-feeder` applies it with `geodb-feeder.yaml` and `geodb-snapshot.yaml`). If the feeder was deployed
 before this file existed, deploy it again with the same tag, or apply only the replay:
 
 ```bash
@@ -455,7 +459,7 @@ $K scale deployment/geodb-feeder --replicas=1
 ```
 
 Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
-The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
+The Job's `GEODB_*` flags copy `geodb-feeder.yaml`'s; change them together. The `updatedAt` it compares is the row written
 under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
 
 ### 2b-bis. Proposal system entities
@@ -1935,9 +1939,9 @@ page route.
   for what it was doing (a relation seed, a large replay) and the dead-letter counter. The working set includes the Node heap, the
   `geodb-client` child and page cache, so it can sit above the heap size.
 - Sizing history: #1551 set a 3584 MB heap (`--max-old-space-size=3584`) in a 4Gi limit; #1557 raised it to a 6144 MB heap in a
-  7Gi limit (request 3Gi) for the relation-seed journals, which is what `geodb/k8s/v2/geodb.yaml` and the live Deployment hold. Keep the
+  7Gi limit (request 3Gi) for the relation-seed journals, which is what `geodb/k8s/v2/geodb-feeder.yaml` and the live Deployment hold. Keep the
   heap below the limit with room for the child process. The 90% line is therefore about 6.3 GiB against 7Gi.
-- What raising the limit touches: `resources.limits.memory` on the `feeder` container in `geodb/k8s/v2/geodb.yaml`, and the heap in
+- What raising the limit touches: `resources.limits.memory` on the `feeder` container in `geodb/k8s/v2/geodb-feeder.yaml`, and the heap in
   `NODE_OPTIONS` beside it (raise both together; the heap alone does not help). Applying it rolls the Deployment (strategy
   `Recreate`: the feeder is down for the restart and resumes from `/data/feeder/offsets.json`), and the pod must still fit on its
   node, so check the node's allocatable memory first. It does not touch serve (`geodb-0`) or the volume.
@@ -1981,8 +1985,8 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
   so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
   configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
-- Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
-  `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
+- Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml`, the feeder's init container pin in
+  `geodb/k8s/v2/geodb-feeder.yaml` and `api/k8s/v2/api.yaml` together, and redeploy (`geodb-serve`, then `geodb-feeder`). Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 
 ## 8. Migrating the store across a persistent cut
 
@@ -2033,8 +2037,8 @@ NEW=<10-char geodb tag, at or past 7d32584825>
 # 0. image with serve, client and migrate; the tag must exist and carry the migrator.
 gh workflow run build-geodb-image.yml --ref main -f geodb_ref=$NEW        # ~8 min
 doctl registry repository list-tags geodb --registry geo | grep $NEW
-# 1. PR: change the pin to $NEW in geodb/k8s/v2/geodb.yaml (both places: serve and the feeder's geodb-setup init
-#    container) and api/k8s/v2/api.yaml. Merge it; nothing deploys.
+# 1. PR: change the pin to $NEW in geodb/k8s/v2/geodb.yaml (serve) and geodb/k8s/v2/geodb-feeder.yaml (the feeder's
+#    geodb-setup init container) and api/k8s/v2/api.yaml. Merge it; nothing deploys.
 # 2. before-picture: 20 entity reads from live (a throwaway pod, §8c), saved as before.out. Silence GeoDbFeederDown,
 #    GeoDbFeederStalled, GeoDbFeederLagHigh, ApiGeoDbCardShadowFailing and GeoDbOutbox.* (GeoDbOutboxMirrorErrors,
 #    GeoDbOutboxMirrorDropped: serve is down, so the notification-indexer mirror fails) for 1 h.
@@ -2120,10 +2124,11 @@ and refuses a limit below the profile's floor. With a 2Gi limit the Job ended wi
 success). The memory is not used: the migrator peaked at 606 MiB under a 6Gi limit.
 
 6. Check the Job log: `spaces` equals the number of Spaces before (100 on 2026-11-04) and no line says a seal differs.
-7. Bring both back on the new image. `deploy-v2` applies `geodb.yaml`, whose StatefulSet and feeder
-   Deployment are `replicas: 1`, so this also scales them back up; geodb-0 opens the migrated store.
+7. Bring both back on the new image. `deploy-v2` `geodb-serve` applies `geodb.yaml` (StatefulSet `replicas: 1`) and `geodb-feeder` applies
+   `geodb-feeder.yaml` (Deployment `replicas: 1`), so the two dispatches scale them back up; geodb-0 opens the migrated store.
 
 ```bash
+gh workflow run deploy-v2.yml --ref main -f service=geodb-serve -f tag=pinned -f cluster=geo-testnet-k8s
 gh workflow run deploy-v2.yml --ref main -f service=geodb-feeder -f tag=<FEEDER TAG> -f cluster=geo-testnet-k8s
 $K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 $K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}{.data.sealer-id}{"\n"}'   # unchanged from before step 3
