@@ -314,7 +314,27 @@ impl EntitySpaceLookup {
         }
 
         if let Some(shadow) = &self.shadow {
-            shadow.observe_spaces_for_entities(entity_ids, &all_results);
+            // The twin reads its own sample's rows with the property, to skip the derived ones the
+            // feeder never sends; the served answer above is untouched, and a failed read skips it.
+            let picked = shadow.sample_entities(entity_ids);
+            if !picked.is_empty() {
+                match sqlx::query(crate::geodb_shadow::SHADOW_VALUES_SQL)
+                    .bind(&picked)
+                    .fetch_all(&self.pool)
+                    .await
+                {
+                    Ok(rows) => {
+                        let rows: Vec<(Uuid, Uuid, Uuid)> = rows
+                            .iter()
+                            .map(|r| (r.get("entity_id"), r.get("space_id"), r.get("property_id")))
+                            .collect();
+                        shadow.observe_spaces_for_entities(picked, &rows);
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "geo-db shadow: values read for spaces_for_entities failed")
+                    }
+                }
+            }
         }
         Ok(all_results)
     }

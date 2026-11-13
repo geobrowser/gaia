@@ -383,6 +383,47 @@ fn diff<T: Ord>(expected: &BTreeSet<T>, got: &BTreeSet<T>) -> (usize, usize) {
     )
 }
 
+/// Properties other indexers write straight into Postgres and the geo-db feeder never sends. Keep in
+/// step with `DERIVED_PROPERTIES` in `geodb-feeder/src/pgAdapter.ts` (a test reads that file and
+/// fails on drift).
+pub const DERIVED_PROPERTIES: [&str; 6] = [
+    "85a4668a-42fa-4f48-8969-c0a9de0c294b", // vote-indexer Score
+    "e1ffac9f-beb4-4654-8a50-00e1d6c662fb", // ranking-indexer rank position (value)
+    "890deffb-3843-49fa-8269-74000e3dcef6", // ranking-indexer rank position (relation type)
+    "67651da6-11a9-4246-9ff4-039aafbe9e43", // ranking-indexer Aggregated rankings (relation type)
+    "49ee1b89-1820-4e75-a1ae-38a2dcaad4a5", // vote ordinal
+    "103701dd-cabe-4a8e-835b-10345327b647", // vote weighted
+];
+
+/// Postgres side of the `spaces_for_entities` twin: every `(entity, Space, property)` of the sampled
+/// entities. Derived properties are dropped in [`spaces_by_entity`], not here, so the served
+/// `spaces_for_entities` answer is untouched.
+pub const SHADOW_VALUES_SQL: &str =
+    "SELECT DISTINCT entity_id, space_id, property_id FROM values WHERE entity_id = ANY($1)";
+
+fn is_derived(property: &Uuid) -> bool {
+    DERIVED_PROPERTIES
+        .iter()
+        .any(|d| Uuid::parse_str(d).is_ok_and(|d| d == *property))
+}
+
+/// Group `(entity, Space, property)` rows into `(entity, Spaces)` per picked entity, skipping
+/// derived properties.
+fn spaces_by_entity(picked: Vec<Uuid>, rows: &[(Uuid, Uuid, Uuid)]) -> Vec<(Uuid, Vec<Uuid>)> {
+    picked
+        .into_iter()
+        .map(|e| {
+            let mut spaces: Vec<Uuid> = Vec::new();
+            for (re, rs, rp) in rows {
+                if *re == e && !is_derived(rp) && !spaces.contains(rs) {
+                    spaces.push(*rs);
+                }
+            }
+            (e, spaces)
+        })
+        .collect()
+}
+
 /// Twin of `spaces_for_entities`: for each `(entity, Postgres Spaces)`, the geo-db Spaces holding
 /// the entity, over every mapped Space.
 ///
@@ -865,27 +906,26 @@ impl GeoDbShadow {
         });
     }
 
-    /// After `spaces_for_entities(entity_ids)` answered `pairs`.
+    /// The entities of a `spaces_for_entities` batch this shadow will compare. The caller reads
+    /// their Postgres `(entity, Space, property)` rows (see [`SHADOW_VALUES_SQL`]) and hands them to
+    /// [`Self::observe_spaces_for_entities`].
+    pub fn sample_entities(&self, entity_ids: &[Uuid]) -> Vec<Uuid> {
+        self.pick(entity_ids)
+    }
+
+    /// After `spaces_for_entities` answered, for the `picked` entities of [`Self::sample_entities`]
+    /// and their Postgres `values` `rows` of `(entity, Space, property)`. Rows of a
+    /// [`DERIVED_PROPERTIES`] property are dropped: the feeder never sends them, so a Space where
+    /// they are all an entity has in Postgres would read as `missing_in_geodb`.
     pub fn observe_spaces_for_entities(
         self: &Arc<Self>,
-        entity_ids: &[Uuid],
-        pairs: &[(Uuid, Uuid)],
+        picked: Vec<Uuid>,
+        rows: &[(Uuid, Uuid, Uuid)],
     ) {
-        let picked = self.pick(entity_ids);
         if picked.is_empty() {
             return;
         }
-        let sample: Vec<(Uuid, Vec<Uuid>)> = picked
-            .into_iter()
-            .map(|e| {
-                let s = pairs
-                    .iter()
-                    .filter(|(pe, _)| *pe == e)
-                    .map(|(_, s)| *s)
-                    .collect();
-                (e, s)
-            })
-            .collect();
+        let sample = spaces_by_entity(picked, rows);
         self.launch(SPACES_FOR_ENTITIES, move |r, s| async move {
             compare_spaces_for_entities(r.as_ref(), &s, &sample).await
         });
@@ -1103,6 +1143,49 @@ mod tests {
         assert_eq!((o.matched, o.mismatched, o.failed), (1, 2, 0));
         assert_eq!((o.missing, o.extra, o.unmapped), (1, 1, 1));
         assert_eq!(o.notes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_space_holding_only_derived_properties_is_not_missing_in_geodb() {
+        let (e1, e2) = (u(1), u(2));
+        let mut f = Fixture::default();
+        f.holders.insert(hex(&e1), vec![g(1)]); // geo-db only has Space 1
+        f.holders.insert(hex(&e2), vec![g(1)]);
+        let spaces = map(&[1, 2]);
+        let score = Uuid::parse_str(DERIVED_PROPERTIES[0]).unwrap();
+        let weighted = Uuid::parse_str(DERIVED_PROPERTIES[5]).unwrap();
+        let rows = [
+            (e1, sp(1), u(50)),
+            (e1, sp(2), score), // Space 2: Score only
+            (e2, sp(1), u(50)),
+            (e2, sp(2), weighted), // Space 2: weighted only
+            (e2, sp(2), score),
+        ];
+        let sample = spaces_by_entity(vec![e1, e2], &rows);
+        assert_eq!(sample, vec![(e1, vec![sp(1)]), (e2, vec![sp(1)])]);
+        let o = compare_spaces_for_entities(&f, &spaces, &sample).await;
+        assert_eq!((o.matched, o.mismatched, o.missing), (2, 0, 0));
+    }
+
+    #[test]
+    fn a_space_with_one_ordinary_property_next_to_a_derived_one_still_counts() {
+        let e = u(1);
+        let score = Uuid::parse_str(DERIVED_PROPERTIES[0]).unwrap();
+        let rows = [(e, sp(2), score), (e, sp(2), u(50))];
+        assert_eq!(spaces_by_entity(vec![e], &rows), vec![(e, vec![sp(2)])]);
+    }
+
+    #[test]
+    fn derived_properties_match_the_feeders_list() {
+        let ts = include_str!("../../../geodb-feeder/src/pgAdapter.ts");
+        let start = ts.find("export const DERIVED_PROPERTIES = [").unwrap();
+        let block = &ts[start..ts[start..].find("].map(").unwrap() + start];
+        let theirs: Vec<&str> = block
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"'))
+            .filter_map(|l| l.split('"').next())
+            .collect();
+        assert_eq!(theirs, DERIVED_PROPERTIES);
     }
 
     #[tokio::test]
@@ -1446,7 +1529,7 @@ mod tests {
         let f = Arc::new(f);
         let by_gaia: HashMap<String, String> = [(hex(&sp(1)), g(1))].into();
         let s = Arc::new(GeoDbShadow::new(f.clone(), SpaceMap::fixed(by_gaia), 4));
-        s.observe_spaces_for_entities(&[e], &[(e, sp(1))]);
+        s.observe_spaces_for_entities(vec![e], &[(e, sp(1), u(50))]);
         // The gate is held until the task finishes; wait for it.
         let _ = s.gate.acquire().await.unwrap();
         assert_eq!(f.calls.lock().unwrap().len(), 1);
