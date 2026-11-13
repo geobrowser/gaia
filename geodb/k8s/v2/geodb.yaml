@@ -266,6 +266,16 @@ spec:
             # Same 600 s budget as before (120 x 5 s), polled every second.
             periodSeconds: 1
             failureThreshold: 600
+          # The way down. ctl/serving lives on the PVC and the supervisor does not remove it on SIGTERM, so
+          # readiness stays true while serve drains. The kubelet drops a terminating pod from the Service's
+          # endpoints at once, but kube-proxy and clients learn that a moment after SIGTERM is sent, and serve
+          # closes its listener when it drains. Run this first: ctl/serving goes (readiness fails on any path
+          # that is not a pod delete) and SIGTERM waits 5 s, so the endpoint is gone before the listener is.
+          # serve still answers during the wait; the grace period (300 s) covers it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "rm -f /data/ctl/serving; sleep 5"]
           resources:
             # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
             # growth). Plan 10.14 §10 Stage A: 5Gi/7Gi covers the 604 MB derived carve plus the backfill.
