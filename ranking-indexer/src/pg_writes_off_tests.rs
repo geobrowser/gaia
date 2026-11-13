@@ -77,6 +77,7 @@ async fn call_every_write(s: &Storage) -> Vec<Result<(), crate::error::IndexerEr
         space_id: b,
         score: 1.0,
         position: 1,
+        ballots: 1,
     };
     let proj = RankPositionRow {
         entity_id: a,

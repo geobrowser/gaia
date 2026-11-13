@@ -12,6 +12,12 @@
 //! sorted descending (tie-broken deterministically), and assigned integer
 //! positions. The summed `score` stays continuous (`f64`) — the integer
 //! projection for publishing happens later.
+//!
+//! A block can opt into a different shape through `ranks.ranking_block_config`
+//! (GEO-3676, see [`BlockScoring`]): a higher row cap, and/or
+//! [`ScoringMode::Average`], which scores every ballot by position and averages
+//! per entity with a mid-list prior. Blocks with no config row are scored exactly
+//! as described above.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -90,6 +96,77 @@ pub struct ScoreRow {
     pub score: f64,
     /// 1-based rank within the block.
     pub position: i32,
+    /// How many eligible ballots include this row (GEO-3676). Undecayed: a
+    /// Rolling block's old ballot still counts as one.
+    pub ballots: i32,
+}
+
+/// How a block combines its ballots (`ranks.ranking_block_config.scoring_mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScoringMode {
+    /// Sum each ballot's normalized value per `(entity, space)`. Every block
+    /// without a config row.
+    #[default]
+    Sum,
+    /// Average place per ballot, per entity (GEO-3676): see [`aggregate_with`].
+    Average,
+}
+
+impl ScoringMode {
+    /// The stored spelling, as constrained by the table's CHECK.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScoringMode::Sum => "sum",
+            ScoringMode::Average => "average",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "sum" => Some(ScoringMode::Sum),
+            "average" => Some(ScoringMode::Average),
+            _ => None,
+        }
+    }
+}
+
+/// A block's scoring shape: its row cap and how ballots combine. The default
+/// (no `ranks.ranking_block_config` row) is what every block had before
+/// GEO-3676: [`MAX_PROJECTION_ROWS`] rows, summed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockScoring {
+    pub max_rows: usize,
+    pub mode: ScoringMode,
+}
+
+impl Default for BlockScoring {
+    fn default() -> Self {
+        BlockScoring {
+            max_rows: MAX_PROJECTION_ROWS,
+            mode: ScoringMode::Sum,
+        }
+    }
+}
+
+/// The prior an average-mode entity starts from: one phantom ballot placing it
+/// mid-list (halfway between [`NORM_LO`] and [`NORM_HI`]). An entity placed
+/// below the middle sinks with each such ballot and one placed above it rises,
+/// and a single first place cannot outrank a debate many people placed high.
+pub const AVERAGE_PRIOR_POINTS: f64 = 0.75;
+/// How many phantom ballots the prior counts as.
+pub const AVERAGE_PRIOR_BALLOTS: f64 = 1.0;
+
+/// Average-mode scores are rounded to this many units per 1.0 before they are
+/// compared or stored. Points like `1 - 0.5 * 3/4` are mostly not exact in
+/// binary, so two equal averages can come out one ulp apart (0.675 against
+/// 0.6749999999999999) and the "more ballots" tie-break would never run. A
+/// nanoscore is far below any real difference between two debates' averages,
+/// and far above the float error.
+pub const AVERAGE_SCORE_UNITS: f64 = 1e9;
+
+/// The integer an average-mode score is ordered by, and (divided back) stored as.
+fn average_score_key(score: f64) -> i64 {
+    (score * AVERAGE_SCORE_UNITS).round() as i64
 }
 
 fn is_weighted(rank_type: Option<&str>) -> bool {
@@ -183,34 +260,183 @@ pub fn aggregate(
     hi: f64,
     decay: Option<RecencyDecay>,
 ) -> Vec<ScoreRow> {
-    let mut totals: HashMap<(Uuid, Uuid), f64> = HashMap::new();
+    aggregate_with(ballots, lo, hi, decay, BlockScoring::default())
+}
+
+/// [`aggregate`] under a block's own [`BlockScoring`].
+///
+/// [`ScoringMode::Sum`] is the original behaviour, capped at `config.max_rows`.
+///
+/// [`ScoringMode::Average`] (GEO-3676):
+///   - every ballot is scored **by position** — #1 = `hi` down to last = `lo` —
+///     whatever its rank type or weights (see [`ballot_points`]);
+///   - rows are keyed by **entity only**: the same entity referenced under two
+///     space ids is one row. Within one ballot it counts once, at its better
+///     place. The row carries the space id the most ballots placed it under
+///     (ties: the lowest space id), so the published `RANK_POSITION` relation
+///     points at the perspective most voters used;
+///   - `score = (Σ points + AVERAGE_PRIOR_POINTS) / (ballots + AVERAGE_PRIOR_BALLOTS)`.
+///     On a Rolling block each ballot's points and its count are both scaled by
+///     its recency, which reduces to the formula above with no decay;
+///   - ties go to the entity on more ballots, then the lower entity id. Scores
+///     are rounded to [`AVERAGE_SCORE_UNITS`] first, so averages that are equal
+///     but differ by float error tie (and are stored as the same value).
+pub fn aggregate_with(
+    ballots: &[(&Ranking, Vec<RankingItem>)],
+    lo: f64,
+    hi: f64,
+    decay: Option<RecencyDecay>,
+    config: BlockScoring,
+) -> Vec<ScoreRow> {
+    let weight_of = |ranking: &Ranking| match decay {
+        Some(decay) => recency_weight(decay, ranking.submitted_at),
+        None => 1.0,
+    };
+    match config.mode {
+        ScoringMode::Sum => {
+            let mut totals: HashMap<(Uuid, Uuid), (f64, i32)> = HashMap::new();
+            for (ranking, items) in ballots {
+                let weight = weight_of(ranking);
+                for (key, value) in normalize_ballot(ranking, items, lo, hi) {
+                    let t = totals.entry(key).or_insert((0.0, 0));
+                    t.0 += value * weight;
+                    t.1 += 1;
+                }
+            }
+
+            let mut rows: Vec<((Uuid, Uuid), (f64, i32))> = totals.into_iter().collect();
+            // Descending score; deterministic tie-break by (entity, space).
+            rows.sort_by(|a, b| {
+                b.1 .0
+                    .partial_cmp(&a.1 .0)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| a.0 .0.cmp(&b.0 .0))
+                    .then_with(|| a.0 .1.cmp(&b.0 .1))
+            });
+
+            rows.into_iter()
+                .take(config.max_rows)
+                .enumerate()
+                .map(|(i, ((entity_id, space_id), (score, ballots)))| ScoreRow {
+                    entity_id,
+                    space_id,
+                    score,
+                    position: (i as i32) + 1,
+                    ballots,
+                })
+                .collect()
+        }
+        ScoringMode::Average => aggregate_average(ballots, lo, hi, weight_of, config.max_rows),
+    }
+}
+
+#[derive(Default)]
+struct AverageAcc {
+    points: f64,
+    weight: f64,
+    ballots: i32,
+    /// Ballots per space id this entity was placed under, to pick the row's space.
+    spaces: HashMap<Uuid, i32>,
+}
+
+fn aggregate_average(
+    ballots: &[(&Ranking, Vec<RankingItem>)],
+    lo: f64,
+    hi: f64,
+    weight_of: impl Fn(&Ranking) -> f64,
+    max_rows: usize,
+) -> Vec<ScoreRow> {
+    let mut acc: HashMap<Uuid, AverageAcc> = HashMap::new();
     for (ranking, items) in ballots {
-        let weight = match decay {
-            Some(decay) => recency_weight(decay, ranking.submitted_at),
-            None => 1.0,
-        };
-        for (key, value) in normalize_ballot(ranking, items, lo, hi) {
-            *totals.entry(key).or_insert(0.0) += value * weight;
+        let weight = weight_of(ranking);
+        for (entity_id, space_id, points) in ballot_points(items, lo, hi) {
+            let a = acc.entry(entity_id).or_default();
+            a.points += points * weight;
+            a.weight += weight;
+            a.ballots += 1;
+            *a.spaces.entry(space_id).or_insert(0) += 1;
         }
     }
 
-    let mut rows: Vec<((Uuid, Uuid), f64)> = totals.into_iter().collect();
-    // Descending score; deterministic tie-break by (entity, space).
+    let mut rows: Vec<(Uuid, Uuid, i64, i32)> = acc
+        .into_iter()
+        .map(|(entity_id, a)| {
+            let score = average_score_key(
+                (a.points + AVERAGE_PRIOR_POINTS) / (a.weight + AVERAGE_PRIOR_BALLOTS),
+            );
+            // Most ballots first, then the lowest space id.
+            let space_id = a
+                .spaces
+                .iter()
+                .max_by(|x, y| x.1.cmp(y.1).then_with(|| y.0.cmp(x.0)))
+                .map(|(s, _)| *s)
+                .expect("an accumulated entity has at least one space");
+            (entity_id, space_id, score, a.ballots)
+        })
+        .collect();
+    // Descending score (as an integer key, so equal averages compare equal);
+    // then more ballots; then the lower entity id.
     rows.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.0 .0.cmp(&b.0 .0))
-            .then_with(|| a.0 .1.cmp(&b.0 .1))
+        b.2.cmp(&a.2)
+            .then_with(|| b.3.cmp(&a.3))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
     rows.into_iter()
-        .take(MAX_PROJECTION_ROWS)
+        .take(max_rows)
         .enumerate()
-        .map(|(i, ((entity_id, space_id), score))| ScoreRow {
+        .map(|(i, (entity_id, space_id, score, ballots))| ScoreRow {
             entity_id,
             space_id,
-            score,
+            // Stored as the rounded value it was ordered by, so two rows with
+            // the same stored score are the ones the tie-break ordered.
+            score: score as f64 / AVERAGE_SCORE_UNITS,
             position: (i as i32) + 1,
+            ballots,
+        })
+        .collect()
+}
+
+/// One ballot's points by position, for [`ScoringMode::Average`]: `(entity,
+/// space, points)`, one entry per distinct entity, #1 = `hi` down to last = `lo`
+/// (a single entity scores `hi`).
+///
+/// The rank type and the weights do not set the points. The web publishes
+/// WEIGHTED ballots with `0.5 + 0.5 / ln(k + 1)` weights, and min-max scaling
+/// those (what [`normalize_ballot`] does) puts the middle of a 300-item list
+/// near 0.51 rather than 0.75. The order is the relation positions, which the
+/// SDK writes on WEIGHTED and ORDINAL ballots alike; items without a position
+/// follow, by weight descending, then entity id. An entity on the ballot twice
+/// (under two space ids) keeps its better place and the list is renumbered
+/// without the repeat.
+pub fn ballot_points(items: &[RankingItem], lo: f64, hi: f64) -> Vec<(Uuid, Uuid, f64)> {
+    let mut ordered: Vec<&RankingItem> = items.iter().collect();
+    ordered.sort_by(|a, b| {
+        (a.position.is_none(), &a.position)
+            .cmp(&(b.position.is_none(), &b.position))
+            .then_with(|| {
+                b.weight
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .partial_cmp(&a.weight.unwrap_or(f64::NEG_INFINITY))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| a.entity_id.cmp(&b.entity_id))
+            .then_with(|| a.space_id.cmp(&b.space_id))
+    });
+    let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    ordered.retain(|item| seen.insert(item.entity_id));
+
+    let n = ordered.len();
+    ordered
+        .iter()
+        .enumerate()
+        .map(|(rank, item)| {
+            let points = if n > 1 {
+                hi - (hi - lo) * (rank as f64) / ((n - 1) as f64)
+            } else {
+                hi
+            };
+            (item.entity_id, item.space_id, points)
         })
         .collect()
 }
@@ -501,5 +727,345 @@ mod tests {
         // Positions stay contiguous from 1 after the cut.
         assert_eq!(rows.first().unwrap().position, 1);
         assert_eq!(rows.last().unwrap().position, MAX_PROJECTION_ROWS as i32);
+    }
+
+    // ---- GEO-3676: per-block config, ballot counts, average mode ----
+
+    const AVERAGE: BlockScoring = BlockScoring {
+        max_rows: 2_000,
+        mode: ScoringMode::Average,
+    };
+
+    /// An ordinal ballot over `entities` in order, each under space 500.
+    fn ordered(entities: &[u128]) -> Vec<RankingItem> {
+        entities
+            .iter()
+            .enumerate()
+            .map(|(i, e)| item(*e, Some(&format!("a{i:04}")), None))
+            .collect()
+    }
+
+    /// The web's real WEIGHTED ballot: relation positions in order and
+    /// `0.5 + 0.5 / ln(k + 1)` weights (rankingVoteWeightFromIndex).
+    fn web_weighted(entities: &[u128]) -> Vec<RankingItem> {
+        entities
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let k = (i + 1) as f64;
+                item(
+                    *e,
+                    Some(&format!("a{i:04}")),
+                    Some(0.5 + 0.5 / (k + 1.0).ln()),
+                )
+            })
+            .collect()
+    }
+
+    fn row(rows: &[ScoreRow], entity: u128) -> &ScoreRow {
+        rows.iter()
+            .find(|r| r.entity_id == Uuid::from_u128(entity))
+            .expect("entity has a row")
+    }
+
+    #[test]
+    fn sum_mode_counts_ballots_per_row() {
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let rows = aggregate(
+            &[(&r1, ordered(&[100, 200])), (&r2, ordered(&[100]))],
+            NORM_LO,
+            NORM_HI,
+            None,
+        );
+        assert_eq!(row(&rows, 100).ballots, 2);
+        assert_eq!(row(&rows, 200).ballots, 1);
+    }
+
+    #[test]
+    fn the_default_config_is_200_rows_summed() {
+        assert_eq!(
+            BlockScoring::default(),
+            BlockScoring {
+                max_rows: MAX_PROJECTION_ROWS,
+                mode: ScoringMode::Sum
+            }
+        );
+        assert_eq!(MAX_PROJECTION_ROWS, 200);
+    }
+
+    #[test]
+    fn a_configured_cap_keeps_more_rows() {
+        let r = ranking(1, "ORDINAL");
+        let entities: Vec<u128> = (0..2_100).map(|i| 10_000 + i).collect();
+        let ballots = [(&r, ordered(&entities))];
+        let sum_rows = aggregate_with(
+            &ballots,
+            NORM_LO,
+            NORM_HI,
+            None,
+            BlockScoring {
+                max_rows: 2_000,
+                mode: ScoringMode::Sum,
+            },
+        );
+        assert_eq!(sum_rows.len(), 2_000);
+        let avg_rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        assert_eq!(avg_rows.len(), 2_000);
+        assert_eq!(avg_rows.last().unwrap().position, 2_000);
+        // The default still cuts at 200.
+        assert_eq!(aggregate(&ballots, NORM_LO, NORM_HI, None).len(), 200);
+    }
+
+    #[test]
+    fn average_one_first_place_beats_two_last_places() {
+        // Ballot 1 ranks A first of 3; ballots 2 and 3 each rank B last of 3.
+        const A: u128 = 100;
+        const B: u128 = 200;
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let r3 = ranking(3, "ORDINAL");
+        let ballots = vec![
+            (&r1, ordered(&[A, 301, 302])),
+            (&r2, ordered(&[303, 304, B])),
+            (&r3, ordered(&[305, 306, B])),
+        ];
+
+        // Under sums they tie at 1.0.
+        let sums = aggregate(&ballots, NORM_LO, NORM_HI, None);
+        assert!((row(&sums, A).score - 1.0).abs() < 1e-12);
+        assert!((row(&sums, B).score - 1.0).abs() < 1e-12);
+
+        let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        // A: (1.0 + 0.75) / 2 = 0.875. B: (0.5 + 0.5 + 0.75) / 3 = 0.5833…,
+        // stored rounded to AVERAGE_SCORE_UNITS.
+        assert!((row(&rows, A).score - 0.875).abs() < 1e-12);
+        assert!((row(&rows, B).score - 1.75 / 3.0).abs() < 1e-9);
+        assert_eq!(row(&rows, A).ballots, 1);
+        assert_eq!(row(&rows, B).ballots, 2);
+        assert!(row(&rows, A).position < row(&rows, B).position);
+        assert_eq!(rows[0].entity_id, Uuid::from_u128(A));
+    }
+
+    #[test]
+    fn average_scores_the_webs_weighted_ballot_like_the_same_order_as_ordinal() {
+        let order: Vec<u128> = (0..300).map(|i| 1_000 + i).collect();
+        let weighted = ranking(1, "WEIGHTED");
+        let ordinal = ranking(2, "ORDINAL");
+
+        let from_weighted = aggregate_with(
+            &[(&weighted, web_weighted(&order))],
+            NORM_LO,
+            NORM_HI,
+            None,
+            AVERAGE,
+        );
+        let from_ordinal = aggregate_with(
+            &[(&ordinal, ordered(&order))],
+            NORM_LO,
+            NORM_HI,
+            None,
+            AVERAGE,
+        );
+        assert_eq!(from_weighted, from_ordinal);
+
+        // The middle of the list scores mid-list (0.75 before the prior), not
+        // the ~0.51 min-max scaling of those weights gives.
+        let middle = order[149];
+        let points = ballot_points(&web_weighted(&order), NORM_LO, NORM_HI);
+        let p = points
+            .iter()
+            .find(|(e, _, _)| *e == Uuid::from_u128(middle))
+            .unwrap()
+            .2;
+        assert!((p - 0.75).abs() < 0.002, "middle place scored {p}");
+        let min_max = normalize_ballot(&weighted, &web_weighted(&order), NORM_LO, NORM_HI);
+        assert!(value_for(&min_max, middle) < 0.52);
+    }
+
+    #[test]
+    fn average_orders_a_ballot_without_positions_by_weight() {
+        let r = ranking(1, "WEIGHTED");
+        let items = vec![
+            item(12, None, Some(0.6)),
+            item(10, None, Some(0.9)),
+            item(11, None, Some(0.7)),
+        ];
+        let points = ballot_points(&items, NORM_LO, NORM_HI);
+        let order: Vec<Uuid> = points.iter().map(|(e, _, _)| *e).collect();
+        assert_eq!(
+            order,
+            vec![
+                Uuid::from_u128(10),
+                Uuid::from_u128(11),
+                Uuid::from_u128(12)
+            ]
+        );
+        let rows = aggregate_with(&[(&r, items)], NORM_LO, NORM_HI, None, AVERAGE);
+        assert!((row(&rows, 10).score - (1.0 + 0.75) / 2.0).abs() < 1e-12);
+        assert!((row(&rows, 12).score - (0.5 + 0.75) / 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn average_keys_on_entity_only() {
+        // One debate referenced under two space ids, on separate ballots and
+        // twice on one ballot, is one row.
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let r3 = ranking(3, "ORDINAL");
+        let under = |space: u128, pos: &str| RankingItem {
+            ranking_id: Uuid::from_u128(0),
+            entity_id: Uuid::from_u128(100),
+            space_id: Uuid::from_u128(space),
+            position: Some(pos.into()),
+            weight: None,
+        };
+        let ballots = vec![
+            (&r1, vec![under(7, "a0"), item(200, Some("a1"), None)]),
+            (&r2, vec![under(7, "a0"), item(200, Some("a1"), None)]),
+            // Twice on one ballot: counts once, at its better place, and the
+            // list is renumbered without the repeat (A first of 2).
+            (
+                &r3,
+                vec![under(3, "a0"), item(200, Some("a1"), None), under(7, "a2")],
+            ),
+        ];
+        let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        assert_eq!(rows.len(), 2);
+        let a = row(&rows, 100);
+        assert_eq!(a.ballots, 3);
+        assert!((a.score - (3.0 + 0.75) / 4.0).abs() < 1e-12);
+        // Space 7 carried it on two ballots, space 3 on one.
+        assert_eq!(a.space_id, Uuid::from_u128(7));
+
+        // Sum mode is unchanged: two perspectives stay two rows.
+        let sums = aggregate(&ballots, NORM_LO, NORM_HI, None);
+        assert_eq!(
+            sums.iter()
+                .filter(|r| r.entity_id == Uuid::from_u128(100))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn average_row_space_tie_goes_to_the_lowest_space_id() {
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let under = |space: u128| RankingItem {
+            ranking_id: Uuid::from_u128(0),
+            entity_id: Uuid::from_u128(100),
+            space_id: Uuid::from_u128(space),
+            position: Some("a0".into()),
+            weight: None,
+        };
+        let rows = aggregate_with(
+            &[(&r1, vec![under(9)]), (&r2, vec![under(4)])],
+            NORM_LO,
+            NORM_HI,
+            None,
+            AVERAGE,
+        );
+        assert_eq!(rows[0].space_id, Uuid::from_u128(4));
+    }
+
+    #[test]
+    fn average_ties_go_to_more_ballots_then_lower_entity_id() {
+        // Three exact ties at 0.75:
+        //   D (400): first of 2, then last of 2 -> (1.0 + 0.5 + 0.75) / 3
+        //   E (500): middle of 3 on one ballot  -> (0.75 + 0.75) / 2
+        //   F (50):  middle of 3 on one ballot  -> (0.75 + 0.75) / 2
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let r3 = ranking(3, "ORDINAL");
+        let r4 = ranking(4, "ORDINAL");
+        let ballots = vec![
+            (&r1, ordered(&[400, 900])),      // D first of 2
+            (&r2, ordered(&[901, 400])),      // D last of 2
+            (&r3, ordered(&[902, 500, 903])), // E middle of 3
+            (&r4, ordered(&[904, 50, 905])),  // F (50) middle of 3
+        ];
+        let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        let pos = |e: u128| row(&rows, e).position;
+        for e in [400, 500, 50] {
+            assert!((row(&rows, e).score - 0.75).abs() < 1e-12, "entity {e}");
+        }
+        // D is on two ballots: above E and F, though F has the lowest id.
+        assert!(pos(400) < pos(50));
+        assert!(pos(400) < pos(500));
+        // E and F tie on score and ballots: the lower entity id leads.
+        assert!(pos(50) < pos(500));
+    }
+
+    #[test]
+    fn average_ties_that_differ_by_rounding_still_go_to_more_ballots() {
+        // X is 5th of 6 on one ballot: (0.6 + 0.75) / 2 = 0.675.
+        // Y is 4th of 5 and 8th of 11: (0.625 + 0.65 + 0.75) / 3 = 0.675,
+        // which raw f64 arithmetic makes 0.6749999999999999.
+        // They are equal, so Y (two ballots) leads, though X has the lower id.
+        const X: u128 = 100;
+        const Y: u128 = 200;
+        let filler =
+            |from: u128, n: usize| -> Vec<u128> { (0..n as u128).map(|i| from + i).collect() };
+        let mut x_ballot = filler(1_000, 4);
+        x_ballot.extend([X, 1_100]);
+        let mut y_short = filler(2_000, 3);
+        y_short.extend([Y, 2_100]);
+        let mut y_long = filler(3_000, 7);
+        y_long.push(Y);
+        y_long.extend(filler(3_100, 3));
+        assert_eq!((x_ballot.len(), y_short.len(), y_long.len()), (6, 5, 11));
+
+        let r1 = ranking(1, "ORDINAL");
+        let r2 = ranking(2, "ORDINAL");
+        let r3 = ranking(3, "ORDINAL");
+        let ballots = vec![
+            (&r1, ordered(&x_ballot)),
+            (&r2, ordered(&y_short)),
+            (&r3, ordered(&y_long)),
+        ];
+        let rows = aggregate_with(&ballots, NORM_LO, NORM_HI, None, AVERAGE);
+        let (x, y) = (row(&rows, X), row(&rows, Y));
+        assert_eq!((x.ballots, y.ballots), (1, 2));
+        // The stored scores are the same number, so they agree with the order.
+        assert_eq!(x.score, y.score);
+        assert!((x.score - 0.675).abs() < 1e-12);
+        assert!(y.position < x.position, "more ballots wins an equal score");
+    }
+
+    #[test]
+    fn average_decays_points_and_count_together_on_a_rolling_block() {
+        let hour = 3600;
+        let now = at(48 * hour);
+        let fresh = ranking_submitted(1, "ORDINAL", now);
+        let stale = ranking_submitted(2, "ORDINAL", at(0)); // two half-lives: 0.25
+        let ballots = vec![
+            (&fresh, ordered(&[100, 200])),
+            (&stale, ordered(&[200, 100])),
+        ];
+        let rows = aggregate_with(
+            &ballots,
+            NORM_LO,
+            NORM_HI,
+            Some(RecencyDecay {
+                half_life_hours: 24.0,
+                now,
+            }),
+            AVERAGE,
+        );
+        // A: (1.0 + 0.25*0.5 + 0.75) / (1 + 0.25 + 1)
+        let a = (1.0 + 0.125 + 0.75) / 2.25;
+        assert!((row(&rows, 100).score - a).abs() < 1e-9);
+        // The count is of ballots, undecayed.
+        assert_eq!(row(&rows, 100).ballots, 2);
+        assert_eq!(rows[0].entity_id, Uuid::from_u128(100));
+    }
+
+    #[test]
+    fn scoring_mode_round_trips_its_stored_spelling() {
+        for mode in [ScoringMode::Sum, ScoringMode::Average] {
+            assert_eq!(ScoringMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(ScoringMode::parse("mean"), None);
     }
 }
