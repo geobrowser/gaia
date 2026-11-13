@@ -90,7 +90,11 @@ data:
   # every derived put refused InvalidConfig. work_rows_max turns on the work class (plan 10.16; the
   # notification outbox shadow): 4,000,000 is plan 10.16's 30-day sizing, about 600 MB at the cap.
   # Removing either key turns its class off again; the store keeps <root>/derived and <root>/work
-  # and an open without the key ignores them.
+  # and an open without the key ignores them. listen_before_open (geo-db 4b34261b7b, default false)
+  # binds every endpoint before the store opens and answers a connection with the retryable
+  # ResourceExhausted "opening" refusal until it has; an image without 4b34261b7b fails the open
+  # on the unknown key, so this ConfigMap must only reach a pod on a pin that carries it. The probes below read
+  # /data/ctl/serving, not the socket, so a bound-but-refusing listener does not make the pod Ready.
   serve.cfg: |
     version = 1
     server_rooms_carving = 67108864
@@ -99,6 +103,7 @@ data:
     spaces = 2048
     derived_rows_max = 12582912
     work_rows_max = 4000000
+    listen_before_open = true
 ---
 apiVersion: v1
 kind: Service
@@ -169,7 +174,7 @@ spec:
         - name: serve
           # By tag again, like every other geodb pin. 8050918d2f is a new tag (67b6974a5e was rebuilt in place on 11-12 and
           # was pinned by digest while it was live); never rebuild a tag that is deployed, build a new one.
-          image: registry.digitalocean.com/geo/geodb:8cba4da996
+          image: registry.digitalocean.com/geo/geodb:57e34f06df
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -261,6 +266,16 @@ spec:
             # Same 600 s budget as before (120 x 5 s), polled every second.
             periodSeconds: 1
             failureThreshold: 600
+          # The way down. ctl/serving lives on the PVC and the supervisor does not remove it on SIGTERM, so
+          # readiness stays true while serve drains. The kubelet drops a terminating pod from the Service's
+          # endpoints at once, but kube-proxy and clients learn that a moment after SIGTERM is sent, and serve
+          # closes its listener when it drains. Run this first: ctl/serving goes (readiness fails on any path
+          # that is not a pod delete) and SIGTERM waits 5 s, so the endpoint is gone before the listener is.
+          # serve still answers during the wait; the grace period (300 s) covers it.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "rm -f /data/ctl/serving; sleep 5"]
           resources:
             # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
             # growth). Plan 10.14 §10 Stage A: 5Gi/7Gi covers the 604 MB derived carve plus the backfill.

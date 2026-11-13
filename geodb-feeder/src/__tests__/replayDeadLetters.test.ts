@@ -305,6 +305,78 @@ describe("runReplayDeadLetters --apply", () => {
 		expect(r.docs.every((d) => d.state === "done" && d.pending === 0)).toBe(true)
 	})
 
+	describe("a rerun after a kill (found on a real geo-db store: the store stamps every entity the run wrote with a newer updatedAt)", () => {
+		const newer = async (entities: string[]) => {
+			const {UPDATED_AT_PROPERTY} = await import("../entityTimes.js")
+			return Object.fromEntries(entities.map((e) => [e, [{prop: UPDATED_AT_PROPERTY, value: "1763000000000000", statement: h(1), entity: e}]]))
+		}
+		const firstChunkEntities = Array.from({length: 20}, (_, i) => h(0x1000 + i))
+		const args = {apply: true, edit: EDIT, createdAt: 1_762_988_400}
+
+		it("resumes after the entries the done-file records, though the entities they wrote are now newer than --created-at", async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			const r1 = await runReplayDeadLetters(first.deps, args)
+			expect(r1.outcome).toBe("failed")
+			const again = harness({chunk: 100, done: first.done.join(""), rows: await newer(firstChunkEntities)})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(40)
+		})
+
+		it("exempts every entity the run created or set, not only those its adds and unsets name (a created, named entity is newer too)", async () => {
+			const ents = Array.from({length: 4}, (_, i) => h(0x1100 + i))
+			const intents = [...ents.flatMap((e) => [create(e), `.{ .set = .{ .entity = "${e}", .property = "${h(0x6001)}", .value = .{ .text = "n" } } }`]), ...ents.map((_, i) => retract(h(0x5100 + i))), ...ents.map((e, i) => add(e, h(0x6002), ents[(i + 1) % 4] as string, h(0x4100 + i)))]
+			const record = `${intents.map((i) => JSON.stringify(editLine(98656, i))).join("\n")}\n`
+			const first = harness({record, chunk: 4, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			expect((await runReplayDeadLetters(first.deps, args)).outcome).toBe("failed")
+			const again = harness({record, chunk: 4, done: first.done.join(""), rows: await newer(ents)})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(12)
+		})
+
+		it("resends the chunk that was in flight when the process died, under the same key", async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			await runReplayDeadLetters(first.deps, args)
+			// the kill landed after geo-db committed chunk 2 and before its done lines: only the started marker survived
+			const lines = first.done.join("").split("\n").filter(Boolean)
+			const inFlight = Array.from({length: 40}, (_, i) => h(0x1000 + (i % 20)))
+			const again = harness({chunk: 100, done: `${lines.join("\n")}\n`, rows: await newer([...firstChunkEntities, ...inFlight])})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(40)
+			const entries = parseDeadLetters(again.deps.record).entries.filter((e) => e.edit === EDIT)
+			expect(again.sent[0]?.text).toContain(replayKey(`0:98656:${GAIA_SPACE}:${EDIT}`, entries.slice(100).map((e) => e.id)))
+		})
+	})
+
+	describe("geo-db answers a resent chunk that carries a set with IdempotencyConflict (found on a real store: a set's EditHash is taken after it resolves against the live cell)", () => {
+		const conflict = {rc: 1, err: "refused: DefiniteRefusal IdempotencyConflict\nerror: Refused\n"}
+		const args = {apply: true, edit: EDIT, createdAt: 1_762_988_400}
+		const inFlightDone = async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			await runReplayDeadLetters(first.deps, args)
+			return first.done.join("")
+		}
+
+		it("counts the in-flight chunk done: its key was started by an earlier run, so the conflict means it committed", async () => {
+			const done = await inFlightDone()
+			const again = harness({chunk: 100, done, answers: [conflict]})
+			const r = await runReplayDeadLetters(again.deps, args)
+			expect(r.outcome).toBe("applied")
+			expect(r.sent).toBe(40)
+			expect(parseDone(again.done.join("")).size).toBeGreaterThanOrEqual(40)
+			expect(again.sent).toHaveLength(1)
+		})
+
+		it("still stops on IdempotencyConflict for a chunk no earlier run started", async () => {
+			const t = harness({chunk: 100, answers: [conflict]})
+			const r = await runReplayDeadLetters(t.deps, args)
+			expect(r.outcome).toBe("failed")
+			expect(r.sent).toBe(0)
+		})
+	})
+
 	it("keyed records go to their family's system Space, verbatim", async () => {
 		const t = harness()
 		await runReplayDeadLetters(t.deps, {apply: true, source: "keyed"})
