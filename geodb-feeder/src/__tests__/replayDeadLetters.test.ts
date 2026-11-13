@@ -305,6 +305,39 @@ describe("runReplayDeadLetters --apply", () => {
 		expect(r.docs.every((d) => d.state === "done" && d.pending === 0)).toBe(true)
 	})
 
+	describe("a rerun after a kill (found on a real geo-db store: the store stamps every entity the run wrote with a newer updatedAt)", () => {
+		const newer = async (entities: string[]) => {
+			const {UPDATED_AT_PROPERTY} = await import("../entityTimes.js")
+			return Object.fromEntries(entities.map((e) => [e, [{prop: UPDATED_AT_PROPERTY, value: "1763000000000000", statement: h(1), entity: e}]]))
+		}
+		const firstChunkEntities = Array.from({length: 20}, (_, i) => h(0x1000 + i))
+		const args = {apply: true, edit: EDIT, createdAt: 1_762_988_400}
+
+		it("resumes after the entries the done-file records, though the entities they wrote are now newer than --created-at", async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			const r1 = await runReplayDeadLetters(first.deps, args)
+			expect(r1.outcome).toBe("failed")
+			const again = harness({chunk: 100, done: first.done.join(""), rows: await newer(firstChunkEntities)})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(40)
+		})
+
+		it("resends the chunk that was in flight when the process died, under the same key", async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			await runReplayDeadLetters(first.deps, args)
+			// the kill landed after geo-db committed chunk 2 and before its done lines: only the started marker survived
+			const lines = first.done.join("").split("\n").filter(Boolean)
+			const inFlight = Array.from({length: 40}, (_, i) => h(0x1000 + (i % 20)))
+			const again = harness({chunk: 100, done: `${lines.join("\n")}\n`, rows: await newer([...firstChunkEntities, ...inFlight])})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(40)
+			const entries = parseDeadLetters(again.deps.record).entries.filter((e) => e.edit === EDIT)
+			expect(again.sent[0]?.text).toContain(replayKey(`0:98656:${GAIA_SPACE}:${EDIT}`, entries.slice(100).map((e) => e.id)))
+		})
+	})
+
 	it("keyed records go to their family's system Space, verbatim", async () => {
 		const t = harness()
 		await runReplayDeadLetters(t.deps, {apply: true, source: "keyed"})
