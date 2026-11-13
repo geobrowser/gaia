@@ -10,11 +10,20 @@
  * can lag the store and never lead it. A replay moves it back with the store. Best effort: a failed put is counted and
  * logged, never fails the apply path.
  *
+ * An edit the feeder skipped any part of (an intent geo-db refused, an undecodable message, a Space-cap dead letter)
+ * is not in the store, yet later edits of its partition apply and move the partition on. So a dead letter holds its
+ * partition at the block below the dead-lettered edit's (`hold`), and the row never claims that block until the hold
+ * is released. Holds are written to `holdsPath` (applied-holds.json beside offsets.json) before the dead letter's
+ * progress is saved, so a restart keeps them. Nothing releases one automatically: after a replay applies the edit,
+ * remove its partition from that file with the feeder at 0 (RUNBOOK "Applied-block holds").
+ *
  * Off unless GEODB_APPLIED_BLOCK is set (config.ts). The feeder's own key has no `derived=` grant, so it writes with the
  * `geodb-cursor-key` (`derived=10`), mounted for it (GEODB_APPLIED_BLOCK_KEY_PATH).
  */
+import {existsSync, readFileSync} from "node:fs"
 import type {Runner} from "./geodb.js"
 import {log} from "./log.js"
+import {writeFileDurable} from "./state.js"
 
 /** The writer id the row is keyed by. */
 export const APPLIED_BLOCK_KEY = "geodb-feeder-applied"
@@ -23,19 +32,51 @@ export const CURSORS_COLLECTION = 10
 /** The `cursors` collection's value bound, bytes. */
 const VALUE_MAX = 1024
 
+const validBlock = (b: number | null): b is number => b !== null && Number.isSafeInteger(b) && b >= 0
+
 export class AppliedBlockTracker {
 	private readonly blocks = new Map<number, number>()
+	/** Per partition, the highest block the row may claim: one below its oldest unreplayed dead letter's. */
+	private readonly caps = new Map<number, number>()
+
+	constructor(caps: Record<string, number> = {}) {
+		for (const [p, c] of Object.entries(caps)) if (Number.isSafeInteger(Number(p)) && validBlock(c)) this.caps.set(Number(p), c)
+	}
 
 	/** An edit of `partition` was applied; `block` is its chain block, null when the edit carries none. */
 	observe(partition: number, block: number | null): void {
-		if (block === null || !Number.isSafeInteger(block) || block < 0) return
+		if (!validBlock(block)) return
 		this.blocks.set(partition, block)
 	}
 
-	/** The lowest partition's last applied block; null before any edit with a block. */
+	/**
+	 * An edit of `partition` was dead-lettered in whole or part; `block` is its chain block, null when unknown (then
+	 * the partition is held where it is). Returns whether the hold moved.
+	 */
+	hold(partition: number, block: number | null): boolean {
+		const at = validBlock(block) ? Math.max(0, block - 1) : (this.blocks.get(partition) ?? 0)
+		const cap = this.caps.get(partition)
+		if (cap !== undefined && cap <= at) return false
+		this.caps.set(partition, at)
+		return true
+	}
+
+	/** The holds, for persisting. */
+	holds(): Record<string, number> {
+		return Object.fromEntries([...this.caps.entries()].sort(([a], [b]) => a - b).map(([p, c]) => [String(p), c]))
+	}
+
+	/** Each partition's claim: its last applied block, never above its hold. */
+	private claims(): [number, number][] {
+		const out = new Map<number, number>(this.blocks)
+		for (const [p, c] of this.caps) out.set(p, Math.min(out.get(p) ?? c, c))
+		return [...out.entries()].sort(([a], [b]) => a - b)
+	}
+
+	/** The lowest partition's claim; null before any edit with a block (or any hold). */
 	watermark(): number | null {
 		let low: number | null = null
-		for (const b of this.blocks.values()) if (low === null || b < low) low = b
+		for (const [, b] of this.claims()) if (low === null || b < low) low = b
 		return low
 	}
 
@@ -43,8 +84,7 @@ export class AppliedBlockTracker {
 	value(): string | null {
 		const w = this.watermark()
 		if (w === null) return null
-		const parts = [...this.blocks.entries()].sort(([a], [b]) => a - b)
-		return `${w}:${JSON.stringify(Object.fromEntries(parts.map(([p, b]) => [String(p), b])))}`
+		return `${w}:${JSON.stringify(Object.fromEntries(this.claims().map(([p, b]) => [String(p), b])))}`
 	}
 }
 
@@ -53,6 +93,17 @@ export type AppliedBlockWriter = {
 	note(partition: number, block: number | null): Promise<void>
 	/** Writes the latest value if it has not been written, e.g. at the end of a batch. Never throws. */
 	flush(): Promise<void>
+	/**
+	 * An edit of `partition` at `block` was dead-lettered in whole or part: the row stays below it until the hold is
+	 * released by hand. Persisted synchronously before returning, so call it before the dead letter's progress is saved.
+	 */
+	hold(partition: number, block: number | null): void
+}
+
+function loadHolds(path: string | undefined): Record<string, number> {
+	if (!path || !existsSync(path)) return {}
+	// A hold file that cannot be read must not silently release the holds: fail the start.
+	return JSON.parse(readFileSync(path, "utf8")) as Record<string, number>
 }
 
 export function createAppliedBlockWriter(opts: {
@@ -62,8 +113,10 @@ export function createAppliedBlockWriter(opts: {
 	now?: () => number
 	/** Called once per attempted put with whether it applied. */
 	onResult?: (ok: boolean) => void
+	/** Where holds persist (applied-holds.json in the feeder's state dir). Unset: holds live in memory only. */
+	holdsPath?: string
 }): AppliedBlockWriter {
-	const tracker = new AppliedBlockTracker()
+	const tracker = new AppliedBlockTracker(loadHolds(opts.holdsPath))
 	const collection = opts.collection ?? CURSORS_COLLECTION
 	const minInterval = opts.minIntervalMs ?? 5000
 	const now = opts.now ?? Date.now
@@ -108,6 +161,14 @@ export function createAppliedBlockWriter(opts: {
 		},
 		flush: async () => {
 			await serial()
+		},
+		hold: (partition, block) => {
+			if (!tracker.hold(partition, block)) return
+			const holds = tracker.holds()
+			log("warn", "applied block held below a dead-lettered edit", {partition, block, holds})
+			// Unlike a put, a hold that is not on disk would be lost on restart, so a failed write throws to the apply
+			// path, which retries the message rather than skipping it.
+			if (opts.holdsPath) writeFileDurable(opts.holdsPath, JSON.stringify(holds))
 		},
 	}
 }

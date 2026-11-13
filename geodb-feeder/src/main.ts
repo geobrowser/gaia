@@ -82,6 +82,7 @@ async function main(config: Config): Promise<void> {
 		? createAppliedBlockWriter({
 				run: spawnRunner({clientBin: config.clientBin, keyPath: config.appliedBlock.keyPath, bindingPath: config.bindingPath, cwd: config.runDir}),
 				onResult: (ok) => metrics.appliedBlockPuts.inc({result: ok ? "ok" : "failed"}),
+				holdsPath: `${config.dataDir}/feeder/applied-holds.json`,
 			})
 		: undefined
 	const publisher = new SpaceMapPublisher(config.spaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics)

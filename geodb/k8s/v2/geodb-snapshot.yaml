@@ -9,7 +9,7 @@
 # Retention: the newest KEEP pairs carrying the labels below. Snapshots without them (the hand-made pretimes-*,
 # posttimes-*, premigrate-* ...) are never selected, so never deleted.
 #
-# Shipped with deploy-v2 service geodb-feeder (it is listed with geodb.yaml). Applying this file creates the
+# Shipped with deploy-v2 service geodb-feeder (it is listed with geodb-feeder.yaml). Applying this file creates the
 # CronJob; nothing runs until its first schedule, or until:
 #   kubectl -n gaia create job --from=cronjob/geodb-snapshot geodb-snapshot-first
 apiVersion: v1
