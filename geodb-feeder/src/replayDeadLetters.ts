@@ -226,6 +226,40 @@ export function parseDone(text: string): Set<string> {
 	return out
 }
 
+/**
+ * The entry ids a chunk was about to send when the process died: `startedLine` is appended before each apply. geo-db
+ * may or may not have committed that chunk, so a rerun cannot tell its own write from a later one by reading; it
+ * exempts these entries' entities from the newer-state rule (the resend is under the same key, so a committed chunk
+ * answers its first receipt and writes nothing).
+ */
+export function parseStarted(text: string): Set<string> {
+	const out = new Set<string>()
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue
+		try {
+			const r = JSON.parse(line) as {inflight?: unknown; entries?: unknown}
+			if (r.inflight === true && Array.isArray(r.entries)) for (const id of r.entries) if (typeof id === "string") out.add(id)
+		} catch {}
+	}
+	return out
+}
+
+/** The chunk keys earlier runs started (see `parseStarted`). */
+export function parseStartedKeys(text: string): Set<string> {
+	const out = new Set<string>()
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue
+		try {
+			const r = JSON.parse(line) as {inflight?: unknown; key?: unknown}
+			if (r.inflight === true && typeof r.key === "string") out.add(r.key)
+		} catch {}
+	}
+	return out
+}
+
+export const startedLine = (doc: DeadLetterDoc, chunk: readonly DeadLetterEntry[], key: string, now: number): string =>
+	`${JSON.stringify({t: now, inflight: true, doc: doc.id, key, entries: chunk.map((e) => e.id)})}\n`
+
 export const doneLines = (doc: DeadLetterDoc, sent: readonly DeadLetterEntry[], key: string, now: number): string =>
 	sent.map((e) => `${JSON.stringify({t: now, entry: e.id, doc: doc.id, key})}\n`).join("")
 
@@ -347,6 +381,17 @@ export type ReplayDeadLettersResult = {
 	reason?: string
 }
 
+/** Every entity an intent creates, deletes or names as its subject (set, put, add, unset, set_position). */
+export const touchedEntities = (intents: readonly string[]): string[] => [
+	...new Set(
+		intents.flatMap((i) => {
+			const created = /^\.\{\s*\.(?:create_entity|delete_entity)\s*=\s*"([0-9a-f]{32})"/.exec(i)?.[1]
+			const subject = /\.entity\s*=\s*"([0-9a-f]{32})"/.exec(i)?.[1]
+			return [created, subject].filter((x): x is string => x !== undefined)
+		}),
+	),
+]
+
 async function stateCheck(
 	deps: ReplayDeadLettersDeps,
 	args: ReplayDeadLettersArgs,
@@ -354,12 +399,13 @@ async function stateCheck(
 	target: Target,
 	intents: readonly string[],
 	sleep: (ms: number) => Promise<void>,
+	ours: ReadonlySet<string> = new Set(),
 ): Promise<DocPlan["check"]> {
 	if (!deps.reader) return {kind: "unchecked", why: "no reader"}
 	if (doc.source === "edit") {
 		if (args.createdAt === undefined || args.edit === undefined) return {kind: "unchecked", why: "an edit document needs --edit and --created-at for the newer-state rule"}
 		const micros = BigInt(blockInstant(args.createdAt) ?? "0")
-		const r = await findConflicts(deps.reader, target.geo, editEntities(intents), micros, sleep)
+		const r = await findConflicts(deps.reader, target.geo, editEntities(intents).filter((e) => !ours.has(e)), micros, sleep)
 		return {kind: "updated-at", ...r}
 	}
 	const cells = await putCellStates(deps.reader, target.geo, intents, sleep)
@@ -394,6 +440,8 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 	if (parsed.notJson) skipped["not-json"] = parsed.notJson
 	const docs = groupDocuments(selected)
 	const done = parseDone(deps.done)
+	const started = parseStarted(deps.done)
+	const startedKeys = parseStartedKeys(deps.done)
 
 	const plans: {doc: DeadLetterDoc; target: Target | {error: string}; plan: DocPlan}[] = []
 	for (const doc of docs) {
@@ -417,10 +465,13 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 			// The whole document, as the original message held it: a pair across a done/pending split still counts.
 			pairs: findHazardPairs(intents),
 		}
+		// Entities an earlier run of this tool wrote (or was writing when it died) now carry a newer updatedAt: its own work,
+		// not later state to stomp. An entity only a later writer touched is still checked.
+		const ours = new Set(touchedEntities(doc.entries.filter((e) => done.has(e.id) || started.has(e.id)).map((e) => e.intent)))
 		const check: DocPlan["check"] =
 			"error" in target || pendingEntries.length === 0
 				? {kind: "unchecked", why: "error" in target ? "no target" : "nothing pending"}
-				: await stateCheck(deps, args, doc, target, pendingEntries.map((e) => e.intent), sleep)
+				: await stateCheck(deps, args, doc, target, pendingEntries.map((e) => e.intent), sleep, ours)
 		const refuse = pendingEntries.length === 0 ? null : refusalOf({...base, check}, target, args.apply)
 		const plan: DocPlan = {...base, check, refuse, state: pendingEntries.length === 0 ? "done" : refuse ? "refused" : "pending"}
 		plans.push({doc, target, plan})
@@ -462,11 +513,20 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 			const slice = pending.slice(lo, lo + deps.chunk)
 			const key = replayKey(doc.id, slice.map((e) => e.id))
 			const text = zonDoc(target.geo, key, slice.map((e) => e.intent))
+			const resend = startedKeys.has(key)
+			deps.appendDone(startedLine(doc, slice, key, now()))
 			let delay = 1000
 			for (let attempt = 1; ; attempt++) {
 				const r = await deps.db.apply(text)
 				if (r.rc === 0) break
 				const message = (r.err + r.out).slice(-600)
+				// geo-db hashes a `set` after resolving it against the live cell, so resending a committed chunk that holds one
+				// is answered IdempotencyConflict rather than the first receipt. The key is deterministic in the chunk's
+				// content and an earlier run started it, so the EditId exists because that run's write committed.
+				if (resend && message.includes("IdempotencyConflict")) {
+					log("warn", "replay-deadletters resent chunk already committed", {doc: doc.id, lo, size: slice.length, key})
+					break
+				}
 				// A failed connect sent nothing: retry it here even where this base's classify calls `connect: Refused` permanent.
 				const kind = NEVER_SENT_ERRORS.some((x) => message.includes(x)) ? "transient" : classify(r.rc === null ? `${message} killed` : message)
 				if (kind !== "transient" || attempt >= attempts) {
