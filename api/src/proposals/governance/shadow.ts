@@ -6,6 +6,11 @@
  * It runs after the response is built, in the background, bounded by `maxInFlight`, and swallows every error: it
  * never changes, delays or fails a response.
  *
+ * A mismatch is re-read once after `rereadMs` (both Postgres, through `reloadProposal`, and geo-db). The two reads are
+ * not atomic, so a vote or status write landing inside the feeder's sub-second gap flips one compare (11-11: 6 list
+ * mismatches in a vote burst with feeder lag 0). Still different on the re-read: `mismatch`, logged with the field.
+ * Gone: `mismatch_healed`. The wait happens after the response, inside the comparison's in-flight slot.
+ *
  * What geo-db supplies: the proposal's status record (executed_at, unexecutable_at) and, on the detail surface, the
  * vote record of each voter Postgres lists for the current version, and the settings snapshot, read from the
  * proposal's latest proposalVersion record (highest block, found by backlinks). A geo Fast version against a Postgres
@@ -16,7 +21,17 @@
  * never looks at its actions.
  */
 import {type GeoDbCardClient, GeoDbError} from "../../geodb/client"
-import {computeProposalStatus} from "../status"
+import {
+	activateServeGate,
+	type Comparison,
+	createMatchLedger,
+	failureReason,
+	recordServed,
+	recordServeFallback,
+	type ServeGateConfig,
+	withServeTimeout,
+} from "../../geodb/serveGate"
+import {computeProposalStatus, getCurrentTimeSeconds} from "../status"
 import type {ProposalListItem, ProposalWithVotes, StatusComputationResult} from "../types"
 import {resolveEscalations} from "./escalation"
 import {
@@ -39,7 +54,7 @@ import {
 	proposalStatusRecordId,
 	proposalVoteRecordId,
 } from "./records"
-import {type StatusSnapshot, sameResult, statusFromRecords, tallyVotes} from "./status"
+import {type StatusSnapshot, statusFromRecords, tallyVotes} from "./status"
 
 export type GovernanceShadowConfig = {
 	enabled: boolean
@@ -51,9 +66,11 @@ export type GovernanceShadowConfig = {
 	maxInFlight: number
 	/** Resolve proposal settings escalations onto the latest version (GEODB_GOVERNANCE_SHADOW_ESCALATIONS); off = a geo Fast against a Postgres Slow counts `escalation_pending`. */
 	escalations: boolean
+	/** Wait before the one re-read of a mismatch (GEODB_GOVERNANCE_SHADOW_REREAD_MS); 0 counts a mismatch at once. */
+	rereadMs: number
 }
 
-const DEFAULTS = {listMax: 5, voterMax: 25, maxInFlight: 8}
+const DEFAULTS = {listMax: 5, voterMax: 25, maxInFlight: 8, rereadMs: 1500}
 /** Most version records one proposal is read with; a proposal has one per settings-bearing event, a handful at most. */
 const VERSION_MAX = 64
 const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
@@ -68,6 +85,10 @@ export function readGovernanceShadowConfig(env: Record<string, string | undefine
 		listMax: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_LIST_MAX, DEFAULTS.listMax, 100),
 		voterMax: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_VOTER_MAX, DEFAULTS.voterMax, 200),
 		maxInFlight: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_MAX_IN_FLIGHT, DEFAULTS.maxInFlight, 64),
+		rereadMs:
+			env.GEODB_GOVERNANCE_SHADOW_REREAD_MS?.trim() === "0"
+				? 0
+				: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_REREAD_MS, DEFAULTS.rereadMs, 30_000),
 		escalations: ["1", "on", "true"].includes(env.GEODB_GOVERNANCE_SHADOW_ESCALATIONS?.trim().toLowerCase() ?? ""),
 	}
 }
@@ -86,6 +107,35 @@ export type GovernanceLogger = {warn: (message: string, data?: Record<string, un
 export type GovernanceShadow = {
 	detail(proposal: ProposalWithVotes, nowSeconds: bigint): void
 	list(proposals: readonly ProposalListItem[], nowSeconds: bigint): void
+	/**
+	 * GEODB_GOVERNANCE_SERVE: the status geo-db computes for each proposal whose last comparison on this surface matched,
+	 * keyed by proposal id. A proposal absent from the map is answered by Postgres (counted `gaia_api_geodb_serve_fallback_total`).
+	 * Never rejects.
+	 */
+	serveStatuses(
+		surface: Surface,
+		proposals: readonly (ProposalWithVotes | ProposalListItem)[],
+		nowSeconds: bigint,
+	): Promise<Map<string, StatusComputationResult>>
+}
+
+/** The serve read's name in `gaia_api_geodb_serve_*{read}`. */
+export const GOVERNANCE_SERVE_READ = "proposal_status"
+
+/**
+ * What the router holds when GEODB_GOVERNANCE_SERVE is on but GEODB_GOVERNANCE_SHADOW is not: no comparison exists, so
+ * every proposal goes to Postgres, counted `shadow_off`.
+ */
+export function createGovernanceServeWithoutShadow(): GovernanceShadow {
+	activateServeGate("governance", [GOVERNANCE_SERVE_READ])
+	return {
+		detail: () => {},
+		list: () => {},
+		serveStatuses: async (_surface, proposals) => {
+			for (const _p of proposals) recordServeFallback("governance", GOVERNANCE_SERVE_READ, "shadow_off")
+			return new Map()
+		},
+	}
 }
 
 const OPTION: Record<string, 1 | 2 | 3> = {YES: 1, NO: 2, ABSTAIN: 3}
@@ -96,8 +146,20 @@ export function createGovernanceShadow(deps: {
 	geoDb: GeoDbCardClient
 	systemSpaceOf: SystemSpaceLookup
 	log: GovernanceLogger
+	/** Postgres's current row for the re-read of a mismatch. Absent or null: the re-read reuses the proposal as served. */
+	reloadProposal?: (proposalId: string) => Promise<ProposalWithVotes | null>
+	sleep?: (ms: number) => Promise<void>
+	/** GEODB_GOVERNANCE_SERVE; absent or disabled: nothing is served and no serve series exist. */
+	serve?: ServeGateConfig
+	now?: () => number
 }): GovernanceShadow {
 	const {config, geoDb, systemSpaceOf, log} = deps
+	const serve = deps.serve?.enabled ? deps.serve : null
+	if (serve) activateServeGate("governance", [GOVERNANCE_SERVE_READ])
+	const ledger = createMatchLedger({ttlMs: serve?.matchTtlMs ?? 0, ...(deps.now ? {now: deps.now} : {})})
+	const ledgerKey = (surface: Surface, p: ProposalWithVotes | ProposalListItem) =>
+		`${surface}:${p.id}:${p.proposalVersion}`
+	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
 	activateGovernanceMetrics()
 	let inFlight = 0
 	let logged = 0
@@ -175,33 +237,70 @@ export function createGovernanceShadow(deps: {
 		return {result: statusFromRecords(snapshot, {...status, ...tally}, nowSeconds), voteMismatch}
 	}
 
-	async function compare(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
+	/** One Postgres-versus-geo-db comparison: the fields that differ (empty = equal), and the two statuses. */
+	async function differences(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
 		const served: StatusComputationResult = computeProposalStatus(p, nowSeconds)
+		const {result, voteMismatch} = await fromGeoDb(surface, p, nowSeconds)
+		const fields = [
+			...(served.status !== result.status ? ["status"] : []),
+			...(served.isQuorumReached !== result.isQuorumReached ? ["isQuorumReached"] : []),
+			...(served.isThresholdReached !== result.isThresholdReached ? ["isThresholdReached"] : []),
+			...(served.isEarlyExecutable !== result.isEarlyExecutable ? ["isEarlyExecutable"] : []),
+			...(voteMismatch ? ["votes"] : []),
+		]
+		return {fields, served: served.status, geoDb: result.status, voteMismatch}
+	}
+
+	async function compare(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
 		recordGovernanceUncompared(surface, "total_editors_from_postgres")
 		if (surface === "list") recordGovernanceUncompared(surface, "votes_from_postgres")
+		const remember = (outcome: Comparison) => {
+			if (serve) ledger.record(ledgerKey(surface, p), outcome)
+		}
 		try {
-			const {result, voteMismatch} = await fromGeoDb(surface, p, nowSeconds)
-			const match = sameResult(served, result) && !voteMismatch
-			recordGovernanceShadow(surface, match ? "match" : "mismatch")
-			if (!match && logged < MAX_LOGGED_MISMATCHES) {
+			let d = await differences(surface, p, nowSeconds)
+			if (d.fields.length === 0) {
+				recordGovernanceShadow(surface, "match")
+				remember("match")
+				return
+			}
+			if (config.rereadMs > 0) {
+				// Re-read both sides once: a write between the two reads, not a gap, is gone by now.
+				await sleep(config.rereadMs)
+				const fresh = (await deps.reloadProposal?.(p.id)) ?? p
+				const again = await differences(surface, fresh, getCurrentTimeSeconds())
+				if (again.fields.length === 0) {
+					recordGovernanceShadow(surface, "mismatch_healed")
+					remember("match")
+					return
+				}
+				d = again
+			}
+			recordGovernanceShadow(surface, "mismatch")
+			remember("mismatch")
+			if (logged < MAX_LOGGED_MISMATCHES) {
 				logged++
 				log.warn("governance shadow mismatch", {
 					proposalId: p.id,
 					surface,
-					served: served.status,
-					geoDb: result.status,
-					voteMismatch,
+					fields: d.fields,
+					served: d.served,
+					geoDb: d.geoDb,
+					voteMismatch: d.voteMismatch,
 				})
 			}
 		} catch (error) {
 			if (error instanceof Unsupported) {
 				recordGovernanceShadow(surface, "unsupported")
 				recordGovernanceUnsupported(surface, error.reason)
+				remember("unsupported")
 			} else if (error instanceof AmbiguousRecordError) {
 				recordGovernanceShadow(surface, "unsupported")
 				recordGovernanceUnsupported(surface, "ambiguous_record")
+				remember("unsupported")
 			} else {
 				recordGovernanceShadow(surface, "failed")
+				remember("unsupported")
 				if (!(error instanceof GeoDbError)) log.warn("governance shadow failed", {error: String(error)})
 			}
 		}
@@ -225,8 +324,37 @@ export function createGovernanceShadow(deps: {
 		}
 	}
 
+	async function serveStatuses(
+		surface: Surface,
+		proposals: readonly (ProposalWithVotes | ProposalListItem)[],
+		nowSeconds: bigint,
+	): Promise<Map<string, StatusComputationResult>> {
+		const out = new Map<string, StatusComputationResult>()
+		if (!serve) return out
+		await Promise.all(
+			proposals.map(async (p) => {
+				try {
+					const verdict = ledger.check(ledgerKey(surface, p))
+					if (!verdict.ok) return recordServeFallback("governance", GOVERNANCE_SERVE_READ, verdict.reason)
+					const {result} = await withServeTimeout(fromGeoDb(surface, p, nowSeconds), serve.timeoutMs)
+					out.set(p.id, result)
+					recordServed("governance", GOVERNANCE_SERVE_READ)
+				} catch (error) {
+					const unsupported = error instanceof Unsupported || error instanceof AmbiguousRecordError
+					recordServeFallback(
+						"governance",
+						GOVERNANCE_SERVE_READ,
+						unsupported ? "unsupported" : failureReason(error),
+					)
+				}
+			}),
+		)
+		return out
+	}
+
 	return {
 		detail: (proposal, nowSeconds) => run("detail", [proposal], nowSeconds),
 		list: (proposals, nowSeconds) => run("list", proposals.slice(0, config.listMax), nowSeconds),
+		serveStatuses,
 	}
 }

@@ -25,6 +25,14 @@ id cannot be told from a real one by looking at it. The ids Postgres lists (the 
 nothing maps back is read as it is, so it shows as a row Postgres does not hold, counted in ``mismatch``. ``unmapped`` counts
 only values that are not an id at all.
 
+Serving (``GEODB_SCORES_SERVE``, off by default, a sibling of the compare flag because it reads the derived score
+collections, not members and votes): the scoring writer diffs the new scores against the stored ones to find the rows the
+geo-db mirror must resend. With the flag on that diff reads the stored rows from geo-db's collections 2, 3 and 4 (each group read
+in bounded pages by the ``scan`` resume cursor of a ``geodb-client derived pipe``, which needs a client with that field)
+instead of Postgres. Any error or timeout falls back to the Postgres diff and is
+counted in ``gaia_scoring_scores_serve_fallback_total{reason}`` (``error``, ``timeout``, ``misconfigured``). See
+:class:`ScoresServe`.
+
 Needs ``GEODB_KEY_PATH`` (or ``GEODB_READ_KEY_PATH``, which wins when set), ``GEODB_BINDING_PATH`` and ``GEODB_SYSTEM_SPACES_PATH`` (the feeder's ``system-spaces.json``,
 ``{"<family>": {"geo": "<32 hex>"}}``), and the key's binding must allow card reads in both system Spaces.
 """
@@ -32,6 +40,7 @@ Needs ``GEODB_KEY_PATH`` (or ``GEODB_READ_KEY_PATH``, which wins when set), ``GE
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import select
@@ -103,6 +112,10 @@ class Row:
 
 class GeoDbReadError(Exception):
     """A read geo-db refused, or a client that broke its framing, timed out or died."""
+
+
+class GeoDbTimeout(GeoDbReadError):
+    """The client did not answer within the read's time limit."""
 
 
 class GeoDbReader(Protocol):
@@ -224,7 +237,7 @@ class PipeReader:
         assert proc.stdout is not None
         wait = deadline - time.monotonic()
         if wait <= 0 or not select.select([proc.stdout], [], [], wait)[0]:
-            raise GeoDbReadError("geodb-client timed out")
+            raise GeoDbTimeout("geodb-client timed out")
         chunk = os.read(proc.stdout.fileno(), 65536)
         if not chunk:
             raise GeoDbReadError("geodb-client closed")
@@ -499,3 +512,279 @@ def compare_geodb_reads(
             extra=stats.as_log(),
         )
     return stats
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Serve path: the stored scores, read from geo-db's derived collections 2 (global), 3 (local) and 4 (space).
+# ---------------------------------------------------------------------------------------------------------------------
+
+COLLECTION_GLOBAL = 2
+COLLECTION_LOCAL = 3
+COLLECTION_SPACE = 4
+DEFAULT_SERVE_BUDGET_S = 600.0
+# The serve mints each session's grant for 300 s (geodb/supervisor.sh); replace the child well before that, as the
+# derived mirror does (GEODB_DERIVED_SESSION_REFRESH_S) and the api's derived reader does.
+SERVE_SESSION_REFRESH_S = 240.0
+SCORE_TOLERANCE = 1e-9
+FALLBACK_REASONS = ("error", "timeout", "misconfigured")
+SERVE_TABLES = ("global_scores", "local_scores", "space_scores")
+_ZERO_GROUP = "0" * 32
+
+FALLBACK_METRIC = "gaia_scoring_scores_serve_fallback_total"
+
+
+def serve_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``GEODB_SCORES_SERVE``: off unless ``1`` or ``true``."""
+    env = os.environ if environ is None else environ
+    return env.get("GEODB_SCORES_SERVE", "").strip().lower() in ("1", "true")
+
+
+class ServeFallback(Exception):
+    """The geo-db read cannot answer; ``reason`` is the counter's label."""
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+@dataclass
+class ServeStats:
+    """Counts for one run. ``fallback`` is the counter ``gaia_scoring_scores_serve_fallback_total{reason}``."""
+
+    fallback: Counter = field(default_factory=Counter)
+    served: Counter = field(default_factory=Counter)  # by table: reads that answered from geo-db
+    rows_read: int = 0
+
+    def render(self) -> str:
+        """The counter in the Prometheus text format, every reason present at zero. The CronJob has no scrape endpoint,
+        so this goes to the log (one line per series) where a log-based metric can read it."""
+        lines = [f"# TYPE {FALLBACK_METRIC} counter"]
+        lines += [f'{FALLBACK_METRIC}{{reason="{r}"}} {self.fallback.get(r, 0)}' for r in FALLBACK_REASONS]
+        return "\n".join(lines)
+
+    def as_log(self) -> dict[str, object]:
+        return {
+            "geodb_scores_serve_fallback_error": self.fallback["error"],
+            "geodb_scores_serve_fallback_timeout": self.fallback["timeout"],
+            "geodb_scores_serve_fallback_misconfigured": self.fallback["misconfigured"],
+            "geodb_scores_serve_served_global": self.served["global_scores"],
+            "geodb_scores_serve_served_local": self.served["local_scores"],
+            "geodb_scores_serve_rows_read": self.rows_read,
+        }
+
+
+@dataclass(frozen=True)
+class StoredScore:
+    """What a ``get`` answers: the row's group (32 hex), score and value (hex)."""
+
+    group: str
+    score: float
+    value: str
+
+
+@dataclass(frozen=True)
+class ScanPage:
+    """One page of a group scan: ``(score, key hex, value hex)`` rows, and the cursor to resume from (``None`` at the end)."""
+
+    rows: list[tuple[float, str, str]]
+    next: str | None
+
+
+SCAN_PAGE_ROWS = 512  # geo-db's page_max: the most rows one DerivedScan frame answers
+
+
+class DerivedGetReader(PipeReader):
+    """A held ``geodb-client derived pipe`` child answering ``get`` (``none`` or ``<group hex>\t<score>\t<value hex>``)."""
+
+    def __init__(self, argv: list[str], timeout: float = DEFAULT_READ_TIMEOUT_S, refresh: float = SERVE_SESSION_REFRESH_S,
+                 clock: Callable[[], float] = time.monotonic):
+        super().__init__(argv, timeout)
+        self._refresh = refresh
+        self._clock = clock
+        self._opened_at = 0.0
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "DerivedGetReader | None":
+        env = os.environ if environ is None else environ
+        key, binding = env.get("GEODB_READ_KEY_PATH") or env.get("GEODB_KEY_PATH"), env.get("GEODB_BINDING_PATH")
+        if not key or not binding:
+            logger.warning("geodb_reads.misconfigured: GEODB_READ_KEY_PATH/GEODB_KEY_PATH or GEODB_BINDING_PATH is unset")
+            return None
+        return cls([env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "derived", "pipe"])
+
+    def _ensure(self, deadline: float) -> subprocess.Popen:
+        if self._proc is not None and self._clock() - self._opened_at > self._refresh:
+            self.close()  # a fresh handshake and grant before the old one expires
+        fresh = self._proc is None or self._proc.poll() is not None
+        proc = super()._ensure(deadline)
+        if fresh:
+            self._opened_at = self._clock()
+        return proc
+
+    def get(self, collection: int, key_hex: str) -> StoredScore | None:
+        body = self._request(f"get\t{collection}\thex:{key_hex}\n").rstrip("\n")
+        if body == "none":
+            return None
+        parts = body.split("\t")
+        if len(parts) != 3 or not _HEX32.match(parts[0]) or not re.fullmatch(r"([0-9a-f]{2})*", parts[2]):
+            raise GeoDbReadError(f"derived get answer is malformed: {body[:60]}")
+        try:
+            score = float(parts[1])
+        except ValueError as e:
+            raise GeoDbReadError("derived get score is not a number") from e
+        if not math.isfinite(score):
+            raise GeoDbReadError("derived get score is not finite")
+        return StoredScore(group=parts[0], score=score, value=parts[2])
+
+    def scan(self, collection: int, group_hex: str, after: str | None) -> ScanPage:
+        """One page of a group in geo-db's order, resuming past ``after`` (the ``more<TAB><hex>`` cursor the last page
+        returned). Needs a ``geodb-client`` that has the scan resume field; an older one answers the line as malformed."""
+        body = self._request(f"scan\t{collection}\t0x{group_hex}\t{SCAN_PAGE_ROWS}\t1\t{after or '-'}\n")
+        rows: list[tuple[float, str, str]] = []
+        cursor: str | None = None
+        for line in body.split("\n"):
+            if not line:
+                continue
+            if line.startswith("more\t"):
+                cursor = line[5:]
+                if not re.fullmatch(r"([0-9a-f]{2})+", cursor):
+                    raise GeoDbReadError("derived scan cursor is malformed")
+                continue
+            parts = line.split("\t")
+            if len(parts) != 3 or not re.fullmatch(r"([0-9a-f]{2})+", parts[1]) or not re.fullmatch(r"([0-9a-f]{2})*", parts[2]):
+                raise GeoDbReadError(f"derived scan row is malformed: {line[:60]}")
+            try:
+                score = float(parts[0])
+            except ValueError as e:
+                raise GeoDbReadError("derived scan score is not a number") from e
+            if not math.isfinite(score):
+                raise GeoDbReadError("derived scan score is not finite")
+            rows.append((score, parts[1], parts[2]))
+        return ScanPage(rows, cursor)
+
+
+class ScoreReader(Protocol):
+    def get(self, collection: int, key_hex: str) -> StoredScore | None: ...
+
+    def scan(self, collection: int, group_hex: str, after: str | None) -> ScanPage: ...
+
+    def close(self) -> None: ...
+
+
+def _same(stored: StoredScore | None, group: str, score: float) -> bool:
+    """Whether geo-db holds this row as the writer would write it: the group, no value, the score within tolerance."""
+    if stored is None or stored.value or stored.group != group:
+        return False
+    return abs(stored.score - score) <= SCORE_TOLERANCE * max(1.0, abs(score))
+
+
+class ScoresServe:
+    """Answers the writer's "which stored score rows differ from these new ones" from geo-db, or says it cannot.
+
+    ``changed_keys`` returns the same shape as the Postgres diff (``ScoringDataWriter._changed_keys``): a set of normalized
+    entity ids for ``global_scores``, of ``(entity id, space id)`` for ``local_scores``. It returns ``None`` on any error or
+    timeout, after counting it, and the caller then runs the Postgres diff. It never raises.
+    """
+
+    def __init__(self, reader: ScoreReader | None, budget_s: float = DEFAULT_SERVE_BUDGET_S,
+                 clock: Callable[[], float] = time.monotonic, stats: ServeStats | None = None):
+        self._reader = reader
+        self._budget = budget_s
+        self._clock = clock
+        self.stats = stats if stats is not None else ServeStats()
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "ScoresServe | None":
+        """``None`` unless ``GEODB_SCORES_SERVE`` is on. On with no usable client the serve is built without a reader and
+        every diff counts ``misconfigured`` and uses Postgres."""
+        env = os.environ if environ is None else environ
+        if not serve_enabled(env):
+            return None
+        try:
+            budget = float(env.get("GEODB_SCORES_SERVE_BUDGET_S", "") or DEFAULT_SERVE_BUDGET_S)
+        except ValueError:
+            budget = DEFAULT_SERVE_BUDGET_S
+        return cls(DerivedGetReader.from_env(env), budget_s=budget)
+
+    def changed_keys(self, table: str, entities: list) -> set | None:
+        try:
+            if self._reader is None:
+                raise ServeFallback("misconfigured", "no geodb-client key or binding")
+            result = self._diff(table, entities, self._clock() + self._budget)
+        except ServeFallback as e:
+            return self._fell_back(table, e.reason, str(e))
+        except GeoDbTimeout as e:
+            return self._fell_back(table, "timeout", str(e))
+        except Exception as e:  # noqa: BLE001 - serving never takes the run down; Postgres answers
+            return self._fell_back(table, "error", type(e).__name__ + ": " + str(e)[:120])
+        self.stats.served[table] += 1
+        logger.info("geodb_scores_serve served table=%s changed=%d", table, len(result), extra=self.stats.as_log())
+        return result
+
+    def close(self) -> None:
+        if self._reader is not None:
+            self._reader.close()
+
+    def _fell_back(self, table: str, reason: str, detail: str) -> None:
+        self.stats.fallback[reason] += 1
+        logger.warning("geodb_scores_serve fallback table=%s reason=%s detail=%s", table, reason, detail[:160],
+                       extra=self.stats.as_log())
+        logger.warning("%s", self.stats.render())
+        # A held client that failed mid-read is killed by PipeReader; close here as well so the next table starts clean.
+        if self._reader is not None:
+            self._reader.close()
+        return None
+
+    def _scan_group(self, collection: int, group_hex: str, deadline: float) -> dict[str, StoredScore]:
+        """Every row of one group, by key hex, read in bounded pages by the resume cursor: a few thousand calls for a
+        million rows instead of one ``get`` a row. Raises ``ServeFallback`` past the budget."""
+        reader = self._reader
+        assert reader is not None
+        rows: dict[str, StoredScore] = {}
+        after: str | None = None
+        while True:
+            if self._clock() > deadline:
+                raise ServeFallback("timeout", "budget exceeded")
+            page = reader.scan(collection, group_hex, after)
+            self.stats.rows_read += len(page.rows)
+            for score, key_hex, value_hex in page.rows:
+                rows[key_hex] = StoredScore(group=group_hex, score=score, value=value_hex)
+            if page.next is None:
+                return rows
+            if page.next == after:
+                raise ServeFallback("error", "scan cursor did not advance")
+            after = page.next
+
+    def _diff(self, table: str, entities: list, deadline: float) -> set:
+        assert self._reader is not None
+        out: set = set()
+
+        if table == "global_scores":
+            stored = self._scan_group(COLLECTION_GLOBAL, _ZERO_GROUP, deadline)
+            for e in entities:
+                ekey = _id_bytes(e.id)
+                if ekey is not None and not _same(stored.get(ekey.hex()), _ZERO_GROUP, float(e.normalized_score)):
+                    out.add(str(uuid.UUID(bytes=ekey)))
+            return out
+
+        # local_scores: the group is the Space id (a u128, 32 hex digits), so scan each Space once and compare its rows.
+        by_space: dict[str, list[tuple[bytes, bytes, float]]] = {}
+        for e in entities:
+            for p in e.perspectives:
+                pe, ps = _id_bytes(p.entity_id), _id_bytes(p.space_id)
+                if pe is None or ps is None:
+                    continue  # the mirror skips a row whose id is not a UUID, so there is nothing to diff
+                by_space.setdefault(ps.hex(), []).append((pe, ps, float(p.normalized_score)))
+        for group, wanted in by_space.items():
+            stored = self._scan_group(COLLECTION_LOCAL, group, deadline)
+            for pe, ps, score in wanted:
+                if not _same(stored.get((pe + ps).hex()), group, score):
+                    out.add((str(uuid.UUID(bytes=pe)), str(uuid.UUID(bytes=ps))))
+        return out
+
+
+def _id_bytes(value: object) -> bytes | None:
+    try:
+        return uuid.UUID(str(value)).bytes
+    except (ValueError, TypeError, AttributeError):
+        return None

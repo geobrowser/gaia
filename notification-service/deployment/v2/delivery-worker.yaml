@@ -68,7 +68,7 @@ spec:
           # final from the commit "client: work pipe takes claim, complete, retry and fail"); bump
           # this tag to an image built from there before the flag is turned on. An older client
           # answers those verbs `want enter|note|...`, which the reader counts as a claim error.
-          image: registry.digitalocean.com/geo/geodb:2eab4e170c
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the shadow stays disabled even if the flag is turned on.
@@ -105,6 +105,9 @@ spec:
           image: registry.digitalocean.com/geo/delivery-worker:latest
           imagePullPolicy: Always
           env:
+            # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+            - name: DELIVERY_WORKER_PG_WRITES
+              value: "1"
             # Database configuration
             - name: DATABASE_URL
               valueFrom:

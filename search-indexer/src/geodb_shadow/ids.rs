@@ -101,6 +101,17 @@ impl Spaces {
     pub fn all(&self) -> &[String] {
         &self.all
     }
+
+    /// Every gaia Space in the map, sorted. Keys that are not a uuid are left out.
+    pub fn gaia_ids(&self) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = self
+            .by_gaia
+            .keys()
+            .filter_map(|k| Uuid::parse_str(k).ok())
+            .collect();
+        ids.sort();
+        ids
+    }
 }
 
 /// How often the file is checked for a newer version (one `stat`).

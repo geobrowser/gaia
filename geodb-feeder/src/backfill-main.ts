@@ -11,6 +11,11 @@
  *   carries; "none" for none), INDEXER_GROUP_ID (kg-indexer-v8-<env>).
  * - GEODB_READER_KEY_PATH: the key the read-back of known entities uses (the api's reader key).
  * - BACKFILL_SKIP_ORDERING_CHECK=1 skips the Kafka precondition. Only for a store no feeder will ever resume.
+ * - BACKFILL_MODE=relation-seed: not a Space backfill either. Writes the feeder's relation records (cell and open statement id,
+ *   known-relations.log) for relations that existed before GEODB_RELATION_POSITIONS, read from geo-db with Postgres only
+ *   listing them (see relationSeed.ts). It writes nothing to geo-db. DRY_RUN is required, as for held-repair, and the
+ *   same rules apply: "1" reads and counts only and needs no stopped feeder; "0" needs the feeder at 0.
+ *   BACKFILL_BATCH, BACKFILL_PAUSE_MS and BACKFILL_MAX_ENTITIES apply.
  * - BACKFILL_MODE=held-repair: not a Space backfill (BACKFILL_SPACES is not read). Writes only the values the pre-#1244
  *   backfill skipped (see heldRepair.ts), under its own cursor directory. BACKFILL_BATCH, BACKFILL_PAUSE_MS,
  *   BACKFILL_MAX_ENTITIES and BACKFILL_EXCLUDE_PROPERTIES apply. DRY_RUN=1 reads and logs counts only, writes nothing
@@ -21,11 +26,12 @@ import {excludeFrom, parseScope, runBackfill} from "./backfill.js"
 import {loadConfig} from "./config.js"
 import {GeoDb, spawnRunner} from "./geodb.js"
 import {runHeldRepair} from "./heldRepair.js"
+import {runRelationSeed} from "./relationSeed.js"
 import {PipeReader} from "./geodbPipe.js"
 import {errorFields, log} from "./log.js"
 import {createMetrics} from "./metrics.js"
 import {checkOrdering, type OffsetsAdmin} from "./ordering.js"
-import {ReadOnlyPg, pgBackfillSource, pgConfig, pgHeldRepairSource} from "./pgSource.js"
+import {ReadOnlyPg, pgBackfillSource, pgConfig, pgHeldRepairSource, pgRelationSeedSource} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {readSealer} from "./spaces.js"
@@ -45,13 +51,17 @@ async function main(): Promise<void> {
 	const config = loadConfig(env)
 	const environment = env.ENVIRONMENT ?? "testnet"
 	const mode = env.BACKFILL_MODE ?? "spaces"
-	if (mode !== "spaces" && mode !== "held-repair") throw new Error(`BACKFILL_MODE must be "spaces" or "held-repair", not ${JSON.stringify(mode)}`)
-	const heldRepair = mode === "held-repair"
+	if (mode !== "spaces" && mode !== "held-repair" && mode !== "relation-seed") {
+		throw new Error(`BACKFILL_MODE must be "spaces", "held-repair" or "relation-seed", not ${JSON.stringify(mode)}`)
+	}
+	const relationSeed = mode === "relation-seed"
+	// Both targeted passes: no Space scope, no founding, no space map.
+	const heldRepair = mode === "held-repair" || relationSeed
 	if (heldRepair && env.DRY_RUN !== "0" && env.DRY_RUN !== "1") {
 		throw new Error('DRY_RUN is required ("1" counts only, "0" writes); the manifest placeholder was not replaced')
 	}
 	const dryRun = env.DRY_RUN === "1"
-	if (dryRun && !heldRepair) throw new Error("DRY_RUN is only for BACKFILL_MODE=held-repair")
+	if (dryRun && !heldRepair) throw new Error('DRY_RUN is only for BACKFILL_MODE="held-repair" or "relation-seed"')
 	if (!heldRepair && (!env.BACKFILL_SPACES || env.BACKFILL_SPACES.includes("__"))) {
 		throw new Error('BACKFILL_SPACES is required ("mapped", "all" or a comma list); the manifest placeholder was not replaced')
 	}
@@ -66,6 +76,7 @@ async function main(): Promise<void> {
 		pauseMs: intEnv(env, "BACKFILL_PAUSE_MS", 100, 0),
 		exclude: excludeFrom(env.BACKFILL_EXCLUDE_PROPERTIES),
 		positions: config.relationPositions,
+		facets: config.relationFacets,
 		legacyMap: config.legacyIdMap,
 		maxEntities: intEnv(env, "BACKFILL_MAX_ENTITIES", 0, 0),
 	}
@@ -144,14 +155,21 @@ async function main(): Promise<void> {
 	process.on("SIGTERM", stop)
 	process.on("SIGINT", stop)
 
-	if (!dryRun) {
+	// The relation seed writes no geo-db row, so it never waits for serve; it only reads.
+	if (!dryRun && !relationSeed) {
 		log("info", "waiting for geodb-serve")
 		await db.waitReady()
 	}
 	const t0 = Date.now()
 	let failure: unknown = null
 	try {
-		if (heldRepair) {
+		if (relationSeed) {
+			const stats = await runRelationSeed(
+				{source: pgRelationSeedSource(pg), reader, store, guard, signal: abort.signal},
+				{batch: opts.batch, pauseMs: opts.pauseMs, maxEntities: opts.maxEntities, dryRun},
+			)
+			log("info", "relation-seed done", {...stats, seconds: Math.round((Date.now() - t0) / 1000)})
+		} else if (heldRepair) {
 			const stats = await runHeldRepair(
 				{source: pgHeldRepairSource(pg), reader, db, store, metrics, guard, signal: abort.signal},
 				{
@@ -160,6 +178,7 @@ async function main(): Promise<void> {
 					pauseMs: opts.pauseMs,
 					exclude: opts.exclude,
 					positions: opts.positions,
+					facets: opts.facets,
 					maxEntities: opts.maxEntities,
 					dryRun,
 				},

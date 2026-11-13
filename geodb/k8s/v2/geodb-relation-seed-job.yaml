@@ -1,0 +1,202 @@
+# geo-db relation-seed: a one-shot Job that gives the feeder a record (cell and open statement id) for every relation
+# that existed before GEODB_RELATION_POSITIONS, so a later position move of one is applied instead of dropped as
+# relation-move-cell-unknown. It lists relations from Postgres (read only), confirms against geo-db that each statement is
+# open under its derived id, reads its facet claims, and appends the records to the feeder's known-relations.log. It
+# writes NOTHING to geo-db. Same image, volume and keys as geodb-relation-seed-job.yaml, mode BACKFILL_MODE=relation-seed.
+# See geodb/RUNBOOK.md §2b-quater and geodb-feeder/src/relationSeed.ts. Its cursor is /data/feeder/relation-seed/.
+#
+# NOT in deploy-v2: it runs by hand. DRY_RUN "1" reads and logs counts only and writes nothing (no journal, no cursor),
+# and needs no stopped feeder (but it still mounts the feeder's RWO volume geodb-feeder-state, so it runs on the feeder's
+# node and stays Pending if that node lacks room; see geodb/RUNBOOK.md "Where the Job runs"); "0" writes the journal, and then the feeder must be scaled to 0 (it mounts the feeder's
+# RWO state volume, appends to the journal the feeder holds in memory, and refuses to start while the feeder's consumer
+# group has members). The placeholder is replaced at run time; the Job refuses to start if __DRY_RUN__ is left in:
+#   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" geodb-relation-seed-job.yaml | kubectl apply -f -
+#
+# Reruns are safe (a relation with a record is counted as already recorded). Delete the Job before applying it again: a
+# Job's pod template is immutable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: geodb-relation-seed
+  namespace: gaia
+  labels:
+    app: geodb-relation-seed
+spec:
+  # A failure stops here and is read from the logs; a rerun is a deliberate, fresh apply.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        geodb-client: "true"
+        app: geodb-relation-seed
+    spec:
+      serviceAccountName: geodb
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: geodb-feeder-state
+        - name: geodb-bin
+          emptyDir: {}
+        - name: space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: writer-key
+          secret:
+            secretName: geodb-writer-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: writer.key
+        # The read-back of known entities uses the api's read-only key: the same grant the card route reads with.
+        - name: reader-key
+          secret:
+            secretName: geodb-reader-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
+      initContainers:
+        # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /usr/local/bin/geodb-client /geodb/geodb-client
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -z "$node" ] || [ -z "$ip" ]; then
+                echo "geodb-setup: serve has not published node-id yet, or no geodb Service"
+                exit 1
+              fi
+              printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: relation-seed
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/backfill-main.js"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: BACKFILL_MODE
+              value: relation-seed
+            # "1": counts only, no write of any kind, no Kafka check. "0": write. Replaced at apply time.
+            - name: DRY_RUN
+              value: "__DRY_RUN__"
+            - name: BACKFILL_BATCH
+              value: "100"
+            - name: BACKFILL_PAUSE_MS
+              value: "100"
+            # 0 = no limit. Set it for a staged first run.
+            - name: BACKFILL_MAX_ENTITIES
+              value: "0"
+            # The journals of what geo-db holds are kept in memory; they grow with the backfill.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=2048"
+            - name: ENVIRONMENT
+              value: testnet
+            - name: KAFKA_GROUP_ID
+              value: geodb-feeder-v1-testnet
+            - name: INDEXER_GROUP_ID
+              value: kg-indexer-v8-testnet
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/writer-key/writer.key
+            - name: GEODB_READER_KEY_PATH
+              value: /etc/geodb/reader-key/reader.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SEALER_FILE
+              value: /etc/geodb/space-map/sealer-id
+            - name: METRICS_PORT
+              value: "9090"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: writer-key
+              mountPath: /etc/geodb/writer-key
+              readOnly: true
+            - name: reader-key
+              mountPath: /etc/geodb/reader-key
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "3Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

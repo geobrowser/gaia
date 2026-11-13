@@ -180,7 +180,9 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:17dffa2d40
+          # By tag again, like every other geodb pin. 8050918d2f is a new tag (67b6974a5e was rebuilt in place on 11-12 and
+          # was pinned by digest while it was live); never rebuild a tag that is deployed, build a new one.
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -262,13 +264,16 @@ spec:
           readinessProbe:
             exec:
               command: ["sh", "-c", "test -e /data/ctl/serving"]
-            periodSeconds: 5
-            failureThreshold: 6
+            # 1 s polling: the pod is Ready within a second of ctl/serving appearing, not up to 5 s later.
+            # failureThreshold 30 x 1 s keeps the old 6 x 5 s = 30 s tolerance.
+            periodSeconds: 1
+            failureThreshold: 30
           startupProbe:
             exec:
               command: ["sh", "-c", "test -e /data/ctl/serving"]
-            periodSeconds: 5
-            failureThreshold: 120
+            # Same 600 s budget as before (120 x 5 s), polled every second.
+            periodSeconds: 1
+            failureThreshold: 600
           resources:
             # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
             # growth). Plan 10.14 §10 Stage A: 5Gi/7Gi covers the 604 MB derived carve plus the backfill.
@@ -353,12 +358,21 @@ spec:
             items:
               - key: key
                 path: writer.key
+        # The CURSOR key for the applied-block mirror (GEODB_APPLIED_BLOCK). optional: absent or unread while the flag is off.
+        - name: cursor-key
+          secret:
+            secretName: geodb-cursor-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: cursor.key
       initContainers:
         # Copies geodb-client from the pinned geodb image and writes the client binding: a TCP listener
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
         # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:17dffa2d40
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -481,6 +495,11 @@ spec:
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_PROPOSAL_VERSIONS
               value: "1"
+            # Also write each version's proposer and owning Space (references) for the notification-indexer twin to compare.
+            # On since 2026-11-12, after the proposal-versions backfill Job reran with the same value on (RUNBOOK §2c-octies).
+            # Write-side only. Rollback: "0".
+            - name: GEODB_PROPOSAL_VERSION_PROPOSER_SPACE
+              value: "1"
             # Keyed proposal status facts (executed_at from PROPOSAL_EXECUTED on space.governance, unexecutable_at from the
             # backfill only, into the governance system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-novies.
             # OFF until the proposal-status backfill Job (geodb-proposal-status-backfill-job.yaml) has run with the feeder at 0.
@@ -491,15 +510,34 @@ spec:
             # OFF until the ranks backfill Job (geodb-ranks-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_RANKS
               value: "1"
-            # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
-            # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
-            # relation would fail. Turn on with the image bump that brings it.
+            # Relation positions (`.position` on a relation's add). On since 2026-11-12: the geodb image (67b6974a5e)
+            # carries a geodb-client with ISS-587-318, and the relation-seed Job wrote the existing positions with the
+            # feeder at 0. Write-side only. Rollback: "0".
             - name: GEODB_RELATION_POSITIONS
-              value: "0"
+              value: "1"
+            # Relation facets: to-space, from-space, the two version pins and verified, written as claims on the
+            # relation's statement in the same Edit (`.statement` subject, geo-db docs/api/10 section 5.5). Off: up to
+            # five more adds per relation, and the api's GEODB_RELATION_FACETS_SHADOW has nothing to compare until a
+            # backfill writes them. The geodb-client the init container copies already accepts the wire. On since
+            # 2026-11-12 for new relations (write-side only; the shadow stays off). Rollback: "0".
+            - name: GEODB_RELATION_FACETS
+              value: "1"
             # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
             # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
             - name: GEODB_ENTITY_TIMES
               value: "1"
+            # Applied-block mirror (appliedBlock.ts): on since 2026-11-12. The feeder writes the geo-db cursors row
+            # geodb-feeder-applied using the geodb-cursor-key mounted below (derived=10 only). Write-side only:
+            # nothing reads the row for serving yet. Rollback: "0".
+            - name: GEODB_APPLIED_BLOCK
+              value: "1"
+            # Edit meta (editMetaConsumer.ts, RUNBOOK §2c-duodecies): on since 2026-11-12. Takes effect only with
+            # GEODB_RECORD_KEYS. Own consumer group geodb-feeder-edit-meta-keyed-v1-testnet; no backfill needed.
+            # Write-side only. Rollback: "0".
+            - name: GEODB_EDIT_META
+              value: "1"
+            - name: GEODB_APPLIED_BLOCK_KEY_PATH
+              value: /etc/geodb/cursor-key/cursor.key
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
@@ -512,9 +550,11 @@ spec:
                   name: api-secrets
                   key: DATABASE_SSL_CA
             # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
-            # after a backfill (RUNBOOK §2b): give the heap room below the limit.
+            # after a backfill (RUNBOOK §2b): give the heap room below the limit. The relation seed adds a
+            # known-relations record per relation (~1M on testnet); the seed Job loading the same journals
+            # needed more than a 2 GiB heap and ran at ~3 GiB RSS, so the feeder gets the seed Job's sizing.
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=1536"
+              value: "--max-old-space-size=6144"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -547,6 +587,9 @@ spec:
             - name: writer-key
               mountPath: /etc/geodb/writer-key
               readOnly: true
+            - name: cursor-key
+              mountPath: /etc/geodb/cursor-key
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health/liveness
@@ -558,10 +601,10 @@ spec:
           # the series vanish. /health/readiness is there for humans and for the alert on the feeder's series.
           resources:
             requests:
-              memory: "256Mi"
+              memory: "3Gi"
               cpu: "100m"
             limits:
-              memory: "2Gi"
+              memory: "7Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

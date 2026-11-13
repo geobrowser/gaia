@@ -7,6 +7,7 @@ import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
+import {renderEditMetaShadowMetrics} from "./geodb/editMetaShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityAtVersionShadowMetrics} from "./geodb/entityAtVersionShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
@@ -20,10 +21,12 @@ import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderPrivateReadersShadowMetrics} from "./geodb/privateReadersShadow"
 import {renderProposalDiffShadowMetrics} from "./geodb/proposalDiffShadow"
+import {renderRankedReadsServeMetrics} from "./geodb/rankedReadsServe"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderRelationLookupShadowMetrics} from "./geodb/relationLookupShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
+import {renderServeGateMetrics} from "./geodb/serveGate"
 import {renderTypeCountsShadowMetrics} from "./geodb/typeCountsShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
@@ -174,11 +177,15 @@ function renderPrometheusMetrics(): string {
 		renderProfileShadowMetrics(),
 		// Entity version count, order and author from geo-db against the served /versioned/entities/:id/versions (GEODB_VERSIONS_SHADOW) — see geodb/entityVersionsShadow.ts.
 		renderEntityVersionsShadowMetrics(),
+		// Edit block, sequence and name from geo-db's edit_meta records against the same page (GEODB_EDIT_META_SHADOW) — see geodb/editMetaShadow.ts.
+		renderEditMetaShadowMetrics(),
 		// Active proposal and proposal-group diff base statements checked against geo-db's cards (GEODB_PROPOSAL_DIFF_SHADOW) — see geodb/proposalDiffShadow.ts.
 		renderProposalDiffShadowMetrics(),
 		// Relation id to from-entity lookups from geo-db's statement read against Postgres's (GEODB_RELATION_LOOKUP_SHADOW) — see geodb/relationLookupShadow.ts.
 		renderRelationLookupShadowMetrics(),
 		renderEntityAtVersionShadowMetrics(),
+		// Governance and versions serve counters: reads answered from geo-db and the ones Postgres answered instead, by reason (GEODB_GOVERNANCE_SERVE, GEODB_VERSIONS_SERVE) — see geodb/serveGate.ts.
+		renderServeGateMetrics(),
 		// Entity diff after side and review base side checked against geo-db (GEODB_ENTITY_DIFF_SHADOW) — see geodb/entityDiffShadow.ts.
 		renderEntityDiffShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
@@ -210,6 +217,7 @@ function renderPrometheusMetrics(): string {
 		renderEntityColumnsShadowMetrics(),
 		// The group B read twins against the SQL functions (GEODB_RANKED_READS_SHADOW) — see geodb/rankedReadsShadow.ts.
 		renderRankedReadsShadowMetrics(),
+		renderRankedReadsServeMetrics(),
 		// topic_feed_type_counts against geo-db's count mode (GEODB_TYPE_COUNTS_SHADOW) — see geodb/typeCountsShadow.ts.
 		renderTypeCountsShadowMetrics(),
 		renderRankTypedMetrics(),

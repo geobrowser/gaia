@@ -1,0 +1,31 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  - name: votes_count mirror lag fires only after 15m over 10m
+    interval: 1m
+    input_series:
+      - series: 'vote_indexer_votes_count_mirror_lag_seconds{namespace="gaia", job="vote-indexer"}'
+        values: '0x10 700x40'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbVotesCountMirrorLag, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbVotesCountMirrorLag
+        exp_alerts:
+          - exp_labels: {severity: warning, service: vote-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The vote-indexer's votes_count geo-db mirror is more than 10 minutes behind
+              description: >-
+                geo-db's collections 26 (votes_count) and 33 (votes_count_updates) trail Postgres, so the
+                notification poller and any vote-tally read from geo-db are stale. Postgres is unaffected.
+                Check vote_indexer_votes_count_mirror_rows_total{collection} is rising, and
+                geodb_derived_mirror_errors_total / _unacknowledged_total / _dropped_total{table="votes_count"}
+                for why. A vote-indexer restart re-copies the whole table (the start-up snapshot).
+
+  - name: a mirror that is level stays silent
+    interval: 1m
+    input_series:
+      - series: 'vote_indexer_votes_count_mirror_lag_seconds{namespace="gaia", job="vote-indexer"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 45m, alertname: GeoDbVotesCountMirrorLag, exp_alerts: []}

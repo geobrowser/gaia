@@ -290,6 +290,151 @@ async fn proposal_existence_follows_the_version_record() {
     );
 }
 
+// ---- proposer and owning Space values --------------------------------------------------------
+
+/// One version record per `(record, proposer, space)` for the proposal; each field is written only when `Some`.
+fn version_values_fixture(p: &Uuid, versions: &[(&str, Option<&Uuid>, Option<&Uuid>)]) -> Fake {
+    let pe = ent(p);
+    let mut links = String::new();
+    let mut cards = String::new();
+    let mut ids: Vec<String> = vec![];
+    for (rec, proposer, space) in versions {
+        links += &link(VERSION_PROPOSAL, &pe, rec);
+        if let Some(x) = proposer {
+            cards += &row(VERSION_PROPOSER, &ent(x), rec);
+        }
+        if let Some(x) = space {
+            cards += &row(VERSION_SPACE, &ent(x), rec);
+        }
+        ids.push((*rec).to_string());
+    }
+    ids.sort();
+    Fake::default()
+        .backlinks(GOV, &pe, links)
+        .cards(GOV, &ids, cards)
+}
+
+const R1: &str = "dddddddddddddddddddddddddddddddd";
+const R2: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+async fn values(fake: &Fake, sql: Option<ProposalValues>) -> Vec<Verdict> {
+    compare_proposal_values(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_match_when_every_version_names_them() {
+    let (p, proposer, space) = (u(10), u(20), u(30));
+    let fake = version_values_fixture(
+        &p,
+        &[
+            (R1, Some(&proposer), Some(&space)),
+            (R2, Some(&proposer), Some(&space)),
+        ],
+    );
+    let both = ProposalValues {
+        proposer,
+        space: Some(space),
+    };
+    assert_eq!(values(&fake, Some(both)).await, vec![Verdict::Match]);
+    // The proposer-only read does not look at the Space.
+    let only = ProposalValues {
+        proposer,
+        space: None,
+    };
+    assert_eq!(values(&fake, Some(only)).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_mismatch_by_which_differs() {
+    let (p, proposer, space, other) = (u(10), u(20), u(30), u(40));
+    let fake = version_values_fixture(&p, &[(R1, Some(&proposer), Some(&space))]);
+    let sql = |proposer, space| Some(ProposalValues { proposer, space });
+    assert_eq!(
+        values(&fake, sql(other, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    assert_eq!(
+        values(&fake, sql(proposer, Some(other))).await,
+        vec![Verdict::Mismatch("space_differs")]
+    );
+    // A proposer difference with the Space unread still counts; a Space difference is not seen
+    // by the proposer-only read.
+    assert_eq!(
+        values(&fake, sql(other, None)).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    assert_eq!(
+        values(&fake, sql(proposer, None)).await,
+        vec![Verdict::Match]
+    );
+    // Two versions that disagree with each other cannot both equal Postgres's one value.
+    let split = version_values_fixture(
+        &p,
+        &[
+            (R1, Some(&proposer), Some(&space)),
+            (R2, Some(&other), Some(&space)),
+        ],
+    );
+    assert_eq!(
+        values(&split, sql(proposer, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+    // A mismatch outranks an unsupported check.
+    let proposer_wrong_space_unstored = version_values_fixture(&p, &[(R1, Some(&other), None)]);
+    assert_eq!(
+        values(&proposer_wrong_space_unstored, sql(proposer, Some(space))).await,
+        vec![Verdict::Mismatch("proposer_differs")]
+    );
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_not_stored_is_unsupported_not_a_mismatch() {
+    let (p, proposer, space) = (u(10), u(20), u(30));
+    let fake = version_values_fixture(&p, &[(R1, None, None)]);
+    let sql = Some(ProposalValues {
+        proposer,
+        space: Some(space),
+    });
+    assert_eq!(
+        values(&fake, sql).await,
+        vec![Verdict::Unsupported("values_not_stored")]
+    );
+    // One stored and matching, the other not stored: unsupported, since the Space cannot be judged.
+    let half = version_values_fixture(&p, &[(R1, Some(&proposer), None)]);
+    assert_eq!(
+        values(&half, sql).await,
+        vec![Verdict::Unsupported("values_not_stored")]
+    );
+}
+
+#[tokio::test]
+async fn proposer_and_space_values_follow_existence_around_the_edges() {
+    let (p, proposer) = (u(10), u(20));
+    let sql = Some(ProposalValues {
+        proposer,
+        space: None,
+    });
+    // A row in Postgres and no version record.
+    assert_eq!(
+        values(&Fake::default(), sql).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // No row in Postgres: the existence rules.
+    assert_eq!(values(&Fake::default(), None).await, vec![Verdict::Match]);
+    let held = version_values_fixture(&p, &[(R1, Some(&proposer), None)]);
+    assert_eq!(
+        values(&held, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+    // No governance Space, a failed read.
+    let no_gov = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_proposal_values(&held, &no_gov, &p, sql).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    assert_eq!(values(&Fake::failing(), sql).await, vec![Verdict::Failed]);
+}
+
 // ---- expiry scan -----------------------------------------------------------------------------
 
 const NOW: i64 = 2_000;
@@ -563,11 +708,16 @@ fn pinned_columns_match_the_feeders_record_kinds_when_it_is_in_the_checkout() {
         VERSION_PROPOSAL,
         VERSION_BLOCK,
         VERSION_END_TIME,
+        VERSION_PROPOSER,
+        VERSION_SPACE,
         STATUS_PROPOSAL,
         STATUS_EXECUTED_AT,
         ESCALATION_PROPOSAL,
         VOTE_PROPOSAL,
         VOTE_VOTER,
+        VERSION_NAME,
+        VOTE_VERSION,
+        VOTE_VOTE,
     ] {
         assert!(
             text.contains(id),
@@ -596,5 +746,441 @@ async fn editors_granted_by_the_keyed_writer_live_in_the_governance_space() {
     assert_eq!(
         compare_member_or_editor(&fake, &sp, &s, &b, true).await,
         vec![Verdict::Match]
+    );
+}
+
+// ---- proposal name, vote tallies, latest block ----------------------------------------------
+
+/// Version records `(record, block, name)` of the proposal in the governance Space.
+fn named_versions(p: &Uuid, versions: &[(&str, i64, Option<&str>)]) -> Fake {
+    let pe = ent(p);
+    let mut links = String::new();
+    let mut cards = String::new();
+    let mut ids: Vec<String> = vec![];
+    for (rec, block, name) in versions {
+        links += &link(VERSION_PROPOSAL, &pe, rec);
+        cards += &row(VERSION_BLOCK, &block.to_string(), rec);
+        if let Some(n) = name {
+            cards += &row(VERSION_NAME, n, rec);
+        }
+        ids.push((*rec).to_string());
+    }
+    ids.sort();
+    Fake::default()
+        .backlinks(GOV, &pe, links)
+        .cards(GOV, &ids, cards)
+}
+
+async fn name_of(fake: &Fake, sql: Option<&str>) -> Vec<Verdict> {
+    compare_proposal_name(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn proposal_name_follows_the_latest_version() {
+    let p = u(10);
+    // The older block's name is stale; only the latest block's counts.
+    let fake = named_versions(&p, &[(R1, 100, Some("Old")), (R2, 200, Some("New"))]);
+    assert_eq!(name_of(&fake, Some("New")).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&fake, Some("Old")).await,
+        vec![Verdict::Mismatch("name_differs")]
+    );
+}
+
+#[tokio::test]
+async fn proposal_name_absent_cases() {
+    let p = u(10);
+    // No version record at all: Postgres with no row matches, Postgres with a name does not.
+    let none = Fake::default();
+    assert_eq!(name_of(&none, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&none, Some("x")).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // A version with no name: Postgres's NULL matches, a name does not.
+    let unnamed = named_versions(&p, &[(R1, 100, None)]);
+    assert_eq!(name_of(&unnamed, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        name_of(&unnamed, Some("x")).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // A name geo-db holds that Postgres does not.
+    let named = named_versions(&p, &[(R1, 100, Some("x"))]);
+    assert_eq!(
+        name_of(&named, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+}
+
+#[tokio::test]
+async fn proposal_name_unsupported_and_failed() {
+    let p = u(10);
+    let no_sys = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_proposal_name(&Fake::default(), &no_sys, &p, None).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    // A version record with no block key cannot be ordered.
+    let pe = ent(&p);
+    let broken = Fake::default()
+        .backlinks(GOV, &pe, link(VERSION_PROPOSAL, &pe, R1))
+        .cards(GOV, &[R1.to_string()], row(VERSION_NAME, "x", R1));
+    assert_eq!(
+        name_of(&broken, Some("x")).await,
+        vec![Verdict::Unsupported("ambiguous_record")]
+    );
+    assert_eq!(
+        name_of(&Fake::failing(), Some("x")).await,
+        vec![Verdict::Failed]
+    );
+}
+
+/// Version records for blocks `1..=versions` plus one vote record per `(version, voter, vote)`.
+fn tally_fixture(p: &Uuid, versions: usize, votes: &[(i64, i64)]) -> Fake {
+    let pe = ent(p);
+    let blocks: Vec<(String, i64)> = (0..versions)
+        .map(|i| (format!("{:032x}", 0x2000 + i as u128), 100 + i as i64))
+        .collect();
+    let spec: Vec<(&str, i64, Option<&str>)> =
+        blocks.iter().map(|(r, b)| (r.as_str(), *b, None)).collect();
+    let gov = named_versions(p, &spec);
+    let records: Vec<String> = (0..votes.len())
+        .map(|i| format!("{:032x}", 0x3000 + i as u128))
+        .collect();
+    let mut links = String::new();
+    let mut cards = String::new();
+    for (rec, (version, vote)) in records.iter().zip(votes) {
+        links += &link(VOTE_PROPOSAL, &pe, rec);
+        cards += &row(VOTE_PROPOSAL, &pe, rec);
+        cards += &row(VOTE_VERSION, &format!("{version}.0"), rec);
+        cards += &row(VOTE_VOTE, &vote.to_string(), rec);
+    }
+    let mut sorted = records.clone();
+    sorted.sort();
+    gov.backlinks(VOTES, &pe, links)
+        .cards(VOTES, &sorted, cards)
+}
+
+async fn tallies(fake: &Fake, sql: Option<(i64, i64, i64)>) -> Vec<Verdict> {
+    compare_vote_tallies(fake, &spaces(&u(1)), &u(10), sql).await
+}
+
+#[tokio::test]
+async fn vote_tallies_count_the_current_version_only() {
+    let p = u(10);
+    // Two versions: the version-1 votes are history. Current (2): yes, yes, no, abstain.
+    let fake = tally_fixture(&p, 2, &[(1, 1), (1, 2), (2, 1), (2, 1), (2, 2), (2, 3)]);
+    assert_eq!(tallies(&fake, Some((2, 1, 1))).await, vec![Verdict::Match]);
+    assert_eq!(
+        tallies(&fake, Some((3, 2, 1))).await,
+        vec![Verdict::Mismatch("tally_differs")]
+    );
+    assert_eq!(
+        tallies(&fake, Some((2, 1, 0))).await,
+        vec![Verdict::Mismatch("tally_differs")]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_zero_votes_match_zero() {
+    let p = u(10);
+    let fake = tally_fixture(&p, 1, &[]);
+    assert_eq!(tallies(&fake, Some((0, 0, 0))).await, vec![Verdict::Match]);
+    // After a version bump the earlier votes no longer count.
+    let bumped = tally_fixture(&p, 2, &[(1, 1)]);
+    assert_eq!(
+        tallies(&bumped, Some((0, 0, 0))).await,
+        vec![Verdict::Match]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_absent_rows() {
+    let p = u(10);
+    // Nothing in geo-db: no Postgres row matches; a Postgres row is missing in geo-db.
+    let empty = Fake::default();
+    assert_eq!(tallies(&empty, None).await, vec![Verdict::Match]);
+    assert_eq!(
+        tallies(&empty, Some((1, 0, 0))).await,
+        vec![Verdict::Mismatch("missing_in_geodb")]
+    );
+    // geo-db holds the proposal but Postgres has no row.
+    let held = tally_fixture(&p, 1, &[(1, 1)]);
+    assert_eq!(
+        tallies(&held, None).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+}
+
+#[tokio::test]
+async fn vote_tallies_unsupported_and_failed() {
+    let p = u(10);
+    let no_sys = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_vote_tallies(&Fake::default(), &no_sys, &p, None).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+    // An unknown vote option is not guessed at.
+    let odd = tally_fixture(&p, 1, &[(1, 9)]);
+    assert_eq!(
+        tallies(&odd, Some((0, 0, 0))).await,
+        vec![Verdict::Unsupported("ambiguous_record")]
+    );
+    assert_eq!(
+        tallies(&Fake::failing(), Some((0, 0, 0))).await,
+        vec![Verdict::Failed]
+    );
+}
+
+#[derive(Default)]
+struct FakeCursors {
+    rows: HashMap<String, Vec<u8>>,
+    fail: bool,
+}
+
+#[async_trait]
+impl CursorReader for FakeCursors {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, TwinError> {
+        if self.fail {
+            return Err(TwinError::Cursors("fixture".into()));
+        }
+        Ok(self.rows.get(key).cloned())
+    }
+}
+
+fn applied(value: &str) -> FakeCursors {
+    let mut c = FakeCursors::default();
+    c.rows
+        .insert(APPLIED_BLOCK_KEY.to_string(), value.as_bytes().to_vec());
+    c
+}
+
+#[tokio::test]
+async fn latest_block_absent_row_is_unsupported_not_a_mismatch() {
+    // GEODB_APPLIED_BLOCK is off: the feeder has written no row.
+    assert_eq!(
+        compare_latest_block(&FakeCursors::default(), Some(500)).await,
+        vec![Verdict::Unsupported("row_absent")]
+    );
+}
+
+#[tokio::test]
+async fn latest_block_checks_the_watermark_is_not_behind() {
+    let json = r#"4000:{"0":4000,"1":4100}"#;
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(4000)).await,
+        vec![Verdict::Match]
+    );
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(3000)).await,
+        vec![Verdict::Match]
+    );
+    assert_eq!(
+        compare_latest_block(&applied(json), Some(4001)).await,
+        vec![Verdict::Mismatch("behind_sql")]
+    );
+}
+
+#[tokio::test]
+async fn latest_block_other_shapes() {
+    assert_eq!(
+        compare_latest_block(&applied("not a block"), Some(1)).await,
+        vec![Verdict::Unsupported("row_unparsable")]
+    );
+    assert_eq!(
+        compare_latest_block(&applied("10:{}"), None).await,
+        vec![Verdict::Unsupported("no_sql_block")]
+    );
+    let failing = FakeCursors {
+        fail: true,
+        ..FakeCursors::default()
+    };
+    assert_eq!(
+        compare_latest_block(&failing, Some(1)).await,
+        vec![Verdict::Failed]
+    );
+}
+
+#[test]
+fn the_new_reads_have_their_own_kind_labels() {
+    assert_eq!(
+        [PROPOSAL_NAME, VOTE_TALLIES, LATEST_BLOCK],
+        ["proposal_name", "vote_tallies", "latest_block"]
+    );
+    assert_eq!(APPLIED_BLOCK_KEY, "geodb-feeder-applied");
+}
+
+#[test]
+fn applied_block_key_matches_the_feeder() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../geodb-feeder/src/appliedBlock.ts");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return; // built outside the monorepo
+    };
+    assert!(text.contains(&format!("APPLIED_BLOCK_KEY = \"{APPLIED_BLOCK_KEY}\"")));
+    assert!(text.contains(&format!("CURSORS_COLLECTION = {CURSORS_COLLECTION}")));
+}
+
+// ---- the reverse of the expiry scan ------------------------------------------------------------
+
+/// One proposal geo-db lists by end time: its gaia id, the end time of its one version record, and
+/// that record's id (32 hex digits).
+struct Listed {
+    proposal: Uuid,
+    end: i64,
+    version: u128,
+    executed: bool,
+}
+
+fn listed(n: u128, end: i64) -> Listed {
+    Listed {
+        proposal: u(n),
+        end,
+        version: 0x5000 + n,
+        executed: false,
+    }
+}
+
+fn hex(n: u128) -> String {
+    format!("{n:032x}")
+}
+
+/// A fake holding a `value_page` answer per page of `pages` (each a list of rows, the page after
+/// the last empty), the version cards that name each proposal, and each proposal's own records.
+fn reverse_fixture(entries: &[Listed], pages: &[Vec<usize>]) -> Fake {
+    let fake = Fake::default();
+    let put = |space: &str, doc: String, body: String| {
+        fake.answers
+            .lock()
+            .unwrap()
+            .insert((space.into(), doc), body);
+    };
+    let mut after: Option<i64> = None;
+    for page in pages {
+        let mut body = String::new();
+        let mut last = 0;
+        for &i in page {
+            let e = &entries[i];
+            body += &format!(
+                "{VERSION_END_TIME}\t{}.0\tstmt\t{}\n",
+                e.end,
+                hex(e.version)
+            );
+            last = e.end;
+        }
+        put(GOV, value_page_doc(FLOOR, NOW - 1, after), body);
+        after = Some(last);
+    }
+    let mut ids: Vec<String> = entries.iter().map(|e| hex(e.version)).collect();
+    ids.sort();
+    ids.dedup();
+    let mut naming = String::new();
+    for e in entries {
+        naming += &row(VERSION_PROPOSAL, &ent(&e.proposal), &hex(e.version));
+    }
+    for chunk in ids.chunks(MAX_CARD_IDS) {
+        put(GOV, cards_doc(chunk), naming.clone());
+    }
+    for e in entries {
+        let pe = ent(&e.proposal);
+        let status = hex(0x6000 + e.version);
+        let mut links = link(VERSION_PROPOSAL, &pe, &hex(e.version));
+        links += &link(STATUS_PROPOSAL, &pe, &status);
+        let mut cards = row(VERSION_BLOCK, "1", &hex(e.version));
+        cards += &row(VERSION_END_TIME, &format!("{}.0", e.end), &hex(e.version));
+        if e.executed {
+            cards += &row(STATUS_EXECUTED_AT, "1900", &status);
+        }
+        let mut wanted = vec![hex(e.version), status];
+        wanted.sort();
+        put(GOV, card_doc(&pe, Some(MAX_BACKLINKS)), links);
+        put(GOV, cards_doc(&wanted), cards);
+    }
+    fake
+}
+
+async fn reverse(fake: &Fake, sql: Option<&[Uuid]>) -> Vec<Verdict> {
+    compare_expired_reverse(fake, &spaces(&u(1)), NOW, FLOOR, sql).await
+}
+
+#[tokio::test]
+async fn reverse_matches_when_postgres_holds_everything_geodb_lists() {
+    let e = vec![listed(10, 1100), listed(11, 1200)];
+    let fake = reverse_fixture(&e, &[vec![0, 1]]);
+    let sql = [u(10), u(11)];
+    assert_eq!(reverse(&fake, Some(&sql)).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn reverse_counts_a_proposal_only_geodb_lists() {
+    let e = vec![listed(10, 1100), listed(11, 1200)];
+    let fake = reverse_fixture(&e, &[vec![0, 1]]);
+    assert_eq!(
+        reverse(&fake, Some(&[u(10)])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_resumes_through_a_tie_and_across_pages() {
+    // Two proposals tie at 1100 (one page, never split); the next page holds 1300.
+    let e = vec![listed(10, 1100), listed(11, 1100), listed(12, 1300)];
+    let fake = reverse_fixture(&e, &[vec![0, 1], vec![2]]);
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only"); 3]
+    );
+    // Held by Postgres: only the proposal on the resumed page is missing.
+    assert_eq!(
+        reverse(&fake, Some(&[u(10), u(11)])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_empty_page_is_a_match() {
+    let fake = Fake::default();
+    assert_eq!(reverse(&fake, Some(&[])).await, vec![Verdict::Match]);
+}
+
+#[tokio::test]
+async fn reverse_ignores_an_executed_proposal() {
+    let mut x = listed(10, 1100);
+    x.executed = true;
+    let fake = reverse_fixture(&[x], &[vec![0]]);
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Unsupported("superseded_or_executed")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_refusal_and_unreadable_sql_side() {
+    // An old node refuses the read: failed, never a mismatch.
+    assert_eq!(
+        reverse(&Fake::failing(), Some(&[])).await,
+        vec![Verdict::Failed]
+    );
+    assert_eq!(
+        reverse(&Fake::default(), None).await,
+        vec![Verdict::Unsupported("sql_window_too_large")]
+    );
+    let no_gov = Spaces::new(HashMap::new());
+    assert_eq!(
+        compare_expired_reverse(&Fake::default(), &no_gov, NOW, FLOOR, Some(&[])).await,
+        vec![Verdict::Unsupported("system_space_missing")]
+    );
+}
+
+#[test]
+fn reverse_has_its_own_kind_label_and_the_value_page_call_text() {
+    assert_eq!(EXPIRED_PROPOSALS_REVERSE, "expired_proposals_reverse");
+    assert_eq!(
+        value_page_doc(10, 20, Some(15)),
+        format!(
+            ".{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", .args = .{{ \
+             .value_page = 512, .value_property = \"{VERSION_END_TIME}\", .value_from = 10, \
+             .value_to = 20, .value_after = 15 }} }} }} }}"
+        )
     );
 }

@@ -233,7 +233,8 @@ writes no relation, creates no entity (one geo-db lacks is left to the Space bac
 `/data/feeder/held-repair/`, apart from the Space backfill's. Logs carry counts only, never ids or text.
 
 - `DRY_RUN=1`: reads Postgres and geo-db, logs counts, writes nothing (no geo-db, journal, cursor or space-map write) and
-  skips the Kafka check, so it needs no stopped feeder. Final line `held-repair done`: `candidatePairs`, `entitiesToRepair`,
+  skips the Kafka check, so it needs no stopped feeder, but it still mounts the feeder's ReadWriteOnce state volume
+  (`geodb-feeder-state`), so see "Where the Job runs" below. Final line `held-repair done`: `candidatePairs`, `entitiesToRepair`,
   `valuesToWrite` (the number a real run writes), `valuesAlreadyHeld`, `entitiesAbsent`, `spacesUnmapped`.
 - `DRY_RUN=0`: the same, and writes. Needs the feeder at 0 and the ordering precondition (as §2b). Knobs:
   `BACKFILL_BATCH` (100), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all; the batch cap, for a staged run).
@@ -242,7 +243,8 @@ writes no relation, creates no entity (one geo-db lacks is left to the Space bac
 
 ```bash
 TAG=<the feeder tag deployed now, built from a main that contains this mode>
-# dry run: the feeder may keep running. Expect valuesToWrite close to 1,562 less what geo-db already got.
+# dry run: the feeder may keep running, but the Job must land on the feeder's node (RWO volume; see "Where the Job runs").
+# Expect valuesToWrite close to 1,562 less what geo-db already got.
 sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
   geodb/k8s/v2/geodb-held-repair-job.yaml | $K apply -f -
 $K logs -f job/geodb-held-repair        # "held-repair plan", then "held-repair done"
@@ -260,7 +262,201 @@ $K rollout status deployment/geodb-feeder
 # verify: rerun with __DRY_RUN__ -> 1 (feeder may run): valuesToWrite 0.
 ```
 
+**Where the Job runs (both `geodb-held-repair` and `geodb-relation-seed`).** Both Jobs mount the claim
+`geodb-feeder-state`, a ReadWriteOnce volume, even with `DRY_RUN=1`. An RWO volume attaches to one node, so the Job pod can
+only run on the node the feeder pod is on (seen 11-12: both on the same node). Consequences:
+
+- The dry run needs no stopped feeder, but it does need room on the feeder's node. If that node has no free CPU or memory
+  for the Job's requests (the main container asks 512Mi and 200m, limit 3Gi; the init container 16Mi and 10m), the pod stays
+  `Pending`. Check with `$K get pod -l app=geodb-feeder -o wide` and `$K get pod -l app=<job name> -o wide` (same NODE
+  column), and `$K describe pod -l app=<job name>` (Events: `didn't match`/`Insufficient`; a `Multi-Attach` or
+  `volume node affinity conflict` event means it landed elsewhere). Compare the requests with the node's free capacity
+  (`$K describe node <node>`, "Allocated resources").
+- To place the Job yourself, add `nodeName: <the feeder's node>` to its `spec.template.spec` (it skips the scheduler, so a
+  full node then fails the pod instead of leaving it pending). Any feeder restart while the Job runs must also stay on that
+  node: pin the Deployment with a temporary `nodeSelector` on `kubernetes.io/hostname` and remove it when the Job is done.
+- A real run needs more: the feeder at 0 (it appends to the journal the feeder holds in memory, and refuses to start while
+  the consumer group has members), and then the volume is free, so the Job can land on any node that has room.
+- Do not restart `geodb` (serve) while either Job runs. Its client pipe dies with
+  `geodb-client pipe did not start (... connect: IoError)` and the Job fails. A failed Job resumes from its cursor when
+  deleted and applied again.
+
+### 2b-quater. Relation-seed (records for relations that predate GEODB_RELATION_POSITIONS)
+
+With `GEODB_RELATION_POSITIONS` on, the feeder moves a relation's position with `set_position`, which names the relation's
+cell and its open statement id. It knows those only for relations it created itself (`known-relations.log`); a move of any
+older relation is dropped and counted as `relation-move-cell-unknown`. Job `geodb-relation-seed`
+(`geodb/k8s/v2/geodb-relation-seed-job.yaml`, `BACKFILL_MODE=relation-seed`, `geodb-feeder/src/relationSeed.ts`) writes
+those records. For each mapped Space it lists the entities with an outgoing relation in Postgres, reads each entity's card
+with claims from geo-db, and records a relation only when geo-db holds its statement open under the id the feeder derives
+from the gaia relation id (the facet claims on it are read too, because a move writes them again on the copy). It never
+replaces a record the feeder holds, and it writes nothing to geo-db: its only writes are `known-relations.log` (and
+`known-statements.log` for a statement geo-db holds that the journal lacked). Cursor: `/data/feeder/relation-seed/`.
+
+- `DRY_RUN=1` (required to be set, no default): reads, logs counts, writes no journal line and no cursor, needs no stopped
+  feeder, but it mounts the same RWO volume, so see "Where the Job runs" above. Final line `relation-seed done`: `relations`, `toSeed` (what a real run records), `alreadyRecorded`, `notOpen`
+  (geo-db does not hold the statement open: not applied yet, or absent), `withFacets`, `statementsMarked`, `facetsUnreadable`.
+- `DRY_RUN=0`: writes. Needs the feeder at 0 (it appends to the journal the feeder keeps in memory; start the feeder after).
+  Knobs: `BACKFILL_BATCH` (100 entities), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all).
+- Progress: the Job logs `relation-seed plan` once (`spaces` is the plan size), then `relation-seed progress` when each Space
+  finishes and at most every 30 s inside a long one. Fields: `spacesDone`/`spacesTotal` (an unmapped or finished Space counts
+  as done), `entities`, `relations`, `toSeed`, `seeded`, `notOpen`, `elapsedSeconds`, `entitiesPerSecond`. Estimate the
+  finish from `entitiesPerSecond` and the entities left (about 2.2M entities across about 1,601 Spaces on testnet); Spaces
+  differ greatly in size, so `spacesDone` alone is a poor clock. Jobs from an image before this logging stay silent until
+  `relation-seed done`.
+- Memory: every record is a line the feeder holds in a map for good. Count `toSeed` first and check the
+  feeder's memory limit against it before the real run (not measured here).
+- Idempotent: a rerun reports the seeded relations as `alreadyRecorded`.
+- It does not repair a position move the feeder already dropped: geo-db keeps the old position, and the card read does not
+  return positions, so this pass cannot tell which relations differ.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
+  geodb/k8s/v2/geodb-relation-seed-job.yaml | $K apply -f -
+$K logs -f job/geodb-relation-seed      # "relation-seed plan", then "relation-seed done"
+$K delete job geodb-relation-seed
+$K logs job/geodb-relation-seed | grep '"relation-seed progress"' | tail -1   # spacesDone/spacesTotal, entitiesPerSecond
+# dry run: the Job shares the feeder's RWO volume, so it runs on the feeder's node ($K get pod -o wide; see "Where the Job runs").
+# real run: stop the feeder first (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder back to 1.
+```
+
 If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
+
+#### Record of the testnet run (11-12): the not-open relations
+
+Job `geodb-relation-seed`, real run (`dryRun:false`), image of the feeder at the time, finished 2026-11-12 22:05:12Z in 269 s
+(Job age and logs read 11-13 00:15Z; counts only):
+
+```
+relation-seed done  spaces=387 spacesUnmapped=0 entities=184648 relations=796610
+  alreadyRecorded=0  notOpen=322  toSeed=796288  seeded=796288  withFacets=0  statementsMarked=0  facetsUnreadable=0
+  stoppedAtLimit=false  seconds=269
+```
+
+`796,288 + 322 = 796,610`: every relation read was either seeded or not open, none was already recorded (the first run).
+The last progress line says `spacesDone` 1602 of `spacesTotal` 1602; `spaces` in the done line counts only the Spaces that
+had entities to visit.
+
+- **What a not-open relation is** (`relationSeed.ts`, the `notOpen++` branch). Postgres lists the relation for an entity, but
+  the entity's card read from geo-db has no open statement under the id the feeder derives from the gaia relation id
+  (`cid("statement", relation id)`). The record is skipped. Two causes fit that read and the seed cannot tell them apart:
+  geo-db has not applied that relation's `createRelation` yet, or the statement is absent or closed in geo-db (a relation
+  deleted or replaced there, or one the feeder never wrote). A relation whose record the feeder already holds is counted as
+  `alreadyRecorded` first, so it is never counted as not open.
+- **Does the feeder's normal path give it a position later? No, not by itself.** The feeder records a relation's cell only in
+  `createRelation` (`translate.ts`, `markRelation` under `GEODB_RELATION_POSITIONS`) and, for an older one, from this seed.
+  A later position move (`updateRelation` with a `position`) of a relation with no record is dropped and counted as
+  `relation-position-update-dropped` plus `relation-move-cell-unknown`; geo-db keeps the old position. The two exceptions are a relation the
+  feeder creates after this point (recorded at creation) and a relation the seed records on a later run, once geo-db holds its
+  statement open. A relation that geo-db never holds open stays without a record. The 322 are 0.04% of the relations read.
+- **Is a re-run safe and idempotent? Safe, yes; it does nothing as things stand.** It never replaces a record the feeder holds
+  and writes nothing to geo-db (only `known-relations.log` and, for an unjournaled statement, `known-statements.log`), so a
+  rerun cannot move or duplicate a record. But the cursor `/data/feeder/relation-seed/cursor.json` now marks every Space done and
+  `entities-<space>.txt` holds each Space's entity list, so a plain re-apply (real or dry) starts at the end of every Space
+  and reports zeros: it does not re-read the 322. Reading them again needs the cursor directory moved aside first.
+  `SeedState` reads an existing cursor even in a dry run, so the dry run needs it moved too. Move it, do not delete it.
+- **Cost of a re-run that does re-read.** A full pass over about 184,648 entities and 796,610 relations: 269 s at about
+  687 entities per second on 11-12, read-only against Postgres and geo-db (one card read per entity with relations), plus
+  `BACKFILL_PAUSE_MS` of 100 per batch. A dry run needs no stopped feeder. A real run needs the feeder at 0 for the
+  duration, so the feeder's consumer lag grows by that time and falls again after the start. With 796,288 records already held, a rerun
+  adds only `toSeed` new lines (at most 322 here), so the feeder's in-memory map and journal barely grow.
+- **Safe re-run, in this order.** First, a dry run with the feeder running: it answers whether any of the 322 is now open
+  (`toSeed` above 0) and, if `toSeed` is 0, nothing more is needed.
+
+```bash
+K="kubectl -n gaia"
+# 1. Move the finished cursor aside (a one-off pod on the feeder's node mounting geodb-feeder-state, see "Where the Job runs"):
+#    mv /data/feeder/relation-seed /data/feeder/relation-seed.done-20261112     # never rm: it is the proof of the first run
+# 2. dry run, feeder running; read "relation-seed done": alreadyRecorded should be about 796,288, notOpen at most 322, toSeed = newly open
+TAG=<the feeder tag deployed now>
+sed -e "s|geodb-feeder:latest|geodb-feeder:${TAG}|" -e "s|__DRY_RUN__|1|" \
+  geodb/k8s/v2/geodb-relation-seed-job.yaml | $K apply -f -
+$K logs -f job/geodb-relation-seed | grep '"relation-seed done"'
+$K delete job geodb-relation-seed
+# 3. only if toSeed > 0: scale the feeder to 0, wait for the group to empty (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder to 1.
+```
+
+Do not restart `geodb` (serve) during either run (see "Where the Job runs").
+
+### 2b-quater-post. After the relation-seed: first post-roll readout (11-13)
+
+The feeder was rolled to `geodb-feeder:bdada8fb` after the seed. Read 2026-11-13 00:15Z to 00:16Z with read-only kubectl and
+the feeder's `/metrics` through the apiserver proxy (no Secret read; only plain `value:` env entries printed).
+
+| what | value |
+| -- | -- |
+| pod | `geodb-feeder-9858cb779-w75bl`, created 2026-11-12 22:35:59Z, age 99 min at the read, `restartCount` 0, memory 3308Mi, CPU 112m |
+| image | `geodb-feeder:bdada8fb` |
+| applied block | `geodb_feeder_last_applied_offset`: partition 0 = 98666, partition 1 = 41187 (edits topic `testnet.knowledge.edits`); 17 `applied-block` puts, all ok (`applied_block_puts_total{result="ok"}`) |
+| lag | `geodb_feeder_consumer_lag` 0 on both partitions; the membership, proposals, space-entities, votes, proposal-votes consumers also 0. `offset_gaps_total` 0. The last message finished at 23:48:42Z (a quiet topic: 17 edits in 99 min, not a stall) |
+| dead letters since the roll | `dead_letters_total{kind="intent"}` 192, `chunks_total{result="dead_letter"}` 192 (167 ok); per consumer: proposal-votes 1, proposal-versions 2, proposal-status 2, edit-meta 1 |
+| flags (plain values on the Deployment) | `GEODB_RELATION_POSITIONS` 1, `GEODB_RELATION_FACETS` 1, `GEODB_APPLIED_BLOCK` 1, `GEODB_ENTITY_TIMES` 1, `GEODB_EDIT_META` 1, `GEODB_RANKS` 1, `GEODB_RECORD_KEYS` 1, `GEODB_VOTES` 1, `GEODB_PROPOSAL_VOTES` 1, `GEODB_PROPOSAL_ACTIONS` 1, `GEODB_PROPOSAL_STATUS` 1, `GEODB_PROPOSAL_VERSIONS` 1, `GEODB_SUBSPACES` 1, `GEODB_SPACE_*` 1, `GEODB_MEMBERSHIP_DUAL_WRITE` 1, `GEODB_MEMBERSHIP_SHADOW_COMPARE` 1; `NODE_OPTIONS --max-old-space-size=6144`; memory request 3Gi, limit 7Gi |
+
+The feeder's log has no per-edit line for a relation position or facet; the first evidence is the `geodb_feeder_translate_total` counters
+since the roll: `createRelation` 2079, `relation-entity-claims` 2079, `relation-position-kept` 558 (positions written on the new
+relation's `add`), `relation-facet-claims` 26, `deleteRelation` 2227. Zero for `relation-position-moved`,
+`relation-move-cell-unknown` and `relation-position-update-dropped`: no position move of any relation has arrived yet, so
+the seeded records are not yet exercised. Log lines read: `state loaded` (22:36:44Z: 1602 spaces, 2,231,103 entities, 6,691,056
+statements, `hadOffsets` true), then each consumer's "running" line, two `founded space` lines, and a `membership shadow
+comparison` every 5 minutes: `compared` 862, `mismatched` 0, `errors` 0 through 00:11:51Z.
+
+Unexpected, to follow up:
+
+1. **192 intents dead-lettered, 23:01:33Z to 23:01:42Z**, all `error: Refused / connect: Refused` from geo-db ("intent refused by
+   geo-db, skipped"), on edit offsets 98656 and 98657 of partition 0 (146 of them) and offsets 172829 to 172833 (46; the
+   log line does not name the consumer) across 5 Spaces. A skipped intent is not retried, so those writes are missing from geo-db
+   until replayed. Follow-up: read `errors.jsonl` on the feeder's volume and replay the two edits with `geodb-replay-edit` (next
+   section). The `Refused` points at serve being unreachable at that moment.
+2. **`geodb-0` is 24 min old at the read (created 23:51:01Z), 0 restarts**: it was replaced about 50 min after the refusals, so serve
+   was down or being rolled around 23:01Z. Find who rolled it; the runbook says not to restart serve during a seed or a Job.
+3. **The heap does not match what the queue recorded for #1557**: the Deployment runs `--max-old-space-size=6144` with a 7Gi limit, not
+   3584 MB in 4Gi. Working set is 3308Mi, 47% of the limit. Check the manifest and the live Deployment agree (a patch not committed, or a later change).
+4. **Seed `withFacets` was 0**: none of the 796,288 older relations held a facet claim in geo-db, so no seeded record carries
+   facets. New relations do (26 facet claims since the roll). Confirm that is expected for relations that predate `GEODB_RELATION_FACETS`.
+5. **Position moves are unproven.** Re-read the counters after the first real position move arrives: `relation-position-moved` should rise and
+   `relation-move-cell-unknown` should stay near the 322 not-open relations, no more.
+
+### 2b-quater. Replaying one dropped edit (`geodb-replay-edit`)
+
+When kg-indexer drops an edit (a statement timeout rolls the block back, a false `is_errored` in `ipfs_cache`), the
+feeder never sees it either: it only consumes `knowledge.edits`. `replay_edit` re-applies such an edit to Postgres from
+`ipfs_cache`; Job `geodb-replay-edit` (`geodb/k8s/v2/geodb-replay-edit-job.yaml`, same image,
+`node dist/replay-edit-main.js`) is the geo-db side (plan 22 section 21, row B1). It fetches the payload from the IPFS
+gateway (`REPLAY_EDIT_IPFS_GATEWAY`) or `--file`, translates it through the feeder's own `translateOps` with the
+feeder's flags, and writes geo-db only. No Postgres, no Kafka.
+
+Arguments: `--uri ipfs://<cid>`, `--space <gaia space id>`, `--block <n>`, `--created-at <block time, unix seconds>`
+(the edit's block time: kg-indexer's `--created-at`), optional `--sequence`, `--file`, and `--apply`. Without `--apply` it
+is a dry run: fetch, decode, translate, safety check, log counts.
+
+**The refusal rule** (what `check_replay_safety` does by hand, in geo-db terms): the Job exits 2 and writes nothing when
+any entity the edit touches already holds an `updatedAt` newer than the edit's block time, or holds one it cannot read
+(or none: the entity was never stamped, so it cannot be shown older). An entity geo-db does not hold is a creation and
+passes; an `updatedAt` equal to the edit's time is the edit itself and passes. The unit is the entity, not the
+(entity, property) pair Postgres versions on, so it can refuse an edit `check_replay_safety` would pass, never the
+reverse. It also refuses a Space not yet in geo-db (it founds none). Resolve a refusal by hand; do not widen the rule.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+# dry run: the feeder may keep running.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
+    -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__MODE__|--dry-run|" \
+    geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit plan" (intents, touched, conflicts), then "replay-edit dry-run" or "refused"
+$K delete job geodb-replay-edit
+# real run, only after a clean dry run: stop the feeder (it shares the state volume) as in §2b-ter, then __MODE__ -> --apply
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed ... -e "s|__MODE__|--apply|" geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit     # "replay-edit applied" with deadLettered 0
+$K delete job geodb-replay-edit
+$K scale deployment/geodb-feeder --replicas=1
+```
+
+Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
+The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
+under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
 
 ### 2b-bis. Proposal system entities
 
@@ -860,6 +1056,14 @@ Activation order, each step only after the one before it is live:
 
 Rollback: unset `GEODB_PROPOSAL_VERSIONS`. The records stay in the Space, unread; nothing reads them yet.
 
+Proposer and owning Space (`GEODB_PROPOSAL_VERSION_PROPOSER_SPACE`, default off, shipped as "0" in the feeder manifest and
+the backfill Job): when on, each version record also gets the `proposer` and `space` references (`proposed_by`,
+`space_id`), so the notification-indexer twin can compare values instead of only existence. Order: rerun the backfill Job
+with the flag "1" (it is idempotent and adds the references to records already written; it fails a row whose proposal
+lacks a proposer or space), then set the flag "1" on the feeder. The Job writes the proposal-level proposer to every
+version of a proposal, while the feeder writes the event's own proposer. Until the flag is on the twin reports
+`values_not_stored` as Unsupported, not as a mismatch.
+
 ### 2c-novies. Keyed proposal status facts (GEODB_PROPOSAL_STATUS)
 
 Read this first: **gaia stores no proposal status, so this does not mirror one.** `proposals` has no status column. The
@@ -959,6 +1163,21 @@ same ids).
 
 Rollback: unset `GEODB_RANKS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2c-duodecies. Keyed edit meta (GEODB_EDIT_META)
+
+`GEODB_EDIT_META` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `edit_versions.block_number`,
+`sequence` and `name` as one natural-key record per edit in the `governance` system Space
+(`geodb-feeder/src/editMetaKeyed.ts`; the pinned `editMeta` kind). It is its own consumer group on `<env>.knowledge.edits`
+(`geodb-feeder-edit-meta-keyed-v1-<env>`, override `KAFKA_EDIT_META_GROUP_ID`), which needs the same Kafka ACL as the edits
+consumer's group, and reads the envelope only. An edit with no `meta` writes no record, as kg-indexer writes no row. Design:
+geo-db plan 10.22 section 22.
+
+Check: `gaia_api_edit_meta_shadow_total{result}` with `GEODB_EDIT_META_SHADOW=on` on the api once the consumer has caught up.
+
+The versions list's other fields: `GEODB_VERSIONS_SHADOW` compares count, order, author and, with `GEODB_ENTITY_TIMES` on the feeder, the page's two ends' `createdAt` against the entity times (`gaia_api_versions_shadow_mismatch_total{field="newest_time"|"oldest_time"}`, `gaia_api_versions_shadow_times_total{result}`). Nothing is served from geo-db.
+
+Rollback: unset `GEODB_EDIT_META`. The records stay in the Space, unread; nothing reads them yet.
+
 ### 2c-undecies. Keyed space topics (GEODB_SPACE_TOPICS)
 
 `GEODB_SPACE_TOPICS` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `spaces.topic_id`, the column
@@ -1035,7 +1254,7 @@ write into geo-db's derived class (last-write-wins, no history) after their Post
 source of truth: a geo-db error is counted (`geodb_derived_mirror_errors_total{table}`) and logged, never returned, a
 call is bounded by `GEODB_DERIVED_BUDGET_MS` (default 5000; rows past it are counted in
 `geodb_derived_mirror_dropped_total` and left for the next write of the key), and after a failure the pipe is not
-respawned for 10 s.
+respawned for 2 s.
 
 | writer | tables mirrored (collection) |
 | -- | -- |
@@ -1125,6 +1344,31 @@ wiring (init container, scores key, binding) and set `GEODB_DERIVED_MIRROR=1` an
 
 Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
 `derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
+
+### 2f-reconcile. Stale rows in collection 28 (one-shot reconcile Job)
+
+Before gaia#1501, `not_interested_sync`'s delete-and-reinsert of a user's `user_topic_signals` rows was never mirrored, and the
+sweep and the refit only delete identities that were in their own prior, so a row Postgres dropped stayed in geo-db and inflated
+that user's private `weights`. #1501 stops new ones; `user_topic_signals_reconcile` removes the old ones. For every user (every
+id in `user_topic_signals` plus every Personal space) it scans the user's group in collection 28, compares it with Postgres,
+and plans a delete for each key only geo-db holds and a put for each row geo-db lacks or holds with another score or value.
+A key that is not a 33-byte collection 28 key is left alone. Counts and kinds are logged, never an id. A user in geo-db who is
+in neither id list is not found (a deleted account is the erasure path's job).
+
+Run it as a Job, the same way as the snapshot Job (`ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml`, by hand,
+not part of any deploy, same init containers, scores key and `GEODB_*` wiring as `private-mirror-snapshot-job.yaml`):
+
+1. Needs a ranking-indexer image that contains the binary (the Dockerfile copies it) and the `_PRIVATE` switch on.
+2. Dry run (the manifest's default, no write possible): `sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" ranking-indexer/k8s/v2/user-topic-signals-reconcile-job.yaml | kubectl apply -f -`,
+   then `kubectl -n gaia logs -f job/ranking-indexer-signals-reconcile`. Read the `reconcile: counts` line: `delete_stale` is the
+   rows to remove, `put_missing` and `put_drifted` the rows to write, `partial_groups` users with over 8,192 rows (not fully judged).
+   Exit 0 means nothing to change, 2 means it found changes, 1 means it could not read.
+3. Apply: delete the finished Job, change the container args to `["--apply"]`, apply again. It plans the whole table first and
+   refuses (exit 1) if it would delete over 20% of geo-db's rows, Postgres returned nothing, or it changes over 200,000 rows
+   (`--max-delete-fraction`, `--max-changes`; `--allow-mass-change` overrides). Then it walks again, per page scanning geo-db
+   before reading Postgres, and applies each page at once. Last write wins, so re-running is safe after any stop.
+4. Verify: delete the Job and run the dry run again. It must exit 0 with `delete_stale=0`. Deletes are not individually
+   acknowledged by the pipe, so this re-run is the check.
 
 ### 2f-state-and-loud. Watermark collections 6 and 7, the collection 11 backfill, and loud mirror failures
 
@@ -1678,6 +1922,28 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceTopicsStalled` | `space.topics` lag above 0 and nothing handled by the space-topics consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-undecies) |
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederMemoryHeadroom` | the feeder container's working set over 90% of its memory limit for 15m (warning, never pages) | see "Feeder memory headroom" below |
+
+### Feeder memory headroom (GeoDbFeederMemoryHeadroom)
+
+The rule is `container_memory_working_set_bytes` (cAdvisor) divided by `kube_pod_container_resource_limits{resource="memory"}`
+(kube-state-metrics) for container `feeder` in pods `geodb-feeder-*`, above 0.9 for 15m. Severity is warning and the rule has no
+page route.
+
+- What to read: the ratio and the two series in Prometheus; `$K top pod -l app=geodb-feeder --containers`; the restart count and
+  last state (`OOMKilled`) from `$K get pod -l app=geodb-feeder -o wide` and `$K describe pod -l app=geodb-feeder`; the feeder log
+  for what it was doing (a relation seed, a large replay) and the dead-letter counter. The working set includes the Node heap, the
+  `geodb-client` child and page cache, so it can sit above the heap size.
+- Sizing history: #1551 set a 3584 MB heap (`--max-old-space-size=3584`) in a 4Gi limit; #1557 raised it to a 6144 MB heap in a
+  7Gi limit (request 3Gi) for the relation-seed journals, which is what `geodb/k8s/v2/geodb.yaml` and the live Deployment hold. Keep the
+  heap below the limit with room for the child process. The 90% line is therefore about 6.3 GiB against 7Gi.
+- What raising the limit touches: `resources.limits.memory` on the `feeder` container in `geodb/k8s/v2/geodb.yaml`, and the heap in
+  `NODE_OPTIONS` beside it (raise both together; the heap alone does not help). Applying it rolls the Deployment (strategy
+  `Recreate`: the feeder is down for the restart and resumes from `/data/feeder/offsets.json`), and the pod must still fit on its
+  node, so check the node's allocatable memory first. It does not touch serve (`geodb-0`) or the volume.
+- Never restart serve (`statefulset/geodb`, pod `geodb-0`) during a seed: the seed and replays write through it, and a restart
+  mid-seed drops the connection the feeder retries against and can leave the seed to be re-run. Restart or resize only the feeder, and
+  wait for a seed to finish first.
 
 ### serve's own metrics and the outbox mirror (geodb-serve-alerts.yaml)
 
@@ -1690,7 +1956,9 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
 `geodb_derived_refused_cap_total`. Since 5fbf4ad5ee serve also prints `geodb_work_rows`, `geodb_work_rows_max` and the rest of `geodb_work_*` while the work class is on. Alerts:
 `GeoDbWorkRowsHigh` (work rows above 80% of the cap),
 `GeoDbDerivedRowsHigh` (rows above 80% of the cap), `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped`
-(notification-indexer, port 9464, already scraped).
+(notification-indexer, port 9464, already scraped). With the mirror backlog on (gaia#1491) there are two more:
+`GeoDbOutboxMirrorBacklog` (`geodb_outbox_mirror_backlog` above 0 for 10 m) and `GeoDbOutboxMirrorBacklogDropped`
+(`geodb_outbox_mirror_backlog_dropped_total` or `geodb_outbox_mirror_backlog_expired_total` rose in 15 m).
 
 ## 7. Operating notes
 
@@ -2053,9 +2321,21 @@ the shadow is put-if-absent on the outbox idempotency key, so a Kafka replay ans
 writes nothing. It is fire-and-forget: after the Postgres commit the indexer only `try_send`s into a bounded
 queue (4096), a background task owns one held `geodb-client work pipe` child, and a failure is logged and
 counted, never raised. Metrics: `geodb_outbox_mirror_{entered,duplicates,errors,dropped,skipped}_total`,
-`geodb_outbox_mirror_queue`. A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
+`geodb_outbox_mirror_queue`. With `GEODB_OUTBOX_MIRROR_BACKLOG=1` (gaia#1491) also
+`geodb_outbox_mirror_backlog` (gauge), `geodb_outbox_mirror_retried_total`, `geodb_outbox_mirror_backlog_dropped_total`
+and `geodb_outbox_mirror_backlog_expired_total` (gaia#1507).
+A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
 the ones matched at insert; a webhook deleted inside the 30 s cache window is shadowed but has no Postgres
 delivery row.
+
+Backlog (flag `GEODB_OUTBOX_MIRROR_BACKLOG`, off by default): a unit whose enter fails is kept in a bounded
+in-memory queue (`GEODB_OUTBOX_MIRROR_BACKLOG_MAX`, default 3000) and retried oldest first, instead of dropped.
+`GeoDbOutboxMirrorBacklog` fires when `geodb_outbox_mirror_backlog` stays above 0 for 10 m: serve is down or
+refusing the key, so fix that and watch the gauge fall to 0. A serve roll (20-40 s) drains by itself. At the bound
+the oldest unit is dropped and counted in `geodb_outbox_mirror_backlog_dropped_total`; a head unit geo-db keeps
+refusing is dropped after 30 refused attempts or 120 s (`GEODB_OUTBOX_MIRROR_BACKLOG_EXPIRE_ATTEMPTS` /
+`_EXPIRE_SECS`) and counted in `geodb_outbox_mirror_backlog_expired_total` (both: `GeoDbOutboxMirrorBacklogDropped`); replay the window with `outbox-replay` below. The backlog is in memory, so a
+notification-indexer restart loses whatever it holds; replay covers that too.
 
 It uses its own key, `geodb-outbox-key`: the binding gives it `work=*` and nothing else
 (`read=- write=- publish=- work=*`), so a leak can neither touch the graph nor read the outbox back. Needs a
@@ -2093,9 +2373,11 @@ the row's `notification_deliveries` rows, so a webhook that matched at insert bu
 listed (the live mirror lists it).
 
 It is a dry run unless `--apply` is given. A dry run reads Postgres only (opened read-only) and prints `scanned`,
-`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. It
-cannot print `present`: geo-db has no read-only per-key probe (`claim` leases the unit and would disturb the
-delivery-side shadow), so `present` comes from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
+`unencodable` (rows the mirror would also skip: unknown event type, payload over 16 KiB) and `would-enter`. When the
+`geodb-client` in the image and the geo-db node both support the read-only batched `has` verb (wire revision 17), it
+also asks geo-db which units it holds and prints `present` and `missing` (`would-enter` is then `missing`); `has`
+does not lease or write. Otherwise it prints `present unknown (<reason>; --apply reports it)`, and `present` comes
+from `--apply`, as the count of `duplicate` answers. `--to` is exclusive.
 `--batch` (default 500, max 5000) bounds rows per query, `--rate` (default 50, max 1000) bounds enters a second,
 `--max-units` bounds the scan. A geo-db error stops the run and prints how far it got; rerun the same command.
 
@@ -2139,6 +2421,43 @@ and the gauges `delivery_worker_shadow_pending_{units,rows}`. Memory is bounded 
 geodb image whose `geodb-client work pipe` knows `claim` and `complete` (geo-db `final` from "client: work
 pipe takes claim, complete, retry and fail"); bump the pinned tag in `delivery-worker.yaml` to it first.
 Turn it on after the indexer's mirror has been running, as a separate change.
+
+### Claiming deliveries from the work class (delivery-worker, `DELIVERY_WORKER_CLAIM_SOURCE=geodb`)
+
+Off by default. When it is `geodb` the worker claims, delivers and settles units over the held `work pipe`
+and never claims from Postgres (plan 10.16, GAP-15; plan 22 section 30 for the two homes below).
+
+- **Webhook url and secret** come from the mounted `app-webhooks` Secret (`APP_WEBHOOKS_FILE`, live since
+  2026-11-06) and nowhere else: a unit carries only the webhook id. The worker refuses to start in this mode
+  if `APP_WEBHOOKS_FILE` is unset, so there is no `app_webhooks` read to forget. After any webhook change
+  re-run `notification-service/scripts/export-app-webhooks.sh`. A webhook missing from the file fails its unit.
+- **`last_error`** is not stored (W6). Each non-2xx answer or network error is one `warn` line from the worker
+  (`Webhook answered non-success` with `status`, or `Webhook request failed` with `error`, both with `webhook_id`
+  and `attempts`). Nothing reads the old column.
+- **Do the history check first, before the flag is ever set.** Units are claimed whatever their history, so a
+  geo-db pending count above Postgres's undelivered count means the flip redelivers notifications Postgres
+  already delivered (the `outbox-replay` above enters rows regardless of delivery state). Both reads are
+  read-only and start no pod or Job.
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+# geo-db side: counts of the work class, over the delivery-worker's own key and binding (exec into the
+# running pod; it has the geodb-client and the work=* principal). pending + in_progress is the undelivered side.
+$K exec deploy/delivery-worker -- /geodb/geodb-client --key /etc/geodb/key/outbox.key \
+  --binding /geodb/binding.txt work counts
+# the same numbers without a key, from serve's metrics: geodb_work_pending, geodb_work_open_rows,
+# geodb_work_failed (apiserver proxy to the geodb-0 metrics port, as for the other geodb_* gauges)
+
+# Postgres side: read-only, from a psql session or the DO console with a read-only user (never a new pod):
+#   SELECT status, count(*) FROM notification_deliveries GROUP BY status ORDER BY status;
+# undelivered = pending + in_progress
+```
+
+  Go only when geo-db `pending + in_progress` equals Postgres `pending + in_progress` (a difference of the few
+  units in flight is fine; a difference of hundreds is not) and `delivery_worker_shadow_total{result="miss"}`
+  has been flat since the last `outbox-replay`. If geo-db is higher, do not flip: find which side holds the
+  extra rows (`extra` in the shadow counter) and retire them with `work expire` or a replay of only the
+  undelivered window. Roll back by unsetting the flag; units claimed meanwhile are acknowledged in geo-db only.
 
 ## 12. The score writers' key (derived collections 0, 1, 11): enabling GEODB_DERIVED_MIRROR
 
@@ -2218,3 +2537,235 @@ or other-space proposal also has such an action).
 Not covered, each named in `_uncompared_total`: which proposals a Space has and their order and cursor (no Space index in
 the records), the list's status filter (the status shadow covers status) and vote counts (records are keyed by voter),
 UpdateVotingSettings fields of an action, and the active checks' Space scope and vote tallies.
+
+### Rewinding a consumer group after a writer off-switch (`geodb/kafka-rewind.sh`)
+
+With `KG_INDEXER_PG_WRITES`, `VOTE_INDEXER_PG_WRITES` or `TOPOLOGY_INDEXER_PG_WRITES` set to `0` the consumer still commits its
+offsets (`kg-indexer/src/storage.rs:24`, `main.rs:1738`), so flipping the flag back does not restore the window Postgres missed.
+The fix is to rewind the consumer group to the flip time and let the consumer replay it. The writes are idempotent per block.
+Kafka keeps the topics for 7 days; a timestamp older than retention is clamped to the earliest retained offset and the script says so.
+
+The three groups, read from the v2 manifests (`KAFKA_GROUP_ID`) and confirmed live on 11-12:
+
+| Group | Deployment | Manifest | Topics (prefix `testnet.`) |
+| -- | -- | -- | -- |
+| `kg-indexer-v8-testnet` | `kg-indexer` | `kg-indexer/k8s/v2/kg-indexer.yaml:97` | `hermes.blocks`, `knowledge.edits`, `space.creations`, `space.membership`, `space.trust.extensions`, `space.topics`, `space.governance` (`kg-indexer/src/consumer.rs`) |
+| `vote-indexer-testnet` | `vote-indexer` | `scoring-service/deployment/v2/vote-indexer.yaml:155` | `curation.votes` |
+| `topology-indexer-testnet` | `topology-indexer` | `scoring-service/deployment/v2/topology-indexer.yaml:147` | `topology.canonical` |
+
+Order, always this one:
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+FLIP=2026-11-12T06:30:00Z        # the time the flag went to 0, UTC; use a minute earlier, replays are idempotent
+
+# 0. First put the flag back to 1 (a manifest revert PR, then deploy). Rewinding with the writes still off replays into nothing.
+# 1. Scale the consumer to 0 and wait for its pods to go (Kafka refuses a reset while the group has members).
+$K scale deployment/kg-indexer --replicas=0
+$K wait --for=delete pod -l app=kg-indexer --timeout=120s
+
+# 2. Dry run (the default): per-partition target offsets and the exact reset command. Changes nothing.
+geodb/kafka-rewind.sh --group kg-indexer-v8-testnet --to "$FLIP"
+#    Read the table. at-end = nothing to replay on that partition; clamped-to-earliest = the window is partly past retention.
+#    Then execute. The script refuses unless the Deployment is at 0 replicas with no pods left.
+geodb/kafka-rewind.sh --group kg-indexer-v8-testnet --to "$FLIP" --yes
+
+# 3. Scale up.
+$K scale deployment/kg-indexer --replicas=1
+
+# 4. Check lag returns to 0 (the Kafka lag alerts must be quiet).
+$K rollout status deployment/kg-indexer
+```
+
+Check lag 0 with `sum(kafka_consumergroup_lag{consumergroup="<group>"})` (the metric `monitoring/k8s/kafka-consumer-lag-alerts.yaml` uses; query Prometheus through the apiserver proxy), and
+watch the consumer's log for the replayed blocks. kg-indexer replays the whole window of `knowledge.edits`, so allow time: the 06-11
+full replay of about 430k messages took 15 to 20 minutes. Do not call the rollback finished until lag is 0 and stays 0.
+
+Notes:
+
+- The dry run and the reset each start a throwaway pod (`app=kafka-rewind`, image `apache/kafka:latest`, the one the replay recipe uses) that reads the broker address and credentials from the consumer's own Secret by reference; the script never reads a Secret value, and deletes only its own pod.
+- The reset is built from the printed plan with `--reset-offsets --from-file` (`topic,partition,offset`), so every partition gets its own target. `--to-datetime` is not used because it would hide the per-partition arithmetic.
+- Rewinding moves a group backwards only on purpose. If a target is ahead of the committed offset the group would skip messages; compare against `kafka-consumer-groups.sh --describe` first if the flag was off for a short time.
+- vote-indexer also has two sweep CronJobs (`vote-indexer-comment-sweep`, `vote-indexer-new-entity-sweep`); they read Postgres and are not Kafka consumers, so they catch up on their next run.
+- Offline check of the arithmetic: `geodb/test-kafka-rewind.sh` (fixture under `geodb/testdata/kafka-rewind/`), run by the `geodb-kafka-rewind-test` workflow.
+
+## search-indexer: serving entities_for_spaces from geo-db
+
+`SEARCH_INDEXER_GEODB_SERVE=entities_for_spaces` must stay off (leave it out of the list; `applied_block` alone is safe)
+unless one of these holds for every Space the indexer serves.
+
+1. Every entity id in those Spaces is a UUID v4. geo-db holds an entity under `conformingId` (`geodb-feeder/src/ids.ts`):
+   a v4 id as itself, any other id as a sha256 remap that nothing can invert. The served read returns geo-db's ids
+   (`search-indexer/src/geodb_shadow/serve.rs`, `Uuid::parse_str(entity)`), so a non-v4 entity would be indexed
+   under a different id than Postgres gives it, and its search document would be orphaned and duplicated.
+   Non-v4 ids exist: system ids from `uuidV5` (`geodb-feeder/src/proposals.ts`), the language ids (`languages.ts`,
+   a sha256 slice) and any entity a client minted without v4 bits.
+2. Or geo-db holds the original and the read reverses it. The original is stored only as the map statement
+   `(keyed, sys.legacy.Id, Bytes(original))` that `GEODB_LEGACY_ID_MAP` makes the feeder write
+   (`geodb-feeder/src/legacyMap.ts`, written only for entities the feeder creates after the flag is on). As of 2026-11-12 the
+   live feeder does not set `GEODB_LEGACY_ID_MAP`, so no map statement exists, and the backfill in
+   `docs/plans/2026-11-07-feat-geodb-legacy-id-map-backfill-plan.md` is a plan only. Even with the statements, the
+   read the clients expose is gaia id to keyed id (`by_legacy`); the keyed id to original direction prints a Bytes value as
+   `<bytes>` (`api/src/geodb/client.ts`, `readLegacyIds`), so the search-indexer cannot reverse until geo-db's client prints
+   or returns the original bytes.
+
+The shadow is not a gate: `search_indexer_geodb_shadow_total{lookup="entities_for_spaces"}` conforms Postgres ids forward and
+compares in geo-db's id space, so it shows zero mismatches with non-v4 ids present. The only evidence for condition 1 is a
+scan of the served Spaces' entity ids for non-v4 bits (Postgres read, run by someone with that access).
+
+## 13. Cutover day (DRAFT)
+
+**DRAFT. Not approved, not rehearsed, and no date is set.** Patrick sets the date for D1 (the read cutover) and D2
+(the table drops); nothing here decides it. The steps are pulled together from geo-db plan 22
+(`docs/plans/10-wire-and-federation/22-zero-postgres-critical-path.md` on geo-db `final`), sections 9.6, 15, 16, 18, 20 and
+23, and the sections above. Where this text and plan 22 disagree, plan 22's newest section wins; fix this one.
+
+How every flag below was sourced. A flag name or value comes from one of three places, and the cell says which:
+**main** = the manifest or code on gaia `origin/main` 71b1e678 (file and line given); **live** = read-only `kubectl get
+-o json` of Deployments, StatefulSets and CronJobs in `gaia` on `do-nyc2-geo-testnet-k8s`, env names and values only, no
+Secret read, taken 11-11 about 21:10 local; **pending #N** = only in an open PR, not merged, so not on main and not
+live. Do not trust a value here on the day; re-read it (§13.1 step 0).
+
+Three facts shape everything else.
+
+1. **Few read flips exist.** Plan 22 speaks of "D1, every source flag", but on main only these switches move a read
+   source (§13.2). Every other geo-db read in the api and the workers is a shadow that compares and never answers. Those have
+   no serve flag in the code, so D1 for them is code that does not exist yet, not a flag to flip.
+2. **A writer off-switch is not reversible by flipping it back.** With `KG_INDEXER_PG_WRITES` off the consumer "advances
+   past each message" (`kg-indexer/src/storage.rs:24`, `main.rs:1738`): Postgres misses that window for good unless the
+   consumer group is rewound. The 10-minute rollback in §13.4 therefore has a catch-up step per Kafka consumer.
+3. **`*_PG_WRITES` are not in any manifest except two.** Live and main set only `IPFS_CACHE_PG_WRITES=1`
+   (`hermes-ipfs-cache/k8s/v2/hermes-ipfs-cache.yaml:134`) and `SCORING_WRITER_PG_WRITES=1`
+   (`scoring-service/deployment/v2/cronjob.yaml:115`). The other eight read an unset variable as on; only an explicit
+   `0`, `false`, `off` or `no` turns them off (for example `kg-indexer/src/storage.rs:30`). A flip is a manifest PR first,
+   because deploy-v2 reverts a hand-set value (see the memory note on diffing a manifest against live).
+
+### 13.1 Pre-checks (all green, or do not start)
+
+Run from a fresh shell: `K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"`. Retry a flaky `Unauthorized` two or three
+times before treating it as real. Metrics through the apiserver proxy to Prometheus, as in the memory notes.
+
+| # | Check | Gate | Source of the gate |
+| -- | -- | -- | -- |
+| 0 | Re-read every flag in §13.2 and §13.3 live (`$K get deploy,sts,cronjob -o json`, env names and values only) and diff against main. | No surprise. A hand-set live value that main lacks is reconciled in a PR first. | `diff-manifest-against-live` rule; ENTITIES_INDEX_VERSION 5 vs 6 crash-looped search-indexer on 2026-09-30 |
+| 1 | Snapshot pair age. `$K get volumesnapshot -l app=geodb-snapshot --sort-by=.metadata.creationTimestamp`, and `kube_cronjob_status_last_successful_time` for `geodb-snapshot-4h`. Then take a manual pair (§9b) immediately before step 1 of §13.2. | Newest scheduled pair under 4 h old (the 4-hourly CronJob is `47 */4 * * *`, `geodb/k8s/v2/geodb-snapshot.yaml:185`); the manual pair under 15 min old. `GeoDbSnapshotNewestOld` (5 h) and `GeoDbSnapshotTooOld` not firing. | §9a; `monitoring/k8s/v2/geodb-snapshot-alerts.yaml`; the 4 h figure is the lead's gate, the alerts are looser |
+| 2 | Feeder lag. `geodb_feeder_consumer_lag` and each per-consumer `geodb_feeder_*_consumer_lag`. | Every one 0, and `GeoDbFeederDown`, `GeoDbFeederStalled`, `GeoDbFeederLagHigh`, `GeoDbFeederDeadLetters` quiet for 1 h. | `monitoring/k8s/v2/geodb-feeder-alerts.yaml` |
+| 3 | Outbox mirror clean. `geodb_outbox_mirror_errors_total` and `geodb_outbox_mirror_dropped_total` on `notification-indexer` (port 9464). | No increase over the last 24 h; `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped` quiet. The 11-11 rev5 outage (serve down 18:15 to 21:45Z) dropped 6,943 units: confirm the replay (§11, `outbox-replay`) ran and its dry run finds nothing to add. Until #1491 merges (pending #1491, flag `GEODB_OUTBOX_MIRROR_BACKLOG`, off by default; #1507 stacks on it) any serve roll loses units, so do not roll serve inside the window. | serve alerts file; plan 22 section 23.3 |
+| 4 | Shadow rates against the gates. `gaia_api_*_shadow_total{result}` for every shadow in §13.2, 24 h, plus the lead's shadow-gates report. | Every gate met. Plan 22 section 23.1 had two over their gates at 11-12 early: `type_counts` mismatch 7.55% (gate 0.5%) and `entities_best_order` `local_score` 29.8% (gate 1%). Others (`GEODB_PRIVATE_READERS_SHADOW`: weight-only mismatch, 7 per hour against 192 matches) need a judgement, not a number. No read below goes live while a gate for its own shadow is red. | plan 22 sections 20.2, 23.1 |
+| 5 | Shadows that must have evidence and do not yet. Four api shadows are dormant live: `GEODB_PROPOSAL_DIFF_SHADOW=0` (live), `GEODB_ENTITY_AT_VERSION_SHADOW`, `GEODB_ENTITY_DIFF_SHADOW`, `GEODB_RELATION_LOOKUP_SHADOW` (unset live; code on main, `api/main.ts`, `api/src/geodb/`). All four are pending #1520, as are the entity type-exclusion and feed-blocklist shadows (`GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW=0`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW=0`, `api/k8s/v2/api.yaml:490-492`; this draft did not check whether #1520 covers those two). Three worker shadows are `0` live: `GEODB_META_BLOCK_SHADOW` (hermes-pipeline, ranking-indexer Deployment, rolling-sweep, backfill), `NOTIFICATION_INDEXER_GEODB_POLL_CURSOR_SHADOW`, and `USER_INTEREST_RUST_SHADOW` on the topic-interest-sweep CronJob; all pending #1522. | A cutover on a path with no shadow evidence is not allowed. Merge and roll #1520 and #1522, then run them for 24 h before the day. | plan 22 section 23.4; PR bodies |
+| 6 | Held items resolved: D5 (`entity_ranking_scores`, 48.9M rows, mostly not mirrored), the collection 1 repair (J), the collection 28 reconcile run (J, #1502), the collection 11 fill (J), the bucket decision B, the job-lease Role. | Each is done or explicitly carried to §13.5. | plan 22 sections 20.4, 23.4, 23.5 |
+| 7 | Postgres is not the only copy of anything unmirrored: `ipfs_cache`, `atlas_checkpoints` and the edit blobs have no home until B. | Confirmed stays-on-Postgres list (§13.5) matches the live `DATABASE_URL` holders: 32 workloads at 11-12 early. | plan 22 sections 23.2, 17 |
+| 8 | Open writers that do not yet reach geo-db: edit block meta (`GEODB_EDIT_META`, pending #1513, not on main), relation facets (pending #1493), fast-path `executed_at` and execution facts (pending #1514, #1515), replay-edit (pending #1519). | Either merged and enabled with their replay, or the matching Postgres writer stays on (§13.5). Switching kg-indexer's writes off before them loses those rows. | plan 22 sections 23.3 and 21 |
+| 9 | Apply people. The feeder still holds `DATABASE_URL` (pending #1492 removes it). | Not a blocker for the flip; it is the reason the feeder stays in §13.5. | plan 22 section 23.5 |
+
+### 13.2 Read flips, in dependency order
+
+Rule for every step: flip one flag, wait 10 minutes, run the post-check in §13.4, and only then take the next step. Take the
+same snapshot discipline as §9b before step 1. Dependency order means a read never moves before the data it needs is
+mirrored and verified (§13.1) and before the reader it feeds is on geo-db.
+
+| Step | Flag, workload, value | Live now | Source | Needs first |
+| -- | -- | -- | -- | -- |
+| R1 | `WARMER_BLOCK_SOURCE=geodb` on Deployment `hermes-pipeline` (default `postgres`; only the exact value `geodb` selects geo-db, `hermes-pipeline/src/cache/postgres.rs:52`) | `postgres` | main `hermes/k8s/v2/hermes-pipeline.yaml:183`; live | `GEODB_META_BLOCK_SHADOW=1` on hermes-pipeline with a clean result (pending #1522; live `0`) and its geo-db key paths. The code refuses `geodb` without it (`postgres.rs:95`). Do R1 before `IPFS_CACHE_PG_WRITES` ever goes to 0 (manifest comment, line 182). |
+| R2 | `FEED_SIGNAL_CONFIG_SOURCE=configmap` on CronJob `ranking-indexer-feed-signals-sync` | `postgres` | main `ranking-indexer/k8s/v2/feed-signals-sync-cronjob.yaml:173`; live | The ConfigMap `ranking-config` applied (main `ranking-indexer/k8s/v2/ranking-config-configmap.yaml`, "on main, not applied" at 11-12 early). An absent ConfigMap blocks nothing but the twin then reads nothing. |
+| R3 | `STANCE_MAP_CONFIG_SOURCE=configmap` on CronJob `ranking-indexer-stance-map-shadow` | `postgres` | main `ranking-indexer/k8s/v2/stance-map-shadow-cronjob.yaml:85`; live | Same ConfigMap. |
+| R4 | `GRAPHQL_GATEWAY_FIELDS`: change `entity=shadow` to `entity=on`, leave every other entry `shadow`, on Deployment `api` | `entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow` | main `api/k8s/v2/api.yaml` (the `GRAPHQL_GATEWAY_FIELDS` entry); live. Modes `off|shadow|on` in `api/src/gateway/config.ts`. | Only `entity` has a registered geo-db resolver (`api/main.ts`, `ENTITY_FIELD`); `entities=on` and the rest would delegate to PostGraphile whatever their mode. `GRAPHQL_GATEWAY=on` is already set. A served `entity` still asks Postgres for the reverse id map (`gaiaIdsOf`, `api/src/geodb/idMap.ts`, migration 0116), so a Postgres read remains (§13.5). Timeout `GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS` default 250; a fallback is counted in `gaia_api_gateway_serve_fallback_total{field,reason}`. |
+| R5 | `GEODB_ENTITY_CARDS=on` on Deployment `api` (modes `off`, `shadow`, `on`; §1 and §4 above) | `shadow` | main `api/k8s/v2/api.yaml:250`; live | R4 evidence. The route falls back to Postgres per request on a timeout or error, so Postgres must still be up; watch `ApiGeoDbCardFallbackRateHigh` (more than 5% for 10 m). |
+
+R4 and R5 are separate switches on the same Deployment: do R4 first (it carries the user traffic and the fallback counter),
+R5 second. One `set env` per rollout, never both.
+
+Not in the table, on purpose. No serve flag exists on main for any of these, so there is nothing to flip on the day; each
+needs code first. They are the real D1 gap.
+
+- Scores and scoring: `GEODB_SCORES_SHADOW=1` and `GEODB_SCORING_READS=0` (scoring-service CronJob, `scoring-service/deployment/v2/cronjob.yaml:185`) are compare-only. `GEODB_SCORING_READS` "is never used for scoring" (`scoring-service/cronjob/main.py:147`). Setting it to `1` adds a comparison, not a cutover.
+- Ranked reads, type counts, ranking scores, entity columns, user votes, governance, versions, config records, feed runs, private readers, account weights and exclusions: `GEODB_RANKED_READS_SHADOW`, `GEODB_TYPE_COUNTS_SHADOW`, `GEODB_RANKING_SCORES_SHADOW`, `GEODB_ENTITY_COLUMNS_SHADOW`, `GEODB_USER_VOTES_TWIN`, `GEODB_GOVERNANCE_*`, `GEODB_VERSIONS_SHADOW`, `GEODB_*_CONFIG_SHADOW`, `GEODB_FEED_RUNS_SHADOW`, `GEODB_PRIVATE_READERS_SHADOW`, `GEODB_ACCOUNT_*_SHADOW`: background comparisons in `api/k8s/v2/api.yaml`, each commented "never changes a response".
+- Notification: `GEODB_OUTBOX_SHADOW_READ=1` on delivery-worker (live) and the notification-indexer twin compare; the source stays Postgres.
+- search-indexer: the `kg_applied_block` and `entities_for_spaces` twins (#1462, #1463) have no env flag in the manifest; a timer to compare a Space is pending #1523 (`SEARCH_INDEXER_GEODB_SHADOW_TIMER_SECS`, off by default, at least 30).
+- Feeder applied block: `GEODB_APPLIED_BLOCK` exists in `geodb-feeder/src/config.ts` and `appliedBlock.ts` but is in no manifest, so it is unset live; plan 22 gates it on ZP-FEEDER-APPLIED-BLOCK-ROLL, which needs Patrick's go.
+- The `*_RUST_COMPUTE` flags (`ranking-indexer/src/bin/*`, default off, in no manifest) run a Rust twin of a SQL job and compare; they do not move a source.
+
+### 13.3 Writer off-switches (`*_PG_WRITES`), in order
+
+Only after §13.2 R1 to R5 are healthy for the agreed soak. Order is derived from §16 of plan 22 and is **this draft's
+proposal, not plan 22's**: leaves first, the readers of KG tables before the writer of them, and `kg-indexer` last because
+notification-indexer and the ranking bins read `proposals_current`, `votes_count` and other KG tables (plan 22 section 16.1, "Reads only"
+rows) and those reads have no geo-db home yet (see the note after the table). Every flag is `0` to turn off, `1` (or unset) to turn on.
+
+| Step | Flag | Workloads that read it | Live now | Source | What stays running when off |
+| -- | -- | -- | -- | -- | -- |
+| W1 | `SCORING_WRITER_PG_WRITES=0` | CronJob `scoring-service` | `1` | main `scoring-service/deployment/v2/cronjob.yaml:115`; live | Off means no connection and no statement (#1451). Postgres reads for the run are unaffected. |
+| W2 | `RANKING_INDEXER_PG_WRITES=0` | Deployment `ranking-indexer` and every ranking-indexer CronJob: `account-exclusions-sync`, `account-weights`, `agenda-listings`, `backfill`, `feed-composition`, `feed-signals-freshness`, `feed-signals-sync`, `not-interested-sync`, `primer-claims`, `rolling-sweep`, `stance-map-shadow`, `topic-interest-refit`, `topic-interest-sweep`, `topic-ranking`, `topic-suggestions` | unset | code `ranking-indexer/src/storage.rs:58`, `pg_bin_writes.rs`; live (no env) | Two startup probes (`ranks.members`, `ranks.editors`) and the bins' SELECTs. The plpgsql write functions are skipped. |
+| W3 | `TOPOLOGY_INDEXER_PG_WRITES=0` | Deployment `topology-indexer` | unset | code `scoring-service/topology-indexer/src/storage.rs:50`; live | Nothing at startup. End-to-end not proven (plan 22 section 16.1). |
+| W4 | `VOTE_INDEXER_PG_WRITES=0` | Deployment `vote-indexer`, CronJobs `vote-indexer-comment-sweep`, `vote-indexer-new-entity-sweep` | unset | code `scoring-service/vote-indexer/src/storage.rs:51`; live | The batch is skipped but votes still count as processed (`vote_batch` skip counter). |
+| W5 | `HERMES_PIPELINE_PG_WRITES=0` | Deployment `hermes-pipeline` | unset | code `hermes-pipeline/src/cursor.rs:147`; live | Cursor reads. Needs R1 first (the warmer reads the block). Mock mode proves nothing; the flag rests on a unit test. |
+| W6 | `DELIVERY_WORKER_PG_WRITES=0`, then `NOTIFICATION_INDEXER_PG_WRITES=0` | Deployments `delivery-worker`, `notification-indexer` | unset | code `notification-service/delivery-worker/src/storage.rs:36`, `notification-indexer/src/storage.rs:104`; live | Delivery-worker's two heartbeat counts; notification-indexer's five SELECTs. Off means no claim UPDATE: nothing is delivered from Postgres. Do not do this until the outbox source has a geo-db home (D1 for the source is held; `GEODB_OUTBOX_SHADOW_READ` is compare-only). |
+| W7 | `KG_INDEXER_PG_WRITES=0` | Deployment `kg-indexer` | unset | code `kg-indexer/src/storage.rs:30`, `main.rs:1738`; live | `SET statement_timeout` per connection only. Offsets still commit. |
+
+Held back from this list, on purpose: `IPFS_CACHE_PG_WRITES` (live `1`, `hermes-ipfs-cache.yaml:134`) and `ATLAS_PG_WRITES`
+(unset live; `atlas/src/persistence.rs:326`). With no object-store home they would persist nothing: the code logs
+"... is off and no object-store mirror is configured" (`hermes-ipfs-cache/src/cache.rs:362`) and "checkpoints are not persisted
+anywhere" (`atlas/src/persistence.rs:375`). They wait for decision B (§13.5).
+
+Gaps this list cannot close by flag. The notification and ranking bins read KG tables, and `delivery-worker` claims
+from `notification_deliveries`. Turning W6 or W7 off leaves those reads on a Postgres that has stopped receiving
+data. Plan 22 section 16.2 says this in one line: "Cutover with all flags off still needs those reads to have a home." Treat
+W6 and W7 as not ready until a read for each exists; W1 to W5 can go on the day.
+
+### 13.4 Post-checks and the 10-minute rollback, per step
+
+After every step: wait 10 minutes, then run its check. A red check is a rollback, not a debate. Keep one shell open on the
+step's workload log. The rollback is a manifest revert PR (merge, then the §1 deploy for that service), with the command
+below as the fast path for the first ten minutes only; a hand-set value is lost at the next deploy-v2, so land the revert PR
+the same hour.
+
+| Step | Post-check (10 min) | Rollback within 10 minutes | After the rollback |
+| -- | -- | -- | -- |
+| R1 | `geodb_meta_block_shadow_total{reader="hermes_pipeline_warmer_block"}`: `failed` about 0, `mismatch` a small rate. The warmer advances (hermes-pipeline log, no stall). | `$K set env deployment/hermes-pipeline WARMER_BLOCK_SOURCE=postgres`; `$K rollout status deployment/hermes-pipeline` | Nothing to heal: a read source only. |
+| R2, R3 | CronJob runs after the flip finish; the "twin matches" log line (`feed_signals_sync.rs:118`, `stance_map_shadow.rs:120`); no run reads an empty config. | `$K set env cronjob/<name> FEED_SIGNAL_CONFIG_SOURCE=postgres` (or `STANCE_MAP_CONFIG_SOURCE`) | Nothing: the table row is still there. |
+| R4 | `gaia_api_gateway_serve_fallback_total{field="entity"}` rate under the agreed share; api p99 and 503 shed rate no worse than the hour before; no `GRAPHQL_VALIDATION_FAILED`. | `$K set env deployment/api GRAPHQL_GATEWAY_FIELDS="entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"`; `$K rollout status deployment/api` (or `rollout undo`) | Nothing. Confirm the value matches live main afterwards. |
+| R5 | `ApiGeoDbCardFallbackRateHigh` quiet; `sum by (reason) (rate(gaia_api_geodb_card_fallback_total[10m]))` low; `GeoDbFeederStalled` quiet. | `$K set env deployment/api GEODB_ENTITY_CARDS=shadow` (§5 says `off`, which un-mounts the route; use `shadow` to keep the evidence flowing) | Nothing. |
+| W1 | Next `scoring-service` run: no Postgres connection and a skip counter; the run finishes. The shadow `GEODB_SCORES_SHADOW` result stays within gate. | `$K set env cronjob/scoring-service SCORING_WRITER_PG_WRITES=1` | Postgres missed every run in the window. Re-run: `$K create job --from=cronjob/scoring-service scoring-catchup-$(date -u +%m%d%H%M)`. |
+| W2 | Per-pod skip counters on every ranking-indexer workload (`ranking_indexer_*skip*`, `storage.rs` metric); no new rows in the tables it writes; `GEODB_DERIVED_MIRROR` mirrors still land (collections keep growing). | `$K set env deployment/ranking-indexer RANKING_INDEXER_PG_WRITES=1`, and the same for each CronJob (`for cj in $($K get cronjob -o name \| grep ranking-indexer); do $K set env $cj RANKING_INDEXER_PG_WRITES=1; done`) | Rewind group `ranking-indexer-testnet-v1` to the flip time (below). CronJobs that recompute from Postgres catch up by their next run. |
+| W3 | Skip counter; consumer lag stays at 0. | `$K set env deployment/topology-indexer TOPOLOGY_INDEXER_PG_WRITES=1` | Rewind group `topology-indexer-testnet`. |
+| W4 | `vote_batch` skip counter rising with votes; lag 0; votes still reach geo-db (`GEODB_DERIVED_MIRROR`). | `$K set env deployment/vote-indexer VOTE_INDEXER_PG_WRITES=1` (and the two sweep CronJobs) | Rewind group `vote-indexer-testnet`. |
+| W5 | Skip counter on the cursor store; the warmer still advances (R1 holds). | `$K set env deployment/hermes-pipeline HERMES_PIPELINE_PG_WRITES=1` | The Postgres cursor is behind; the geo-db copy (`GEODB_CURSOR_MIRROR=1`, live) is the newer one. Restart the pipeline with `WARMER_BLOCK_SOURCE=postgres` only after the Postgres cursor is advanced by hand from the geo-db value. |
+| W6 | Deliveries still reach their destinations from the source named in §13.5; the outbox mirror counters stay clean. | `$K set env deployment/delivery-worker DELIVERY_WORKER_PG_WRITES=1`, then `notification-indexer`. | Rewind groups `notification-indexer-governance-testnet-v1` and `notification-indexer-knowledge-edits-testnet-v1`; undelivered rows in `notification_deliveries` are claimed on restart. |
+| W7 | `blocks_processed` still counts skipped blocks; the skip counter by site rises; `geodb_feeder_consumer_lag` stays 0 (the feeder, not kg-indexer, now feeds geo-db alone). | `$K set env deployment/kg-indexer KG_INDEXER_PG_WRITES=1` | Postgres has a hole from the flip to the revert. Rewind group `kg-indexer-v8-testnet` to the flip time (Kafka keeps `testnet.knowledge.edits` for 7 days): scale kg-indexer to 0, reset offsets to the timestamp, scale to 1 (the replay recipe in the memory note on Kafka consumer replay; SASL_SSL and PEM, not from this file). Writes are idempotent per block. |
+
+Group IDs above are the live `KAFKA_GROUP_ID` values read 11-11 (kg-indexer `kg-indexer-v8-testnet`, ranking-indexer
+`ranking-indexer-testnet-v1`, vote-indexer `vote-indexer-testnet`, topology-indexer `topology-indexer-testnet`,
+notification-indexer `..-governance-testnet-v1` and `..-knowledge-edits-testnet-v1`); re-read them on the day.
+
+If anything turns red and the cause is unclear: put every flag from the last step back first, then diagnose. If the
+whole day goes wrong, restore the pair from §9c, which reached serving in about 20 s; it is the only recovery source.
+
+### 13.5 What stays on Postgres until D2
+
+D2 is the table drop. Until it is called, the following keep their Postgres dependency even after the steps above. Source
+for each is plan 22 sections 16, 18, 20 and 23, and the manifests.
+
+- **The api itself.** PostGraphile answers every GraphQL field except a served `entity` (R4), and a served `entity` still
+  reads the reverse id map from Postgres (`api/src/geodb/idMap.ts`, migration 0116). The api, the response cache's SQL
+  and the PG pool admission control all remain.
+- **All reads in §13.2's "not in the table" list**, until code gives each a serve path.
+- **`ipfs_cache`, `atlas_checkpoints` and the edit blobs.** Home is object storage (B), a bucket and Secret decision that is
+  held. `IPFS_CACHE_PG_WRITES=1` and `ATLAS_PG_WRITES` (unset) stay on; `IPFS_CACHE_BLOB_SHADOW_READ=0` and
+  `ATLAS_CHECKPOINT_BLOB_SHADOW_READ=0` (live) stay off until B.
+- **`entity_ranking_scores`, 48.9M rows (D5)**, and the SQL and plpgsql functions that read it
+  (`refresh_entity_ranking_scores` is "partial", plan 22 section 23.3). `entity_type_ranking` and `entity_topic_ranking` wait for the
+  collection 1 repair (J).
+- **Rows with an open writer PR:** edit block meta (#1513), relation facets (#1493), fast-path execution (#1514, #1515, #1519),
+  relation positions (`GEODB_RELATION_POSITIONS=0` live; moves need pending #1517, and relations that predate the flag need
+  the seed Job, pending #1521).
+- **`DATABASE_URL` holders:** 32 workloads at 11-12 early: 11 Deployments (api, delivery-worker, geodb-card-replay, geodb-feeder,
+  hermes-ipfs-cache, hermes-pipeline, kg-indexer, notification-indexer, ranking-indexer, topology-indexer, vote-indexer), the
+  search-indexer StatefulSet and 20 CronJobs. The feeder and card-replay hold it only for the membership shadow compare and
+  the backfill mains (pending #1492 removes the feeder's). atlas uses `ATLAS_CHECKPOINT_DATABASE_URL`.
+- **The job-lease Role** (`GEODB_JOB_LEASE=0` live on seven CronJobs) and the lease-fenced refreshes: needs the Role applied by Patrick.
+- **CI that starts Postgres:** `api-integration-tests`, `api-unit-tests`, `atlas-e2e-tests` (plan 22 section 20.3).
+- **Postgres itself, the snapshots and the backfill Jobs** (`pg-row-counts-job.yaml` and the rest): Postgres is the source
+  for every backfill in §2 and for the 5 h rebuild path in §9, so it is not switched off until D2 and a restore drill.
+
+What this section does not decide: the date, the soak lengths, whether W6 and W7 go on the same day as W1 to W5, and
+whether R4 happens before or after #1520's shadows have their 24 h.

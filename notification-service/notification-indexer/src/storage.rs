@@ -588,10 +588,13 @@ impl Storage {
                 .fetch_optional(&self.pool)
                 .await?;
         if let Some(twin) = &self.twin {
-            twin.observe_proposal_exists(
+            twin.observe_proposal(
                 crate::geodb_twin::PROPOSER,
                 proposal_id,
-                result.is_some(),
+                result.map(|proposer| crate::geodb_twin::ProposalValues {
+                    proposer,
+                    space: None,
+                }),
             );
         }
         Ok(result)
@@ -643,10 +646,13 @@ impl Storage {
             .fetch_optional(&self.pool)
             .await?;
         if let Some(twin) = &self.twin {
-            twin.observe_proposal_exists(
+            twin.observe_proposal(
                 crate::geodb_twin::PROPOSER_AND_SPACE,
                 proposal_id,
-                row.is_some(),
+                row.as_ref().map(|r| crate::geodb_twin::ProposalValues {
+                    proposer: r.get("proposed_by"),
+                    space: Some(r.get("space_id")),
+                }),
             );
         }
         Ok(row.map(|r| (r.get("proposed_by"), r.get("space_id"))))
@@ -882,8 +888,42 @@ impl Storage {
         if let Some(twin) = &self.twin {
             let seen: Vec<(Uuid, i64)> = expired.iter().map(|e| (e.id, e.end_time)).collect();
             twin.observe_expired_proposals(min_end_time, &seen);
+            if twin.reverse_due() {
+                // Compare only, and off the poller's path: read Postgres's side of the window on
+                // a task of its own and hand it to the twin.
+                let (twin, pool) = (twin.clone(), self.pool.clone());
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    rt.spawn(async move {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_secs() as i64);
+                        let ids = Self::proposal_ids_ending_in(&pool, min_end_time, now).await;
+                        twin.observe_expired_reverse(min_end_time, now, ids);
+                    });
+                }
+            }
         }
         Ok(expired)
+    }
+
+    /// Every `proposals_current` id whose `end_time` is in `[floor, now)`, in any state: the
+    /// Postgres side of the twin's reverse expiry check. `None` when the read failed or the set
+    /// is larger than the twin takes.
+    async fn proposal_ids_ending_in(pool: &PgPool, floor: i64, now: i64) -> Option<Vec<Uuid>> {
+        let limit = crate::geodb_twin::MAX_REVERSE_SQL_IDS as i64 + 1;
+        let rows = sqlx::query(
+            "SELECT id FROM proposals_current WHERE end_time >= $1 AND end_time < $2 LIMIT $3",
+        )
+        .bind(floor)
+        .bind(now)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .ok()?;
+        if rows.len() as i64 >= limit {
+            return None;
+        }
+        Some(rows.iter().map(|r| r.get("id")).collect())
     }
 
     /// Delete notification rows older than `retention_days`, in batches of
@@ -1050,14 +1090,18 @@ impl Storage {
     /// with `.ok()` the failure was invisible — names just silently stopped
     /// appearing in notification payloads.
     pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
-        sqlx::query_scalar::<_, String>(
+        let name = sqlx::query_scalar::<_, String>(
             "SELECT name FROM proposals_current WHERE id = $1 AND name IS NOT NULL",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
-        .flatten()
+        .flatten();
+        if let Some(twin) = &self.twin {
+            twin.observe_proposal_name(proposal_id, name.as_deref());
+        }
+        name
     }
 
     /// Look up current vote tallies for a proposal.
@@ -1066,14 +1110,18 @@ impl Storage {
     /// the tallies are version-scoped under governance-v2, and this call also
     /// swallows errors, so the old query degraded to "no tallies" in silence.
     pub async fn lookup_vote_tallies(&self, proposal_id: Uuid) -> Option<(i64, i64, i64)> {
-        sqlx::query_as::<_, (i64, i64, i64)>(
+        let tallies = sqlx::query_as::<_, (i64, i64, i64)>(
             "SELECT yes_count, no_count, abstain_count FROM proposals_current WHERE id = $1",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
         .await
         .ok()
-        .flatten()
+        .flatten();
+        if let Some(twin) = &self.twin {
+            twin.observe_vote_tallies(proposal_id, tallies);
+        }
+        tallies
     }
 
     /// Get the latest block number written by the kg-indexer.
@@ -1081,14 +1129,18 @@ impl Storage {
     /// Used by the block delay logic to wait for the kg-indexer to catch up
     /// before processing notifications (so names/metadata are populated).
     pub async fn lookup_latest_block(&self) -> Option<u64> {
-        sqlx::query_scalar::<_, i64>(
+        let block = sqlx::query_scalar::<_, i64>(
             "SELECT MAX(created_at_block::bigint) FROM proposals WHERE created_at_block != '0'",
         )
         .fetch_optional(&self.pool)
         .await
         .ok()
         .flatten()
-        .map(|b| b as u64)
+        .map(|b| b as u64);
+        if let Some(twin) = &self.twin {
+            twin.observe_latest_block(block);
+        }
+        block
     }
 
     // -----------------------------------------------------------------------
@@ -1163,6 +1215,39 @@ impl Storage {
                 already_notified: r.get("already_notified"),
             })
             .collect())
+    }
+
+    /// Whether an `entity_votes_threshold` notification already exists for this `(entity, space)` at
+    /// `threshold`: the `already_notified` of [`find_entity_vote_counts_since`](Self::find_entity_vote_counts_since)
+    /// for one row, for the geo-db-served read (`crate::vote_updates`), which has no Postgres row to
+    /// carry it.
+    #[instrument(
+        name = "notification_indexer.storage.vote_threshold_already_notified",
+        skip(self)
+    )]
+    pub async fn vote_threshold_already_notified(
+        &self,
+        entity_id: Uuid,
+        space_id: Uuid,
+        threshold: i64,
+    ) -> Result<bool, StorageError> {
+        let found: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM notification_outbox o
+                WHERE o.event_type = 'entity_votes_threshold'
+                  AND (o.payload->>'entity_id')::uuid = $1
+                  AND (o.payload->>'vote_space_id')::uuid = $2
+                  AND (o.payload->>'threshold')::bigint = $3
+            )
+            "#,
+        )
+        .bind(entity_id)
+        .bind(space_id)
+        .bind(threshold)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(found)
     }
 
     /// Read a named poll cursor. Returns `None` if the poller has never run.

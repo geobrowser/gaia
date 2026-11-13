@@ -99,6 +99,8 @@ export const UNCOMPARED_REASONS = [
 	"mirror_newer",
 	/** `metas`: a `filter` / `condition` / paging argument, so which indexers the page holds is PostGraphile's. */
 	"meta_filter",
+	/** `relation` / `relations`: the to-space and verified flag are selected but could not be compared (the relation's id, or geo-db's claims read, was missing). */
+	"relation_facets",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

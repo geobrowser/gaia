@@ -8,13 +8,17 @@
 //! the ledger key (32 bytes) then the webhook id (16). `complete` is not epoch-fenced (a stale
 //! epoch still completes), so an acknowledgement after a lease lapsed is harmless.
 
-use crate::{Config, MirrorError, PAYLOAD_MAX, Worker};
+use crate::{Config, ENTER_ANSWER_MAX, MirrorError, PAYLOAD_MAX, Worker};
 
 /// The longest delivery key: 32 ledger bytes and a 16 byte webhook id.
 pub const KEY_BYTES: usize = 48;
 
 /// The most units one claim asks for. A row is at most `2 * PAYLOAD_MAX` hex digits and a head.
 pub const CLAIM_MAX: u16 = 16;
+
+/// The longest acknowledgement body: a `-code=<Token> ...` refusal can run to the enter answer's
+/// bound, so an ack is held to the same one.
+const ACK_ANSWER_MAX: usize = ENTER_ANSWER_MAX;
 
 const ROW_MAX: usize = 2 * KEY_BYTES + 2 * PAYLOAD_MAX + 64;
 
@@ -83,6 +87,16 @@ pub fn claim_line(limit: u16, lease_ms: u64) -> String {
 /// The `complete` request line for a claimed unit.
 pub fn complete_line(key: &[u8; KEY_BYTES], epoch: u64) -> String {
     format!("complete\t{}\t{epoch}\n", hex(key))
+}
+
+/// The `retry` request line: back to `pending` after `delay_ms`, `attempts + 1`. Epoch-fenced.
+pub fn retry_line(key: &[u8; KEY_BYTES], epoch: u64, delay_ms: u64) -> String {
+    format!("retry\t{}\t{epoch}\t{delay_ms}\n", hex(key))
+}
+
+/// The `fail` request line: `failed` for good, `attempts + 1`. Epoch-fenced.
+pub fn fail_line(key: &[u8; KEY_BYTES], epoch: u64) -> String {
+    format!("fail\t{}\t{epoch}\n", hex(key))
 }
 
 /// The rows of a claim's answer. An empty body is no units.
@@ -173,7 +187,27 @@ impl OutboxReader {
     pub async fn complete(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
         let body = self
             .worker
-            .call_replaying(&complete_line(&c.key, c.epoch), 64)
+            .call_replaying(&complete_line(&c.key, c.epoch), ACK_ANSWER_MAX)
+            .await?;
+        parse_ack(&body)
+    }
+
+    /// Returns a claimed unit to `pending`, due after `delay_ms`, counting one failed try. A
+    /// lapsed lease answers [`Ack::LeaseLost`] and changes nothing (plan 10.16 W10).
+    pub async fn retry(&mut self, c: &Claimed, delay_ms: u64) -> Result<Ack, MirrorError> {
+        let body = self
+            .worker
+            .call_replaying(&retry_line(&c.key, c.epoch, delay_ms), ACK_ANSWER_MAX)
+            .await?;
+        parse_ack(&body)
+    }
+
+    /// Ends a claimed unit as `failed`, counting one failed try. A lapsed lease answers
+    /// [`Ack::LeaseLost`] and changes nothing.
+    pub async fn fail(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
+        let body = self
+            .worker
+            .call_replaying(&fail_line(&c.key, c.epoch), ACK_ANSWER_MAX)
             .await?;
         parse_ack(&body)
     }
@@ -294,6 +328,51 @@ mod tests {
             payload: vec![],
         };
         assert_eq!(r.complete(&c).await.unwrap(), Ack::Ok);
+    }
+
+    #[test]
+    fn retry_and_fail_lines_have_the_wire_shape() {
+        let k = format!("{}{}", LEDGER, "09".repeat(16));
+        assert_eq!(
+            retry_line(&key(), 3, 30_000),
+            format!("retry\t{k}\t3\t30000\n")
+        );
+        assert_eq!(fail_line(&key(), 3), format!("fail\t{k}\t3\n"));
+    }
+
+    #[tokio::test]
+    async fn retry_and_fail_send_their_verbs_and_parse_the_ack() {
+        let script = "echo ready; read -r a; case \"$a\" in retry*3*30000) printf '+8\\nack: ok\\n';; \
+                      *) printf '+13\\nack: unknown\\n';; esac; read -r b; \
+                      case \"$b\" in fail*3) printf '+15\\nack: lease_lost\\n';; \
+                      *) printf '+13\\nack: unknown\\n';; esac";
+        let mut r = reader(script);
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 3,
+            payload: vec![],
+        };
+        assert_eq!(r.retry(&c, 30_000).await.unwrap(), Ack::Ok);
+        assert_eq!(r.fail(&c).await.unwrap(), Ack::LeaseLost);
+    }
+
+    #[tokio::test]
+    async fn a_long_coded_refusal_of_an_ack_is_a_refusal_and_keeps_the_child() {
+        let body = format!("code=Busy {}", "y".repeat(200));
+        let mut r = reader(&format!(
+            "echo ready; while IFS= read -r a; do printf -- '-{}\\n%s' '{body}'; done",
+            body.len()
+        ));
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 1,
+            payload: Vec::new(),
+        };
+        for _ in 0..2 {
+            assert!(matches!(r.complete(&c).await, Err(MirrorError::Refused(_))));
+        }
     }
 
     #[tokio::test]
