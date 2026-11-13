@@ -29,3 +29,102 @@ tests:
         values: '0x60'
     alert_rule_test:
       - {eval_time: 45m, alertname: GeoDbVotesCountMirrorLag, exp_alerts: []}
+
+  # Claim-region alerts. Idle baseline is 1 claim in query_eval (the live room's), 0 elsewhere.
+  - name: claims at the idle baseline stay silent, even when in_use equals its own high-water mark
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_in_use{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1x60'
+      - series: 'geodb_claims_in_use_max{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1x60'
+      - series: 'geodb_claims_in_use{namespace="gaia", job="geodb", claim_class="construction"}'
+        values: '0x60'
+      - series: 'geodb_claims_in_use_max{namespace="gaia", job="geodb", claim_class="construction"}'
+        values: '0x60'
+      - series: 'geodb_claims_refused_total{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '0x60'
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="live"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbClaimsNearPeak, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbClaimsRefused, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbClaimParkedSustained, exp_alerts: []}
+
+  - name: a busy spell that drains back to baseline stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_in_use{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1 8 8 8 8 8 1x50'
+      - series: 'geodb_claims_in_use_max{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1 8x55'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbClaimsNearPeak, exp_alerts: []}
+
+  - name: claims ramped to the peak and held fire after 10m
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_in_use{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1 2 4 6 8x40'
+      - series: 'geodb_claims_in_use_max{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '1 2 4 6 8x40'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: GeoDbClaimsNearPeak, exp_alerts: []}
+      - eval_time: 20m
+        alertname: GeoDbClaimsNearPeak
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, claim_class: query_eval}
+            exp_annotations:
+              summary: geo-db's query_eval claim region has held its peak number of claims for 10 minutes
+              description: >-
+                At least 4 claims held, within 10% of the most this process has held at once, for 10m. Requests
+                are done in seconds, so claims that stay held are leaked or lent to parked requests (ISS-675-721:
+                parked records filled the region and a running request waited 10s for its own claim). Check
+                geodb_requests_claim_parked_total and geodb_claims_refused_total; a serve restart clears it.
+
+  - name: a refusal burst fires and clears once the window passes
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_refused_total{namespace="gaia", job="geodb", claim_class="maintenance"}'
+        values: '0x5 3x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GeoDbClaimsRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, claim_class: maintenance}
+            exp_annotations:
+              summary: geo-db refused a maintenance claim in the last 15m
+              description: >-
+                An acquisition found no room and returned ResourceExhausted, so a request failed or a job
+                backed off. Look at geodb_claims_in_use{claim_class} against geodb_claims_in_use_max and at
+                geodb_requests_claim_parked_total; the region is full or held by parked requests (ISS-675-721).
+      - {eval_time: 40m, alertname: GeoDbClaimsRefused, exp_alerts: []}
+
+  - name: a sustained park rate fires after 10m, a short burst does not
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="query"}'
+        values: '0+30x40'
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="live"}'
+        values: '0 100 100x39'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GeoDbClaimParkedSustained
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, class: query}
+            exp_annotations:
+              summary: geo-db is parking query requests for want of a claim, steadily
+              description: >-
+                Requests wait for a claim in the region instead of taking one. A burst is normal; ten minutes
+                of it means the region is too small for the load or claims are held too long. Compare
+                geodb_claims_in_use{claim_class} with its _max and check geodb_claims_refused_total.
+
+  - name: absent claim series (serve before 2103bd8335) fire nothing
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_rows{namespace="gaia", job="geodb"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbClaimsNearPeak, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbClaimsRefused, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbClaimParkedSustained, exp_alerts: []}
