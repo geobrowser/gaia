@@ -80,6 +80,7 @@ mod tests {
             space_id: u(s),
             score,
             position,
+            ballots: 1,
         }
     }
 

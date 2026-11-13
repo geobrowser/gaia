@@ -71,6 +71,11 @@ pub async fn recompute_block(
     now: DateTime<Utc>,
     storage: &Storage,
 ) -> Result<(), IndexerError> {
+    // One recompute of a block at a time (the consumer and the hourly
+    // backfill can both reach it). Released when `lock` commits below, or is
+    // dropped on any early return or error.
+    let lock = storage.lock_block_for_recompute(block_id).await?;
+
     let block = match storage.get_ranking_block(block_id).await? {
         Some(block) => block,
         None => {
@@ -105,7 +110,8 @@ pub async fn recompute_block(
     };
     let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped);
 
-    // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space).
+    // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space),
+    //    or per entity for an average-mode block.
     let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();
     let items = storage.get_items_for_rankings(&eligible_ids).await?;
     let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
@@ -129,7 +135,11 @@ pub async fn recompute_block(
             half_life_hours: f64::from(frequency_hours),
             now,
         });
-    let scores = scoring::aggregate(&ballots, scoring::NORM_LO, scoring::NORM_HI, decay);
+    // The block's own row cap and scoring mode (GEO-3676); the default for a
+    // block with no `ranks.ranking_block_config` row is 200 rows, summed.
+    let config = storage.block_scoring(block_id).await?;
+    let scores =
+        scoring::aggregate_with(&ballots, scoring::NORM_LO, scoring::NORM_HI, decay, config);
     storage.replace_ranking_scores(block_id, &scores).await?;
 
     // 4. Publish: project RANK_POSITION relations (+ the integer rank-position
@@ -146,6 +156,11 @@ pub async fn recompute_block(
             &contributing,
         )
         .await?;
+    // Only once the projection is written: a config change is not applied
+    // until the public graph shows it.
+    storage.mark_block_scoring_applied(block_id, config).await?;
+
+    lock.commit().await?;
 
     tracing::debug!(
         block_id = %block_id,
