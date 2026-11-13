@@ -67,6 +67,9 @@ export const spaceIds = (listing: string): string[] =>
 		.map((l) => l.split("\t")[0] ?? "")
 		.filter((s) => /^[0-9a-f]{32}$/.test(s))
 
+/** geo-db was not open to answer a founding, so a refusal of it says nothing about the Space cap. Retry it. */
+export class NodeOpeningError extends Error {}
+
 export const SPACES_PROBE_TIMEOUT_MS = 3_000
 
 export class GeoDb {
@@ -104,11 +107,29 @@ export class GeoDb {
 	 * Found the Space `nonce` names under the node's sealer, online (wire FoundSpace through `geodb-client found`).
 	 * Idempotent: an already-founded Space answers the same id. Needs the writer principal's `publish` policy to
 	 * cover the id (the binding gives it `publish=*`).
+	 *
+	 * The caller reads a `ResourceExhausted` failure as the Space cap (`ensureSpace` refuses the Space for good), but
+	 * the client prints the same `refused: ResourceExhausted ResourceExhausted` for a node still opening its store
+	 * after its own ~30 s of dials. So an exhausted answer is believed only once `spaces` shows the node open and a
+	 * second founding is refused again; a node that is not open yet raises `NodeOpeningError`, which names no
+	 * `ResourceExhausted` and so is retried like any outage.
 	 */
 	async found(sealer: string, nonce: string): Promise<string> {
+		const first = await this.foundOnce(sealer, nonce)
+		if (typeof first !== "object") return first
+		if (classify(first.message) !== "exhausted") throw first
+		if ((await this.spaces()) === null) {
+			throw new NodeOpeningError(`found ${nonce}: geo-db is not answering yet (still opening its store); not the Space cap`)
+		}
+		const second = await this.foundOnce(sealer, nonce)
+		if (typeof second !== "object") return second
+		throw second
+	}
+
+	private async foundOnce(sealer: string, nonce: string): Promise<string | Error> {
 		const r = await this.run(["found", "--sealer", sealer, nonce], {timeoutMs: 60_000})
 		const id = /^founded: ([0-9a-f]{32})\s*$/m.exec(r.out)?.[1]
-		if (r.rc !== 0 || !id) throw new Error(`found ${nonce}: rc=${r.rc} ${(r.err + r.out).slice(-300)}`)
+		if (r.rc !== 0 || !id) return new Error(`found ${nonce}: rc=${r.rc} ${(r.err + r.out).slice(-300)}`)
 		return id
 	}
 
