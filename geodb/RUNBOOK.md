@@ -2226,6 +2226,43 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
 `GeoDbOutboxMirrorBacklog` (`geodb_outbox_mirror_backlog` above 0 for 10 m) and `GeoDbOutboxMirrorBacklogDropped`
 (`geodb_outbox_mirror_backlog_dropped_total` or `geodb_outbox_mirror_backlog_expired_total` rose in 15 m).
 
+#### GeoDbVotesCountMirrorLag (geodb-serve-alerts.yaml, gaia#1555)
+
+Expression: `max(vote_indexer_votes_count_mirror_lag_seconds{namespace="gaia"}) > 600` for 15 m (warning, service `vote-indexer`).
+The gauge is the newest `votes_count.updated_at` the vote-indexer's mirror was asked to send, minus the newest one whose rows
+(collection 26 and its collection 33 pair) geo-db fully acknowledged, set after every mirror call. It is 0 while
+`GEODB_DERIVED_MIRROR` is off, and it holds its last value through a quiet spell: a stall that starts with no vote after it shows up
+as the next vote's lag, not as a rising line. Firing means geo-db's collections 26 and 33 trail Postgres (the notification poller and
+any vote-tally read from geo-db are stale). Postgres is unaffected. Source: `scoring-service/vote-indexer/src/votes_count_mirror.rs`.
+
+Read-only checks, in order of likelihood (`$K` = `kubectl --context do-nyc2-geo-testnet-k8s -n gaia`; kubectl is flaky, retry two or
+three times; Prometheus through the apiserver proxy as in section 12). Never read Secret contents.
+
+1. The mirror workload is stalled or restarting (the vote-indexer Deployment, metrics port 9464).
+   - `$K get pod -l app=vote-indexer -o wide`: restart count, age, `Ready`. A restart re-copies the whole table (the start-up
+     snapshot), so the lag spikes while it runs and falls when it ends; give it time before acting.
+   - `$K logs deploy/vote-indexer --tail=200` for mirror errors. `increase(vote_indexer_votes_count_mirror_rows_total{collection=~"26|33"}[10m])`
+     should be above 0 while votes arrive; flat while `vote_indexer_votes_count_mirror_source_newest_updated_us` is moving means the
+     mirror is not delivering.
+   - `kube_pod_container_status_last_terminated_reason{namespace="gaia",pod=~"vote-indexer.*"}` for OOMKilled.
+2. geo-db serve is down or its pipe is refused.
+   - `$K get pod geodb-0` and `$K logs geodb-0 --tail=100`; `up{job="geodb"}`.
+   - `geodb_derived_mirror_errors_total`, `_unacknowledged_total` and `_dropped_total` with `{table="votes_count"}`: a rising
+     `errors` or `unacknowledged` with serve up points at a refused put (collection 33 needs a geodb client at or after 19b75f0596;
+     an older node refuses it and the rest of the call is dropped and counted).
+   - `GeoDbFeederDown` or `GeoDbFeederStalled` firing at the same time confirms serve, not the vote-indexer.
+3. The source table is not advancing (no new votes). This is the benign case:
+   `vote_indexer_votes_count_mirror_source_newest_updated_us` is flat and `..._last_applied_updated_us` is equal or close to it.
+   Because the gauge holds its last value, a high reading after a quiet spell is only real until the next vote. Check the
+   vote-indexer's Kafka consumer lag (`sum(kafka_consumergroup_lag{consumergroup=~".*vote-indexer.*"})`) and whether votes are being
+   produced at all.
+
+What not to do:
+- Never restart serve (`statefulset/geodb`, `geodb-0`) during a seed or replay: it drops the connection the feeder retries against
+  and can leave the seed to be re-run. Wait for the seed to finish first.
+- Do not restart the vote-indexer to clear the lag unless cause 1 is shown: the restart re-copies the whole table and adds load.
+- Do not flip `GEODB_DERIVED_MIRROR` or any serve, claim-source or read flag to silence the alert.
+
 ## 7. Operating notes
 
 - Crash recovery: the feeder resumes from its stored offset (`/data/feeder/offsets.json`), and an
