@@ -323,6 +323,18 @@ describe("runReplayDeadLetters --apply", () => {
 			expect(r2.sent).toBe(40)
 		})
 
+		it("exempts every entity the run created or set, not only those its adds and unsets name (a created, named entity is newer too)", async () => {
+			const ents = Array.from({length: 4}, (_, i) => h(0x1100 + i))
+			const intents = [...ents.flatMap((e) => [create(e), `.{ .set = .{ .entity = "${e}", .property = "${h(0x6001)}", .value = .{ .text = "n" } } }`]), ...ents.map((_, i) => retract(h(0x5100 + i))), ...ents.map((e, i) => add(e, h(0x6002), ents[(i + 1) % 4] as string, h(0x4100 + i)))]
+			const record = `${intents.map((i) => JSON.stringify(editLine(98656, i))).join("\n")}\n`
+			const first = harness({record, chunk: 4, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			expect((await runReplayDeadLetters(first.deps, args)).outcome).toBe("failed")
+			const again = harness({record, chunk: 4, done: first.done.join(""), rows: await newer(ents)})
+			const r2 = await runReplayDeadLetters(again.deps, args)
+			expect(r2.outcome).toBe("applied")
+			expect(r2.sent).toBe(8)
+		})
+
 		it("resends the chunk that was in flight when the process died, under the same key", async () => {
 			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
 			await runReplayDeadLetters(first.deps, args)
