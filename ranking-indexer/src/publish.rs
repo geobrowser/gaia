@@ -87,6 +87,7 @@ mod tests {
             space_id: Uuid::from_u128(space),
             score,
             position,
+            ballots: 1,
         }
     }
 

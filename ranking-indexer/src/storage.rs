@@ -17,7 +17,7 @@ use crate::error::IndexerError;
 use crate::metrics::PgWriteSite;
 use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
-use crate::scoring::ScoreRow;
+use crate::scoring::{BlockScoring, ScoreRow, ScoringMode};
 
 /// Resolve one submission-window bound from separately queried legacy/datetime
 /// columns: the datetime property (GEO-2253) wins per-bound; the legacy date
@@ -131,19 +131,20 @@ impl Storage {
         .await?;
         let mut out = Vec::with_capacity(blocks.len());
         for block in blocks {
-            let rows = sqlx::query_as::<_, (Uuid, Uuid, f64, i32)>(
-                "SELECT entity_id, space_id, score, position FROM ranks.ranking_scores \
+            let rows = sqlx::query_as::<_, (Uuid, Uuid, f64, i32, i32)>(
+                "SELECT entity_id, space_id, score, position, ballots FROM ranks.ranking_scores \
                  WHERE block_id = $1",
             )
             .bind(block)
             .fetch_all(&self.pool)
             .await?
             .into_iter()
-            .map(|(entity_id, space_id, score, position)| ScoreRow {
+            .map(|(entity_id, space_id, score, position, ballots)| ScoreRow {
                 entity_id,
                 space_id,
                 score,
                 position,
+                ballots,
             })
             .collect();
             out.push((block, rows));
@@ -553,6 +554,107 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// Hold `block_id`'s recompute lock until the returned transaction ends
+    /// (commit, rollback, or drop on an error path). `recompute_block` takes it
+    /// first, so the live consumer and the hourly backfill never recompute the
+    /// same block at once (GEO-3676). Without it, one run could read the old
+    /// config and write its scores after another run applied the new one, and
+    /// the applied marker would then say "applied" over old-mode scores; the
+    /// scores and the projection could also come from different runs.
+    ///
+    /// A transaction-scoped advisory lock in the two-key space, keyed by
+    /// `(hashtext('ranks.recompute_block'), hashtext(block_id))`; the two-key
+    /// space does not overlap the one-key locks other jobs take. It holds one
+    /// pooled connection idle in a transaction for the length of a recompute.
+    pub async fn lock_block_for_recompute(
+        &self,
+        block_id: Uuid,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, IndexerError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtext('ranks.recompute_block'), hashtext($1::text))",
+        )
+        .bind(block_id)
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
+    }
+
+    /// A block's scoring shape from `ranks.ranking_block_config` (GEO-3676):
+    /// its row cap and scoring mode. No row means the default every block had
+    /// before: `MAX_PROJECTION_ROWS` rows, summed.
+    pub async fn block_scoring(&self, block_id: Uuid) -> Result<BlockScoring, IndexerError> {
+        let row: Option<(i32, String)> = sqlx::query_as(
+            "SELECT max_rows, scoring_mode FROM ranks.ranking_block_config WHERE block_id = $1",
+        )
+        .bind(block_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((max_rows, mode)) = row else {
+            return Ok(BlockScoring::default());
+        };
+        // The table's CHECKs make both of these impossible. If one slips past
+        // anyway, score the block the default way and say so: an error here would
+        // be retried forever and stall the consumer on this block's edits.
+        match (ScoringMode::parse(&mode), usize::try_from(max_rows)) {
+            (Some(mode), Ok(max_rows)) if max_rows > 0 => Ok(BlockScoring { max_rows, mode }),
+            _ => {
+                tracing::warn!(
+                    block_id = %block_id,
+                    max_rows,
+                    scoring_mode = %mode,
+                    "ranks.ranking_block_config row is invalid; scoring the block with the default"
+                );
+                Ok(BlockScoring::default())
+            }
+        }
+    }
+
+    /// Record that a recompute applied `config` to `block_id`, so
+    /// [`Self::find_pending_block_configs`] stops returning it. Writes the
+    /// values the recompute actually used, not the row's current ones: a config
+    /// edited mid-recompute stays pending. A block with no config row is a
+    /// no-op. Skipped with the scores themselves when Postgres writes are off.
+    pub async fn mark_block_scoring_applied(
+        &self,
+        block_id: Uuid,
+        config: BlockScoring,
+    ) -> Result<(), IndexerError> {
+        if self.skip_pg_write(PgWriteSite::ReplaceRankingScores) {
+            return Ok(());
+        }
+        sqlx::query(
+            "UPDATE ranks.ranking_block_config \
+             SET applied_max_rows = $2, applied_scoring_mode = $3, applied_at = now() \
+             WHERE block_id = $1 \
+               AND (applied_max_rows IS DISTINCT FROM $2 OR applied_scoring_mode IS DISTINCT FROM $3)",
+        )
+        .bind(block_id)
+        .bind(i32::try_from(config.max_rows).unwrap_or(i32::MAX))
+        .bind(config.mode.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Registered blocks whose `ranks.ranking_block_config` row was added or
+    /// changed since a recompute last applied it (GEO-3676). Nothing else
+    /// would recompute them: a config row is not an edit, so the consumer never
+    /// sees it, and the block may get no new ballot for days. Used by
+    /// `bin/backfill_blocks.rs` (hourly), which recomputes each one.
+    pub async fn find_pending_block_configs(&self) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT c.block_id FROM ranks.ranking_block_config c \
+             WHERE (c.applied_max_rows IS DISTINCT FROM c.max_rows \
+                    OR c.applied_scoring_mode IS DISTINCT FROM c.scoring_mode) \
+               AND EXISTS (SELECT 1 FROM ranks.ranking_blocks b WHERE b.id = c.block_id) \
+             ORDER BY c.block_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Entities typed `Rank` in the indexed public graph that never made it
     /// into `ranks.rankings` — the identical split-edit gap as
     /// `find_unregistered_ranking_blocks`, but for Rank submissions.
@@ -888,16 +990,24 @@ impl Storage {
             .bind(block_id)
             .execute(&mut *tx)
             .await?;
-        for r in rows {
+        // One statement for the whole block: a 2,000-row block (GEO-3676) would
+        // otherwise be 2,000 round trips inside this transaction.
+        if !rows.is_empty() {
+            let entity_ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+            let space_ids: Vec<Uuid> = rows.iter().map(|r| r.space_id).collect();
+            let scores: Vec<f64> = rows.iter().map(|r| r.score).collect();
+            let positions: Vec<i32> = rows.iter().map(|r| r.position).collect();
+            let ballots: Vec<i32> = rows.iter().map(|r| r.ballots).collect();
             sqlx::query(
-                "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position) \
-                 VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position, ballots) \
+                 SELECT $1, * FROM UNNEST($2::uuid[], $3::uuid[], $4::float8[], $5::int4[], $6::int4[])",
             )
             .bind(block_id)
-            .bind(r.entity_id)
-            .bind(r.space_id)
-            .bind(r.score)
-            .bind(r.position)
+            .bind(&entity_ids)
+            .bind(&space_ids)
+            .bind(&scores)
+            .bind(&positions)
+            .bind(&ballots)
             .execute(&mut *tx)
             .await?;
         }
@@ -1016,68 +1126,84 @@ impl Storage {
             .await?;
         }
 
-        // 4. Insert the ordered RANK_POSITION relations + their value rows.
-        for r in rows {
+        // 4. Insert the ordered RANK_POSITION relations + their value rows, one
+        //    statement each for the whole block (a 2,000-row block would
+        //    otherwise be 4,000 round trips holding this transaction's locks).
+        //    Every id derives from (block, entity, space), unique per row, so
+        //    no statement can touch the same row twice.
+        if !rows.is_empty() {
+            let relation_ids: Vec<Uuid> = rows.iter().map(|r| r.relation_id).collect();
+            let reified_ids: Vec<Uuid> = rows.iter().map(|r| r.reified_entity_id).collect();
+            let to_entity_ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+            let to_space_ids: Vec<Uuid> = rows.iter().map(|r| r.space_id).collect();
+            let positions: Vec<String> = rows.iter().map(|r| r.position.clone()).collect();
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, to_space_id, space_id, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 SELECT u.id, u.entity_id, $3, $4, $5, u.to_entity_id, u.to_space_id, $5, u.position \
+                 FROM UNNEST($1::uuid[], $2::uuid[], $6::uuid[], $7::uuid[], $8::text[]) \
+                   AS u(id, entity_id, to_entity_id, to_space_id, position) \
                  ON CONFLICT (id) DO UPDATE SET \
                    entity_id = EXCLUDED.entity_id, \
                    to_entity_id = EXCLUDED.to_entity_id, \
                    to_space_id = EXCLUDED.to_space_id, \
                    position = EXCLUDED.position",
             )
-            .bind(r.relation_id)
-            .bind(r.reified_entity_id)
+            .bind(&relation_ids)
+            .bind(&reified_ids)
             .bind(rank_position)
             .bind(block_id)
             .bind(block_space_id)
-            .bind(r.entity_id)
-            .bind(r.space_id)
-            .bind(block_space_id)
-            .bind(&r.position)
+            .bind(&to_entity_ids)
+            .bind(&to_space_ids)
+            .bind(&positions)
             .execute(&mut *tx)
             .await?;
 
             // `values.id` is a text column — serialize the UUID at the bind boundary.
+            let value_ids: Vec<String> = rows.iter().map(|r| r.value_row_id.to_string()).collect();
+            let values: Vec<i64> = rows.iter().map(|r| r.value).collect();
             sqlx::query(
                 "INSERT INTO values (id, entity_id, space_id, property_id, integer) \
-                 VALUES ($1, $2, $3, $4, $5) \
+                 SELECT u.id, u.entity_id, $3, $4, u.value \
+                 FROM UNNEST($1::text[], $2::uuid[], $5::int8[]) AS u(id, entity_id, value) \
                  ON CONFLICT (id) DO UPDATE SET \
                    entity_id = EXCLUDED.entity_id, \
                    space_id = EXCLUDED.space_id, \
                    property_id = EXCLUDED.property_id, \
                    integer = EXCLUDED.integer",
             )
-            .bind(r.value_row_id.to_string())
-            .bind(r.reified_entity_id)
+            .bind(&value_ids)
+            .bind(&reified_ids)
             .bind(block_space_id)
             .bind(value_prop)
-            .bind(r.value)
+            .bind(&values)
             .execute(&mut *tx)
             .await?;
         }
 
         // 5. Insert Aggregated rankings provenance relations (block -> submission).
-        for ranking_id in contributing_rankings {
-            let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
-            // Provenance is a deterministic block -> submission mapping; on a
-            // recompute the same ids re-resolve to the same row, so a conflict
-            // just means it's already present.
+        //    Provenance is a deterministic block -> submission mapping; on a
+        //    recompute the same ids re-resolve to the same row, so a conflict
+        //    just means it's already present.
+        if !contributing_rankings.is_empty() {
+            let (relation_ids, reified_ids): (Vec<Uuid>, Vec<Uuid>) = contributing_rankings
+                .iter()
+                .map(|ranking_id| provenance_ids(block_id, *ranking_id))
+                .unzip();
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, space_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 SELECT u.id, u.entity_id, $3, $4, $5, u.to_entity_id, $5 \
+                 FROM UNNEST($1::uuid[], $2::uuid[], $6::uuid[]) AS u(id, entity_id, to_entity_id) \
                  ON CONFLICT (id) DO NOTHING",
             )
-            .bind(relation_id)
-            .bind(reified)
+            .bind(&relation_ids)
+            .bind(&reified_ids)
             .bind(aggregated)
             .bind(block_id)
             .bind(block_space_id)
-            .bind(ranking_id)
-            .bind(block_space_id)
+            .bind(contributing_rankings)
             .execute(&mut *tx)
             .await?;
         }

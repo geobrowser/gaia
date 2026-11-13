@@ -166,7 +166,7 @@ async function main(): Promise<void> {
 		if (relationSeed) {
 			const stats = await runRelationSeed(
 				{source: pgRelationSeedSource(pg), reader, store, guard, signal: abort.signal},
-				{batch: opts.batch, pauseMs: opts.pauseMs, maxEntities: opts.maxEntities, dryRun},
+				{batch: opts.batch, pauseMs: opts.pauseMs, maxEntities: opts.maxEntities, dryRun, notOpenOnly: env.RELATION_SEED_NOT_OPEN_ONLY === "1"},
 			)
 			log("info", "relation-seed done", {...stats, seconds: Math.round((Date.now() - t0) / 1000)})
 		} else if (heldRepair) {

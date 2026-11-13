@@ -377,6 +377,12 @@ $K delete job geodb-relation-seed
 # 3. only if toSeed > 0: scale the feeder to 0, wait for the group to empty (as 2b-ter), apply with __DRY_RUN__ -> 0, delete the Job, scale the feeder to 1.
 ```
 
+**Not-open pass (`RELATION_SEED_NOT_OPEN_ONLY=1`).** Each full pass now appends the entities that had a not-open relation to
+`/data/feeder/relation-seed/not-open-<space>.txt`. With the env set to `"1"` the Job reads only those entities (seconds, not 269 s), keeps no
+cursor and so needs no move-aside, and records the ones geo-db has opened since. The 11-12 run predates the list, so one full pass with the
+cursor moved aside (above) is needed once to write it; after that the not-open pass is the cheap repeat. A move that arrives before a pass
+records its relation is still dropped (`relation-move-cell-unknown`), so run it before relying on moves of those relations.
+
 Do not restart `geodb` (serve) during either run (see "Where the Job runs").
 
 ### 2b-quater-post. After the relation-seed: first post-roll readout (11-13)
@@ -2072,6 +2078,14 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
   so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
   configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
+- Applied-block holds (`GEODB_APPLIED_BLOCK`): a dead letter of the edits consumer (a refused intent, an undecodable
+  message, a `space_cap` edit) holds its partition in the `geodb-feeder-applied` row one block below the dead-lettered
+  edit's, so the row never claims rows the store lacks (log line "applied block held below a dead-lettered edit").
+  Holds persist in `/data/feeder/applied-holds.json` as `{"<partition>": <highest claimable block>}` and are never
+  released automatically: after a replay applies every dead-lettered edit of a partition, scale the feeder to 0,
+  remove that partition's key (or the file), and scale back to 1. A hold freezes the row's block, not the feeder.
+  Dead letters from before this existed are not held: edit 742e60d9 (partition 0, block 120865, 2026-11-12) needs
+  `{"0": 120864}` written into the file (`kubectl exec`) before the image with holds rolls out, or the row stays past it.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
   `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 

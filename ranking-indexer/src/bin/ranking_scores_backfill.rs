@@ -91,6 +91,8 @@ async fn main() -> Result<(), IndexerError> {
                     space_id: r.2,
                     score: r.3,
                     position: r.4,
+                    // The geo-db mirror does not carry the ballot count (GEO-3676).
+                    ballots: 0,
                 })
                 .collect();
             puts.extend(derived_mirror::plan(block, &scores, &[]).0);

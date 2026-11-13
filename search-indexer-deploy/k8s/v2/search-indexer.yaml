@@ -62,7 +62,7 @@ spec:
         # an absent geodb never blocks a pod start; with no binding the shadow reads as unusable and the
         # SQL lookups run untouched. Pinned, never :latest: deploy-v2 rewrites every :latest to the service tag.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:8050918d2f
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           command:
             - sh
