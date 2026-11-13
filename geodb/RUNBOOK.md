@@ -1415,6 +1415,22 @@ lacks a proposer or space), then set the flag "1" on the feeder. The Job writes 
 version of a proposal, while the feeder writes the event's own proposer. Until the flag is on the twin reports
 `values_not_stored` as Unsupported, not as a mismatch.
 
+Run record, testnet, 2026-11-12: Job `geodb-proposal-versions-backfill` ran 21:10:47Z to 21:38:57Z (28 min) and is
+`Complete` 1/1 (read-only check; its pod outlives the Job for `ttlSecondsAfterFinished`, 7 days). Final log line:
+`proposal_versions backfill done` rows 54,342, applied 54,342, deadLetter 0, seconds 1669. Images: container
+`geodb-feeder:0c1fa882`, init container `geodb:67b6974a5e`. Env it ran with, beyond the checked-in manifest's: `GEODB_RECORD_KEYS=1`,
+`GEODB_PROPOSAL_VERSIONS=1` (both required, the Job refuses otherwise), `GEODB_PROPOSAL_VERSION_PROPOSER_SPACE=1` (the manifest
+ships "0") and `BACKFILL_KEYED_RESET_CONSUMER=1` (the log shows `backfill gate` = `reset`, the consumer already had offsets). The
+live feeder (`geodb-feeder:bdada8fb`) has `GEODB_PROPOSAL_VERSIONS=1` and `GEODB_PROPOSAL_VERSION_PROPOSER_SPACE=1`.
+
+Safe re-run: it is idempotent. Every row is written to the same record ids (`keyedBackfillJob.ts` header; the key is
+(proposal, version-stamp block)), Postgres is read in a READ ONLY transaction, and the escalation records converge on replay. With
+`geodb-feeder` scaled to 0, delete the finished Job, then apply the manifest with the image and geodb tags filled in as in its
+header and `BACKFILL_KEYED_RESET_CONSUMER: "1"` added (without it the Job refuses once the consumer has offsets; with it the
+consumer replays the retained topic from earliest on its next start, which is a no-op for the same reason):
+`$K delete job geodb-proposal-versions-backfill && sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-proposal-versions-backfill-job.yaml | $K apply -f -`
+Before applying, edit a copy of the manifest so `GEODB_PROPOSAL_VERSION_PROPOSER_SPACE` is "1" (the feeder's value) and add the reset env.
+
 ### 2c-novies. Keyed proposal status facts (GEODB_PROPOSAL_STATUS)
 
 Read this first: **gaia stores no proposal status, so this does not mirror one.** `proposals` has no status column. The
