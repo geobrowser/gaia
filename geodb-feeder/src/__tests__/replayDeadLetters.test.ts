@@ -350,6 +350,33 @@ describe("runReplayDeadLetters --apply", () => {
 		})
 	})
 
+	describe("geo-db answers a resent chunk that carries a set with IdempotencyConflict (found on a real store: a set's EditHash is taken after it resolves against the live cell)", () => {
+		const conflict = {rc: 1, err: "refused: DefiniteRefusal IdempotencyConflict\nerror: Refused\n"}
+		const args = {apply: true, edit: EDIT, createdAt: 1_762_988_400}
+		const inFlightDone = async () => {
+			const first = harness({chunk: 100, answers: [{rc: 0, err: ""}, {rc: 1, err: "refused: DefiniteRefusal Other\n"}]})
+			await runReplayDeadLetters(first.deps, args)
+			return first.done.join("")
+		}
+
+		it("counts the in-flight chunk done: its key was started by an earlier run, so the conflict means it committed", async () => {
+			const done = await inFlightDone()
+			const again = harness({chunk: 100, done, answers: [conflict]})
+			const r = await runReplayDeadLetters(again.deps, args)
+			expect(r.outcome).toBe("applied")
+			expect(r.sent).toBe(40)
+			expect(parseDone(again.done.join("")).size).toBeGreaterThanOrEqual(40)
+			expect(again.sent).toHaveLength(1)
+		})
+
+		it("still stops on IdempotencyConflict for a chunk no earlier run started", async () => {
+			const t = harness({chunk: 100, answers: [conflict]})
+			const r = await runReplayDeadLetters(t.deps, args)
+			expect(r.outcome).toBe("failed")
+			expect(r.sent).toBe(0)
+		})
+	})
+
 	it("keyed records go to their family's system Space, verbatim", async () => {
 		const t = harness()
 		await runReplayDeadLetters(t.deps, {apply: true, source: "keyed"})
