@@ -182,6 +182,19 @@ impl MirrorError {
         matches!(self, MirrorError::Refused(body) if body.starts_with("code="))
     }
 
+    /// Whether this is a coded refusal that says the *session* is over, not the request: the
+    /// serve ended the pipe at grant expiry (`CapabilityTokenExpired`, `grant_ttl_s` 300 s) or
+    /// closed it (`TransportClosed`). The client exits after it, and a fresh pipe cures it, so
+    /// it is handled like a dead pipe (reopen and replay), never as a per-request answer.
+    fn is_session_lost(&self) -> bool {
+        matches!(
+            self,
+            MirrorError::Refused(body)
+                if body.starts_with("code=")
+                    && (body.contains("CapabilityTokenExpired") || body.contains("TransportClosed"))
+        )
+    }
+
     /// Whether a refused `has` means the probe does not exist on this client or node, as opposed
     /// to a real refusal (no access, class off). An older client answers an unknown pipe verb
     /// with its `want ...` list, which does not name `has`; an older node answers the opcode
@@ -381,7 +394,11 @@ pub fn enter_line(unit: &Unit) -> Result<String, MirrorError> {
     ))
 }
 
+/// A held pipe is replaced this long after it opened, before the serve's grant (300 s) lapses.
+const SESSION_REFRESH: Duration = Duration::from_secs(240);
+
 pub(crate) struct Pipe {
+    opened_at: Instant,
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -446,7 +463,11 @@ impl Worker {
         match self.call(line, max_body).await {
             // A coded refusal is the node's answer on a live pipe: replaying would send the line
             // twice to get the same answer.
-            Err(e) if reused && !matches!(e, MirrorError::CoolingDown) && !e.is_coded_refusal() => {
+            Err(e)
+                if reused
+                    && !matches!(e, MirrorError::CoolingDown)
+                    && (!e.is_coded_refusal() || e.is_session_lost()) =>
+            {
                 metrics::counter!("geodb_outbox_mirror_reconnects_total").increment(1);
                 info!(
                     event = "geodb_outbox.pipe_lost",
@@ -468,6 +489,19 @@ impl Worker {
         line: &str,
         max_body: usize,
     ) -> Result<String, MirrorError> {
+        // A pipe near the end of its grant is replaced before the request, not refused by it.
+        if self
+            .pipe
+            .as_ref()
+            .is_some_and(|p| p.opened_at.elapsed() > SESSION_REFRESH)
+        {
+            info!(
+                event = "geodb_outbox.session_refresh",
+                "work pipe is near its grant expiry; replacing it"
+            );
+            self.pipe = None;
+            self.failed_at = None;
+        }
         if self.pipe.is_none() {
             if self
                 .failed_at
@@ -504,7 +538,7 @@ impl Worker {
                 self.failed_at = None;
                 Ok(body)
             }
-            Err(e) if e.is_coded_refusal() => {
+            Err(e) if e.is_coded_refusal() && !e.is_session_lost() => {
                 // The client answered `-code=<Token> ...` and is still serving the pipe: keep the
                 // child, with no cool-down. The caller sees the refusal.
                 self.failed_at = None;
@@ -541,6 +575,7 @@ async fn spawn(cfg: &Config) -> Result<Pipe, MirrorError> {
         return Err(MirrorError::NotReady(first));
     }
     Ok(Pipe {
+        opened_at: Instant::now(),
         child,
         stdin,
         stdout,
@@ -1128,6 +1163,24 @@ mod tests {
         assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
         assert_eq!(lines(&log), 3);
         let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn an_expired_grant_on_a_reused_pipe_is_replayed_on_a_new_session() {
+        for body in [
+            "code=CapabilityTokenExpired refused: DefiniteRefusal CapabilityTokenExpired",
+            "code=TransportClosed error: TransportClosed",
+        ] {
+            let log = tmp("expired-log");
+            let mut w = worker(&refusing_second(&log, body), Duration::from_secs(60));
+            assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+            // The second enter is refused as session-over on the reused pipe: the unit is
+            // replayed on a fresh child (which answers its own first line `entered`), despite the
+            // minute-long cool-down, and is not lost.
+            assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New, "{body}");
+            assert_eq!(lines(&log), 3);
+            let _ = std::fs::remove_file(&log);
+        }
     }
 
     #[tokio::test]

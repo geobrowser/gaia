@@ -376,6 +376,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_expired_grant_on_a_reused_pipe_is_replayed_for_an_ack() {
+        let body = "code=CapabilityTokenExpired refused: DefiniteRefusal CapabilityTokenExpired";
+        // Each child acks its first line and refuses its second as session-over.
+        let script = format!(
+            "echo ready; n=0; while IFS= read -r l; do n=$((n+1)); \
+             if [ $n -eq 2 ]; then printf -- '-{}\\n%s' '{body}'; else printf '+8\\nack: ok\\n'; fi; done",
+            body.len()
+        );
+        let mut r = OutboxReader::new(Config {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            timeout: Duration::from_millis(1500),
+            cooldown: Duration::from_secs(3600),
+        });
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 1,
+            payload: Vec::new(),
+        };
+        assert_eq!(r.complete(&c).await.unwrap(), Ack::Ok);
+        // The second is refused on the reused pipe, then replayed on a new session: no loss.
+        assert_eq!(r.complete(&c).await.unwrap(), Ack::Ok);
+    }
+
+    #[tokio::test]
     async fn an_empty_claim_is_no_units() {
         let mut r = reader("echo ready; read -r a; printf '+0\\n'");
         assert!(r.claim(4, 1).await.unwrap().is_empty());
