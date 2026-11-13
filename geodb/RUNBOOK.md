@@ -458,6 +458,80 @@ Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and eac
 The Job's `GEODB_*` flags copy `geodb.yaml`'s; change them together. The `updatedAt` it compares is the row written
 under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.
 
+### 2b-quater-replay. Replaying the 192 dead letters of 2026-11-12 23:01Z
+
+Read from `/data/feeder/errors.jsonl` on the feeder pod (`cat` only). The 192 intents of this event were dead-lettered while serve
+was unreachable. #1566 makes the feeder retry that class from now on; it does not replay what was already skipped. What the 192 are:
+
+| consumer | topic, partition 0, offsets | intents | what to replay with |
+| -- | -- | -- | -- |
+| edits consumer | `knowledge.edits` 98656, edit `742e60d91fc0490ea4cd3579bd19c72c`, Space `c9f267dcb0d270718c2a3c45a64afd32` | 140 | `geodb-replay-edit` |
+| edit-meta consumer | `knowledge.edits` 98657, the `edit_meta` records of the next edit | 6 | `geodb-replay-keyed --family edit-meta` |
+| proposal-status, -versions, -votes consumers | `space.governance` 172829 to 172833 (status 172829 and 172832, versions 172830 and 172833, votes 172831) | 46 | `geodb-replay-keyed --family governance` |
+
+Offsets 172829 to 172833 are not on `knowledge.edits` (its partition 0 ends near 98666): they are `space.governance`, which three keyed
+consumers read, each in its own group.
+
+**Why not rewind the consumer groups.** A keyed consumer keeps its own offset file on the state volume and skips every offset at or below
+its last done offset (`keyedBatchHandler`); a group rewind changes only Kafka's copy. The consumers would have to restart from a deleted
+offsets directory (`BACKFILL_KEYED_RESET_CONSUMER`), which replays the whole retained topic. The smaller path is `geodb-replay-keyed`
+(`geodb/k8s/v2/geodb-replay-keyed-job.yaml`, `replay-keyed-main.ts`): it reads just the named offsets with a throwaway group that commits
+nothing and runs them through the handlers (each ignores events that are not its own), moving no offset. Keyed records are written to ids
+fixed by their key, so a rerun is a no-op.
+
+**Edit 742e60d9** (read from the public testnet GraphQL, no Secret): `--uri ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg`
+(the PUBLISH action's contentUri of the proposal executed at that time),
+`--block 120865` and `--created-at 1794524471` (`editVersions`: block 120865, sequence 3, `2026-11-12T23:01:11Z`). The CID must still be checked against the payload: the dry run's `replay-edit plan` shows its op
+count (it should account for the 140 intents). The public mesh3 gateway answers 404 for this CID, so the Job reads the gateway from the same
+Secret reference hermes-ipfs-cache uses; no one reads the value. The Job manifest used to hardcode `GEODB_RELATION_POSITIONS=0` and
+omit `GEODB_RELATION_FACETS`; it now copies the live feeder (positions 1, facets 1), and `replay-edit-main.ts` passes `facets` to the
+translator as the live consumer does.
+
+Run in this order, from `geodb/k8s/v2` (`K="kubectl -n gaia"` in bash; zsh users write the command out):
+
+```bash
+# 0. Merge #1566 and the PR that added this section, deploy the feeder, and use the tag that deploy built.
+TAG=<geodb-feeder tag built from a main containing both>
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
+$K get deploy geodb-feeder -o jsonpath='{.spec.template.spec.containers[0].image}'   # = geodb-feeder:$TAG, pod Ready
+$K get pod -l app=geodb -o wide     # serve must be Ready and not rolling: a refusal here is the original failure
+$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl | wc -l          # baseline line count; note it
+# baseline of geodb_feeder_dead_letters_total (apiserver proxy, as in 2b-quater-post); note it.
+
+# 1. Dry runs (the feeder keeps running; nothing is written).
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://QmPNvCA3FWaoS4vk37WiEDV7vfhvTki3wDfyqRwinUX7Bg|" \
+    -e "s|__SPACE__|c9f267dcb0d270718c2a3c45a64afd32|" -e "s|__BLOCK__|120865|" -e "s|__CREATED_AT__|1794524471|" \
+    -e "s|__MODE__|--dry-run|" geodb-replay-edit-job.yaml | $K apply -f -
+$K logs -f job/geodb-replay-edit        # "replay-edit plan": conflicts 0 (a refusal: resolve by hand, section 2b-quater), then "dry-run"
+$K delete job geodb-replay-edit
+for fam in "governance 0 172829-172833" "edit-meta 0 98657"; do set -- $fam
+  sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" -e "s|__FAMILY__|$1|" \
+      -e "s|__PARTITION__|$2|" -e "s|__OFFSETS__|$3|" -e "s|__MODE__|--dry-run|" geodb-replay-keyed-job.yaml | $K apply -f -
+  $K logs -f job/geodb-replay-keyed      # one "replay-keyed message" per offset, with its event type, then "dry-run: nothing written"
+  $K delete job geodb-replay-keyed
+done
+
+# 2. Stop the feeder (the Jobs share its state volume).
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+
+# 3. Apply: the edit first, then the keyed families (same commands as step 1 with --apply instead of --dry-run).
+#    replay-edit logs "replay-edit applied" with deadLettered 0; replay-keyed logs "replay-keyed applied" with deadLettered 0.
+#    Delete each Job before the next apply.
+
+# 4. Start the feeder again.
+$K scale deployment/geodb-feeder --replicas=1
+
+# 5. Verify.
+#    - dead-letter delta 0: geodb_feeder_dead_letters_total at the baseline value after 10 minutes, and errors.jsonl line count unchanged
+#      (the replay Jobs' own dead letters would append: a growth means a refusal, read the new lines).
+#    - the entities edit 742e60d9 touches are in geo-db: rerun the geodb-replay-edit dry run (feeder running): "plan" shows
+#      absent 0 and conflicts 0 (every touched entity is held, its updatedAt equal to or newer than the edit's block time).
+#    - feeder lag still 0 on every consumer; no GeoDbFeederStalled alert.
+```
+
+If a replay Job fails midway, the feeder stays at 0 until its log is read: a rerun is safe.
+
 ### 2b-bis. Proposal system entities
 
 The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
