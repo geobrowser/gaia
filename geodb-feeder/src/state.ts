@@ -60,7 +60,7 @@ function writeFileDurable(path: string, text: string): void {
 	renameSync(tmp, path)
 }
 
-function appendDurable(path: string, text: string): void {
+export function appendDurable(path: string, text: string): void {
 	if (!text) return
 	const fd = openSync(path, "a")
 	try {

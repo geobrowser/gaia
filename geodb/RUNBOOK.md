@@ -729,6 +729,86 @@ $K scale deployment/geodb-feeder --replicas=1
 
 If a replay Job fails midway, the feeder stays at 0 until its log is read: a rerun is safe.
 
+#### The verbatim path: `geodb-replay-deadletters` (use this for edit 742e60d9)
+
+The replay-edit path above cannot restore edit 742e60d9. The edits consumer commits its overlay (the journals of known
+entities, statements and relations) after `applyIntents` returns, also when every intent of the message was dead-lettered
+(`handle.ts`). So the journals already claim what the 140 intents would have created: a re-translation skips the 42 relation
+creates as creates of known relations, and its dry run matches about 56 of the 140 (none of the 84 adds). That gap is filed
+separately; it is not fixed here.
+
+`geodb-replay-deadletters` (`geodb/k8s/v2/geodb-replay-deadletters-job.yaml`, `replay-deadletters-main.ts`,
+`replayDeadLetters.ts`) sends the record itself: the exact intent texts in `/data/feeder/errors.jsonl` (read only), in the
+record's order. What it does:
+
+- keeps the entries whose error is on the allowlist (default `connect: Refused`; `--error <substring>` adds one), narrowed by
+  `--source edit|keyed|all`, `--edit`, `--offsets`, `--space`, `--partition` (`-` means not given);
+- groups them per original document (partition, offset, Space label, edit) and resolves each target: an edits-consumer entry
+  (it names its `edit`) goes to the gaia Space's geo-db Space (`spaces.json`); a keyed record (no `edit`: its `space` field
+  is a label, the edit or proposal id, not a Space) goes to its family's system Space (`system-spaces.json`), the family read
+  from the record columns its intents write. A target that is not mapped refuses; this Job founds nothing;
+- checks each document for the ISS-679-318 pairs (`replayHazard.ts`): a pair refuses unless every error of the document
+  proves nothing was sent (`connect: Refused`, `connect: IoError`);
+- reads the target's state with the api's reader key: for the edit document, the `updatedAt` of every entity its adds and
+  unsets name against `--created-at` (the replay-edit rule; without `--edit` and `--created-at` the dry run says
+  `unchecked` and `--apply` refuses); for a keyed record, the cell of each `put` (`absent` or `held-same` pass;
+  `held-other` refuses: a later message wrote the cell, and an older put would revert it);
+- prints one `replay-deadletters document` line per document (entries, done, pending, intent counts by tag, family, pairs,
+  check, state) and a `plan` line; any refused document refuses the whole run (exit 2);
+- with `--apply`, sends each document's pending entries in `CHUNK`-sized pieces under a key derived from the document and
+  the entries, and appends each sent entry to `/data/feeder/replay-deadletters.done.jsonl` (fsync) before the next chunk. A
+  rerun skips done entries. A failed connect is retried 5 times with backoff; any other refusal stops the run (exit 1) and
+  writes nothing to `errors.jsonl`.
+
+What the dry run shows for this event (the record as read 2026-11-12, 367 lines):
+
+| offset | label | target | entries | intents |
+| -- | -- | -- | -- | -- |
+| 98656 | edit 742e60d9, Space c9f267dc | the Space's geo-db Space | 140 | 84 add, 48 set_active false, 8 unset |
+| 98657 | 91686a82 | governance system Space (`editMeta`) | 6 | create_entity, add, set_active true, 3 put |
+| 172829, 172832 | 047aff76, 11011517 | governance (`proposalStatus`) | 4 + 4 | create_entity, add, set_active true, put |
+| 172830, 172833 | 047aff76, 11011517 | governance (`proposalEscalation`) | 13 + 13 | create_entity, 2 add, 2 set_active true, 8 put |
+| 172831 | 52c7ae14 | votes (`proposalVote`) | 12 | create_entity, 4 add, 4 set_active true, 3 put |
+
+None holds a pair. The rest of the record is not selected: 147 `MalformedEdit` decode dead letters from the 2026-11-04
+backfills (no intent; permanent), and **28 `connect: IoError` entries** logged 2026-11-12 22:13:42 to 22:14:02Z, keyed
+records of `space.governance` 165613 (13, `proposalEscalation`), 165615 (13) and 165616 (2, `proposalVersion`). IoError is
+also a failed connect (nothing sent), so they are as replayable as the 192; they are a separate decision: add
+`--error "connect: IoError" --offsets 165613-165616` to a keyed run once the 192 are done. The 46 governance keyed records
+and the 6 edit-meta records can go either way: verbatim here, or re-derived from Kafka with `geodb-replay-keyed` above. Use
+one, not both.
+
+Run from `geodb/k8s/v2` (`K="kubectl -n gaia"` in bash), after step 0 above (a feeder image that contains this Job's entry):
+
+```bash
+run() {  # $1 source, $2 edit, $3 created-at, $4 offsets, $5 mode
+  sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" -e "s|__SOURCE__|$1|" \
+      -e "s|__EDIT__|$2|" -e "s|__CREATED_AT__|$3|" -e "s|__OFFSETS__|$4|" -e "s|__MODE__|$5|" \
+      geodb-replay-deadletters-job.yaml | $K apply -f -
+  $K logs -f job/geodb-replay-deadletters     # "replay-deadletters document" per document, then the outcome line
+  $K delete job geodb-replay-deadletters
+}
+E=742e60d91fc0490ea4cd3579bd19c72c
+# 1. Dry runs (feeder running, nothing written): 1 document of 140, then 6 documents of 52; every state "pending",
+#    check "updated-at" with conflicts [] for the edit, "put-cells" with no "held-other" for the keyed ones.
+run edit "$E" 1794524471 - --dry-run
+run keyed - - - --dry-run
+# 2. Stop the feeder.
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+# 3. Apply: "replay-deadletters applied", sent 140, then sent 52.
+run edit "$E" 1794524471 - --apply
+run keyed - - - --apply
+# 4. Start the feeder.
+$K scale deployment/geodb-feeder --replicas=1
+# 5. Verify: errors.jsonl line count and geodb_feeder_dead_letters_total at their baselines; the done-file holds 192
+#    lines ($K exec deploy/geodb-feeder -- wc -l /data/feeder/replay-deadletters.done.jsonl); a rerun of both dry runs shows
+#    every document "done" with pending 0.
+```
+
+A refusal in a dry run is read, not worked around: `updated-at` conflicts mean a later edit touched the entity (resolve by
+hand, section 2b-quater); `held-other` means a later message wrote that record cell.
+
 ### 2b-bis. Proposal system entities
 
 The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
