@@ -13,7 +13,13 @@
  * (GEODB_ENTITY_TIMES), so the entity is the unit: stricter than Postgres (any later write to the entity refuses,
  * whatever property it touched), never looser. An entity geo-db does not hold is a creation and is safe. An entity it
  * holds with no readable `updatedAt` cannot be shown safe, so it also refuses. An equal time is allowed: that is the
- * edit itself, applied before, and its chunks are idempotent.
+ * edit itself, applied before.
+ *
+ * Second rule (geo-db ISS-679-318, replayHazard.ts): an applied edit is NOT idempotent as a whole. A chunk that already
+ * applied and holds one of six ordered intent pairs (a put before an unset or delete_entity, a position move beside a
+ * delete or another move) changes visible state when sent again under the replay's fresh key. Each chunk is judged
+ * against the feeder's dead-letter record (`errors.jsonl`, keyed by `--edit`): every intent dead-lettered = never
+ * applied = safe. Such a chunk refuses the whole replay, in the dry run as with `--apply`, and the plan says which.
  */
 import type {ApplyDeps} from "./apply.js"
 import {applyIntents} from "./apply.js"
@@ -21,6 +27,7 @@ import {UPDATED_AT_PROPERTY, blockInstant} from "./entityTimes.js"
 import type {EntityReader} from "./geodbPipe.js"
 import {readWithRetry} from "./geodbPipe.js"
 import {log} from "./log.js"
+import {type ChunkPlan, deadLetteredIntents, planChunks} from "./replayHazard.js"
 import {Overlay} from "./state.js"
 import type {Decode} from "./handle.js"
 import {type GrcOp, translateOps} from "./translate.js"
@@ -35,6 +42,8 @@ export type ReplayEditArgs = {
 	createdAt: number
 	/** Read the payload from this file instead of the gateway. */
 	file?: string
+	/** The edit id (32 hex digits), as the dead-letter record names it. Without it every chunk counts as applied. */
+	edit?: string
 	apply: boolean
 }
 
@@ -50,13 +59,16 @@ const uintOf = (raw: string | undefined, flag: string): number => {
 
 export function parseArgs(argv: string[]): ReplayEditArgs {
 	if (argv.some((a) => a.includes("__"))) throw new Error("an argument still holds a manifest placeholder (__X__)")
-	const known = new Set(["--uri", "--space", "--block", "--sequence", "--created-at", "--file", "--apply", "--dry-run"])
+	const known = new Set(["--uri", "--space", "--block", "--sequence", "--created-at", "--file", "--edit", "--apply", "--dry-run"])
 	if (argv.includes("--apply") && argv.includes("--dry-run")) throw new Error("--apply and --dry-run are exclusive")
 	for (const a of argv) if (a.startsWith("--") && !known.has(a)) throw new Error(`unknown flag ${a}`)
 	const uri = flagValue(argv, "--uri")
 	if (!uri) throw new Error("--uri is required")
 	const space = (flagValue(argv, "--space") ?? "").replaceAll("-", "").toLowerCase()
 	if (!/^[0-9a-f]{32}$/.test(space)) throw new Error("--space must be a space id (32 hex digits, dashes allowed)")
+	const editRaw = flagValue(argv, "--edit")
+	const edit = editRaw === undefined ? undefined : editRaw.replaceAll("-", "").toLowerCase()
+	if (edit !== undefined && !/^[0-9a-f]{32}$/.test(edit)) throw new Error("--edit must be an edit id (32 hex digits, dashes allowed)")
 	return {
 		uri,
 		space,
@@ -64,6 +76,7 @@ export function parseArgs(argv: string[]): ReplayEditArgs {
 		sequence: argv.includes("--sequence") ? uintOf(flagValue(argv, "--sequence"), "--sequence") : 0,
 		createdAt: uintOf(flagValue(argv, "--created-at"), "--created-at"),
 		file: flagValue(argv, "--file"),
+		edit,
 		apply: argv.includes("--apply"),
 	}
 }
@@ -140,11 +153,25 @@ export type ReplayEditDeps = Omit<ApplyDeps, "allowPut"> & {
 	entityTimes?: boolean
 	legacyMap?: boolean
 	allowPut?: boolean
+	/** The feeder's dead-letter record (`errors.jsonl` text); "" when the file does not exist. Read only. */
+	deadLetters?: string
+}
+
+/** What the plan says about the chunks: counts, and every chunk that holds a pair or refuses. */
+export type ChunkSummary = {
+	chunks: number
+	firstApply: number
+	applied: number
+	/** Intents of this replay matched to a dead letter of `--edit`; null without `--edit`. */
+	deadLetteredMatched: number | null
+	/** Dead letters of `--edit` in the record; null without `--edit`. */
+	deadLettersInRecord: number | null
+	withPairs: Pick<ChunkPlan, "lo" | "hi" | "status" | "pairs" | "refuse">[]
 }
 
 export type ReplayEditResult =
-	| {outcome: "refused"; reason: string; conflicts: Conflict[]; intents: number}
-	| {outcome: "dry-run"; intents: number; touched: number; absent: number}
+	| {outcome: "refused"; reason: string; conflicts: Conflict[]; intents: number; chunks?: ChunkSummary}
+	| {outcome: "dry-run"; intents: number; touched: number; absent: number; chunks: ChunkSummary}
 	| {outcome: "applied"; intents: number; applied: number; deadLettered: number}
 
 export async function runReplayEdit(deps: ReplayEditDeps, args: ReplayEditArgs, overlayStore: ConstructorParameters<typeof Overlay>[0]): Promise<ReplayEditResult> {
@@ -165,16 +192,72 @@ export async function runReplayEdit(deps: ReplayEditDeps, args: ReplayEditArgs, 
 	})
 	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
 	const {conflicts, checked, absent} = await findConflicts(deps.reader, space.geo, touched, editMicros, sleep)
-	log("info", "replay-edit plan", {uri: args.uri, block: args.block, ops: ops.length, intents: intents.length, touched: checked, absent, conflicts: conflicts.length, stats})
+	const dead = args.edit === undefined ? null : deadLetteredIntents(deps.deadLetters ?? "", {space: args.space, edit: args.edit})
+	const plans = planChunks(intents, deps.chunk, dead)
+	const chunks: ChunkSummary = {
+		chunks: plans.length,
+		firstApply: plans.filter((p) => p.status === "first-apply").length,
+		applied: plans.filter((p) => p.status === "applied").length,
+		deadLetteredMatched: dead === null ? null : plans.reduce((n, p) => n + p.deadLettered, 0),
+		deadLettersInRecord: dead === null ? null : [...dead.values()].reduce((a, b) => a + b, 0),
+		withPairs: plans.filter((p) => p.pairs.length > 0).map(({lo, hi, status, pairs, refuse}) => ({lo, hi, status, pairs, refuse})),
+	}
+	log("info", "replay-edit plan", {
+		uri: args.uri,
+		block: args.block,
+		ops: ops.length,
+		intents: intents.length,
+		touched: checked,
+		absent,
+		conflicts: conflicts.length,
+		stats,
+		edit: args.edit ?? null,
+		chunks: {...chunks, withPairs: chunks.withPairs.length},
+	})
+	if (chunks.deadLettersInRecord !== null && chunks.deadLetteredMatched !== null && chunks.deadLetteredMatched < chunks.deadLettersInRecord) {
+		// Not a refusal: those intents are simply not resent. But the replay then does not restore them, which usually
+		// means the journals moved on since (the live consumer commits its overlay after dead-lettering too).
+		log("warn", "replay-edit: dead letters of this edit that the replay does not reproduce", {
+			edit: args.edit,
+			inRecord: chunks.deadLettersInRecord,
+			matched: chunks.deadLetteredMatched,
+			unmatched: chunks.deadLettersInRecord - chunks.deadLetteredMatched,
+		})
+	}
+	for (const p of plans) {
+		log(p.refuse ? "error" : "info", "replay-edit chunk", {
+			lo: p.lo,
+			hi: p.hi,
+			status: p.status,
+			deadLettered: p.deadLettered,
+			pairs: p.pairs.slice(0, 20),
+			refuse: p.refuse,
+		})
+	}
 	if (conflicts.length > 0) {
 		return {
 			outcome: "refused",
 			reason: `${conflicts.length} touched entit${conflicts.length === 1 ? "y" : "ies"} hold a newer or unreadable updatedAt; replaying would stomp later state`,
 			conflicts,
 			intents: intents.length,
+			chunks,
 		}
 	}
-	if (!args.apply) return {outcome: "dry-run", intents: intents.length, touched: checked, absent}
+	const unsafe = plans.filter((p) => p.refuse !== null)
+	if (unsafe.length > 0) {
+		const why = args.edit === undefined ? " (no --edit given, so no chunk can be shown never applied)" : ""
+		return {
+			outcome: "refused",
+			reason: `${unsafe.length} chunk${unsafe.length === 1 ? "" : "s"} already applied and hold an ISS-679-318 pair${why}: ${unsafe
+				.slice(0, 5)
+				.map((p) => p.refuse)
+				.join("; ")}`,
+			conflicts: [],
+			intents: intents.length,
+			chunks,
+		}
+	}
+	if (!args.apply) return {outcome: "dry-run", intents: intents.length, touched: checked, absent, chunks}
 
 	const meta = {partition: -1, offset: `replay-${args.block}-${args.sequence}`, space: args.space, idempotent: true}
 	const r = await applyIntents({...deps, allowPut: deps.allowPut}, space, meta, intents, deps.chunk, 0, () => {})
