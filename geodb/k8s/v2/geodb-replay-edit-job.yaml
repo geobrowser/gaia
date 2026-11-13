@@ -112,7 +112,7 @@ spec:
               containerPort: 9090
               protocol: TCP
           env:
-            # The feeder's deployed values (geodb.yaml, checked live 2026-11-13); the translation must match what the live consumer would write.
+            # The feeder's deployed values (geodb-feeder.yaml, checked live 2026-11-13); the translation must match what the live consumer would write.
             - name: GEODB_ENTITY_TIMES
               value: "1"
             - name: GEODB_RELATION_POSITIONS

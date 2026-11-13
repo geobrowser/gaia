@@ -2,7 +2,7 @@ name: Build geodb image (manual)
 
 # Builds geodb-serve and geodb-client from geo-db at a pinned commit and pushes
 # registry.digitalocean.com/geo/geodb:<first 10 hex of the commit>. The geodb StatefulSet
-# (geodb/k8s/v2/geodb.yaml) and the api's init container pin that exact tag; change them together.
+# (geodb/k8s/v2/geodb.yaml and the feeder's init container in geodb-feeder.yaml) and the api's init container pin that exact tag; change them together.
 #
 # geo-db is a private repository, and so are its sibling packages, so this needs a secret that
 # gaia does not have yet:
@@ -113,4 +113,4 @@ jobs:
           docker push "$REGISTRY/geodb:$GEODB_TAG"
           echo "## geodb image" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`$GEODB_TAG\` (geo-db \`$GEODB_SHA\`)" >> "$GITHUB_STEP_SUMMARY"
-          echo "The manifests pin \`geodb:db33c7e6e1\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match (the membership and votes backfill Jobs take geodb.yaml's tag at apply time)." >> "$GITHUB_STEP_SUMMARY"
+          echo "The manifests pin \`geodb:db33c7e6e1\`; a different tag needs geodb/k8s/v2/geodb.yaml, geodb/k8s/v2/geodb-feeder.yaml and api/k8s/v2/api.yaml changed to match (the membership and votes backfill Jobs take geodb.yaml's tag at apply time)." >> "$GITHUB_STEP_SUMMARY"
