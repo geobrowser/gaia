@@ -244,6 +244,19 @@ export function parseStarted(text: string): Set<string> {
 	return out
 }
 
+/** The chunk keys earlier runs started (see `parseStarted`). */
+export function parseStartedKeys(text: string): Set<string> {
+	const out = new Set<string>()
+	for (const line of text.split("\n")) {
+		if (!line.trim()) continue
+		try {
+			const r = JSON.parse(line) as {inflight?: unknown; key?: unknown}
+			if (r.inflight === true && typeof r.key === "string") out.add(r.key)
+		} catch {}
+	}
+	return out
+}
+
 export const startedLine = (doc: DeadLetterDoc, chunk: readonly DeadLetterEntry[], key: string, now: number): string =>
 	`${JSON.stringify({t: now, inflight: true, doc: doc.id, key, entries: chunk.map((e) => e.id)})}\n`
 
@@ -428,6 +441,7 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 	const docs = groupDocuments(selected)
 	const done = parseDone(deps.done)
 	const started = parseStarted(deps.done)
+	const startedKeys = parseStartedKeys(deps.done)
 
 	const plans: {doc: DeadLetterDoc; target: Target | {error: string}; plan: DocPlan}[] = []
 	for (const doc of docs) {
@@ -499,12 +513,20 @@ export async function runReplayDeadLetters(deps: ReplayDeadLettersDeps, args: Re
 			const slice = pending.slice(lo, lo + deps.chunk)
 			const key = replayKey(doc.id, slice.map((e) => e.id))
 			const text = zonDoc(target.geo, key, slice.map((e) => e.intent))
+			const resend = startedKeys.has(key)
 			deps.appendDone(startedLine(doc, slice, key, now()))
 			let delay = 1000
 			for (let attempt = 1; ; attempt++) {
 				const r = await deps.db.apply(text)
 				if (r.rc === 0) break
 				const message = (r.err + r.out).slice(-600)
+				// geo-db hashes a `set` after resolving it against the live cell, so resending a committed chunk that holds one
+				// is answered IdempotencyConflict rather than the first receipt. The key is deterministic in the chunk's
+				// content and an earlier run started it, so the EditId exists because that run's write committed.
+				if (resend && message.includes("IdempotencyConflict")) {
+					log("warn", "replay-deadletters resent chunk already committed", {doc: doc.id, lo, size: slice.length, key})
+					break
+				}
 				// A failed connect sent nothing: retry it here even where this base's classify calls `connect: Refused` permanent.
 				const kind = NEVER_SENT_ERRORS.some((x) => message.includes(x)) ? "transient" : classify(r.rc === null ? `${message} killed` : message)
 				if (kind !== "transient" || attempt >= attempts) {
