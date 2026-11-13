@@ -13,7 +13,12 @@
 //! | [`Graph::topic_listings`] | `trending.entity_topic_listings` | 0113 |
 //! | [`Graph::debate_links`], [`Graph::claims_and_debates`] | `trending.debate_links`, `trending.claims_and_debates` | 0113 |
 //! | [`Graph::debate_positions`] | `trending.debate_positions` | 0122 |
-//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms`, with the position term | 0118, 0122 |
+//! | [`Graph::trending_terms`] | the selection half of `trending.entity_trending_terms`, with the position term and the ranking place and push-down | 0118, 0122, 0124 |
+//!
+//! Since 0124 the sweep also keeps `trending.ranking_places` and `trending.ranking_pushdowns` (the Best debates
+//! ranking, [`crate::ranking_places_compute`]) while `ranking_places_mode` is not off: [`RankingRows`] holds them,
+//! [`rescore_ids`] adds the debates whose rows changed (while on) and every debate in them (on a full pass), and
+//! [`Graph::trending_terms`] adds placed and pushed-down debates to its targets (while on).
 //!
 //! Since 0122 the sweep also keeps `trending.agenda_debate_positions` (a debate's place in its agenda's
 //! Debates relation) in step: [`Position`] is a row of it, and [`rescore_ids`] re-scores the debates whose
@@ -42,6 +47,7 @@ use uuid::Uuid;
 
 use crate::agenda_listings_compute::{Listing, Relation, Space};
 use crate::entity_ranking_score_compute::{trending_terms, TrendConfig, TrendInputs, TrendTerms};
+use crate::ranking_places_compute::{place_values, ranked_ids, Place, Source};
 use crate::sql_helpers::{new_york_offset_secs, CLAIM_SOURCES};
 
 const TYPES: Uuid = Uuid::from_u128(0x8f151ba4_de20_4e3c_9cb4_99ddf96f48f1);
@@ -87,6 +93,25 @@ pub struct Sweep {
     pub position_step: f64,
     pub position_slots: i32,
     pub full_pass: bool,
+    /// `ranking_places_mode` (0124): 0 off, 1 shadow, 2 on.
+    pub ranking_mode: i32,
+}
+
+/// The Best debates ranking's tables and config as the sweep and the terms read them (migration 0124). The
+/// default is the shipped state: off, no sources, no rows.
+#[derive(Debug, Clone, Default)]
+pub struct RankingRows {
+    /// `ranking_place_base`, `ranking_place_step` and `ranking_pushdown`.
+    pub place_base: f64,
+    pub place_step: f64,
+    pub pushdown: f64,
+    pub sources: Vec<Source>,
+    /// `trending.ranking_places` and `trending.ranking_pushdowns` before the sweep...
+    pub stored_places: BTreeSet<Place>,
+    pub stored_pushdowns: BTreeSet<Uuid>,
+    /// ...and after it, which is what the terms read.
+    pub places: BTreeSet<Place>,
+    pub pushdowns: BTreeSet<Uuid>,
 }
 
 /// The graph as the sweep reads it: the relations that matter, the spaces and the entities that exist, with
@@ -334,6 +359,7 @@ impl Graph {
         &self,
         table: &BTreeSet<Listing>,
         positions: &BTreeSet<Position>,
+        ranking: &RankingRows,
         ids: &HashSet<Uuid>,
         cfg: &TrendConfig,
         debate_window_days: i32,
@@ -344,7 +370,35 @@ impl Graph {
         let tp = self.topic_listings(table, ids, today);
         let li_ids: HashSet<Uuid> = li.keys().copied().collect();
         let pos = Self::debate_positions(positions, &li_ids, today);
-        let reach: HashSet<Uuid> = li.keys().chain(tp.keys()).copied().collect();
+        // 0124, while on: placed debates with a numeric created time, and pushed-down ones.
+        let (values, pushed): (HashMap<Uuid, f64>, HashSet<Uuid>) = if cfg.ranking_on {
+            (
+                place_values(
+                    ranking.place_base,
+                    ranking.place_step,
+                    &ranking.sources,
+                    &ranking.places,
+                    &self.created,
+                    ids,
+                    today,
+                ),
+                ranking
+                    .pushdowns
+                    .iter()
+                    .filter(|e| ids.contains(e))
+                    .copied()
+                    .collect(),
+            )
+        } else {
+            (HashMap::new(), HashSet::new())
+        };
+        let reach: HashSet<Uuid> = li
+            .keys()
+            .chain(tp.keys())
+            .chain(values.keys())
+            .chain(pushed.iter())
+            .copied()
+            .collect();
         let target = self.claims_and_debates(&reach);
 
         // Debates inside the window on each claim whose own listing counts.
@@ -382,6 +436,13 @@ impl Graph {
                 created_epoch: *created,
                 position: p.map(|p| p.1),
                 position_days: p.map(|p| (today - p.0).num_days()),
+                ranking_place: values.get(entity).copied().unwrap_or(0.0),
+                pushdown: if pushed.contains(entity) {
+                    ranking.pushdown
+                } else {
+                    0.0
+                },
+                pushed: pushed.contains(entity),
             };
             out.insert(
                 *entity,
@@ -415,6 +476,8 @@ impl Graph {
 /// `stored` is `trending.agenda_listings` before the call, `incoming` what the agendas name now (the table
 /// after it); `stored_positions` and `incoming_positions` are the same pair for
 /// `trending.agenda_debate_positions`. `stored_terms` holds the `entity_ranking_scores` rows with `trending_score <> 0 OR age_credit <> 0`.
+/// `ranking` is the Best debates ranking's two tables before and after (0124).
+#[allow(clippy::too_many_arguments)]
 pub fn rescore_ids(
     graph: &Graph,
     stored: &BTreeSet<Listing>,
@@ -422,6 +485,7 @@ pub fn rescore_ids(
     stored_positions: &BTreeSet<Position>,
     incoming_positions: &BTreeSet<Position>,
     stored_terms: &[StoredTerm],
+    ranking: &RankingRows,
     sweep: &Sweep,
 ) -> BTreeSet<Uuid> {
     let today = sweep.today;
@@ -494,6 +558,14 @@ pub fn rescore_ids(
     );
     ids.extend(debate_ids);
     ids.extend(moved);
+    ids.extend(ranked_ids(
+        sweep.ranking_mode,
+        sweep.full_pass,
+        &ranking.stored_places,
+        &ranking.places,
+        &ranking.stored_pushdowns,
+        &ranking.pushdowns,
+    ));
     // Claims and debates tagged, in a DAO space, with one of the topics.
     let tagged: HashSet<Uuid> = graph
         .topic_links
@@ -672,7 +744,9 @@ mod tests {
                 position_step: s.cfg[6],
                 position_slots: s.cfg[7] as i32,
                 full_pass: s.full,
+                ranking_mode: 0,
             };
+            // The 0122 scenarios, with the ranking as it ships (off, no rows): 0124 changes none of them.
             let got = rescore_ids(
                 &f.graph,
                 &s.stored,
@@ -680,6 +754,7 @@ mod tests {
                 &s.stored_positions,
                 &s.incoming_positions,
                 &s.terms,
+                &RankingRows::default(),
                 &sweep,
             );
             assert_eq!(got, s.ids, "scenario {name}");
@@ -710,11 +785,13 @@ mod tests {
                 position_step: s.cfg[6],
                 position_slots: s.cfg[7] as i32,
                 position_day_factor: s.cfg[8],
+                ranking_on: false,
             };
             let all: HashSet<Uuid> = f.graph.created.keys().copied().collect();
             let got = f.graph.trending_terms(
                 &s.incoming,
                 &s.incoming_positions,
+                &RankingRows::default(),
                 &all,
                 &cfg,
                 s.window,

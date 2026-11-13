@@ -14,7 +14,7 @@
  * One record, in the `config` system Space, the same shape as forYouConfigKeyed.ts:
  * - record entity: `recordEntityId(entityRankingConfig, [int(1)])`, the table's key (`id` = true, one row);
  * - key column (RECORD_COLUMNS.entityRankingConfig.id): `add` + `set_active(true)`, the number 1;
- * - mutable columns (ENTITY_RANKING_COLUMNS): `put` of each, a decimal for numeric columns and a number for the six
+ * - mutable columns (ENTITY_RANKING_COLUMNS): `put` of each, a decimal for numeric columns and a number for the eight
  *   integer ones, under `recordStatementId(entityRankingConfig, [record, property, value])`, so a changed value closes the
  *   old one and A -> B -> A ends on A. `updated_at` is not mirrored: it is bookkeeping, not a tunable.
  */
@@ -73,6 +73,11 @@ export const ENTITY_RANKING_COLUMNS: readonly {pg: string; key: EntityRankingKey
 	{pg: "trending_position_step", key: "trendingPositionStep", int: false},
 	{pg: "trending_position_slots", key: "trendingPositionSlots", int: true},
 	{pg: "trending_position_day_factor", key: "trendingPositionDayFactor", int: false},
+	{pg: "ranking_places_mode", key: "rankingPlacesMode", int: true},
+	{pg: "ranking_place_base", key: "rankingPlaceBase", int: false},
+	{pg: "ranking_place_step", key: "rankingPlaceStep", int: false},
+	{pg: "ranking_pushdown", key: "rankingPushdown", int: false},
+	{pg: "ranking_pushdown_since", key: "rankingPushdownSince", int: true},
 ]
 
 /** The row's values: integers as bigint, numerics as numbers. */
