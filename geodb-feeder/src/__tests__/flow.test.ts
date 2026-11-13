@@ -3,6 +3,7 @@ import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {applyIntents, chunkKey} from "../apply.js"
+import {createAppliedBlockWriter} from "../appliedBlock.js"
 import {classify} from "../geodb.js"
 import {type Decode, handleMessage} from "../handle.js"
 import {createMetrics} from "../metrics.js"
@@ -296,7 +297,7 @@ describe("handleMessage", () => {
 		const store = new Store(tmp())
 		const fake = fakeDb(() => ok)
 		const noted: [number, number | null][] = []
-		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b])}
+		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b]), hold: () => {}}
 		// field 8 (blockchain_metadata) = { block_number (3) = 300 }
 		const withBlock = {offset: "5", value: Uint8Array.from([...message("5").value!, 0x42, 3, 0x18, 0xac, 0x02])}
 		await handleMessage({...deps(store, fake), chunk: 1, appliedBlock}, 3, withBlock)
@@ -310,7 +311,7 @@ describe("handleMessage", () => {
 	it("names no block for an edit that failed to apply or decode", async () => {
 		const store = new Store(tmp())
 		const noted: unknown[] = []
-		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b])}
+		const appliedBlock = {note: async (p: number, b: number | null) => void noted.push([p, b]), hold: () => {}}
 		const down = fakeDb(() => ({rc: 1, out: "", err: "ConnectionRefused"}))
 		const sleep = async () => {
 			throw new Error("stop")
@@ -321,6 +322,63 @@ describe("handleMessage", () => {
 		}
 		expect(await handleMessage({...deps(store, fakeDb(() => ok), bad), appliedBlock}, 0, message("10"))).toBe("dead_letter")
 		expect(noted).toEqual([])
+	})
+
+	it("never lets the applied-block row claim an edit with a dead-lettered intent, even after later edits apply", async () => {
+		// Edit 742e60d9 (block 120865, 2026-11-12 23:01Z) had 146 intents dead-lettered, then later edits of the same
+		// partition applied. The row must stay below the dead-lettered edit's block until a replay applies it.
+		const dir = tmp()
+		const store = new Store(dir)
+		const values: string[] = []
+		const appliedBlock = createAppliedBlockWriter({
+			run: async (args) => {
+				values.push(Buffer.from(String(args[6]).slice(4), "hex").toString())
+				return ok
+			},
+			minIntervalMs: 0,
+			holdsPath: `${dir}/applied-holds.json`,
+		})
+		const atBlock = (offset: string, varint: number[]) => ({offset, value: Uint8Array.from([...message(offset).value, 0x42, 3, 0x18, ...varint])})
+		// The first edit (block 300) has its `add` refused on its merits; the next (block 301) applies whole.
+		const refuseAdd = fakeDb((zon) => (zon.includes(".add") ? {rc: 1, out: "", err: "error: InvalidIntent"} : ok))
+		expect(await handleMessage({...deps(store, refuseAdd), chunk: 1, appliedBlock}, 0, atBlock("5", [0xac, 0x02]))).toBe("applied")
+		await handleMessage({...deps(store, fakeDb(() => ok)), appliedBlock}, 0, atBlock("6", [0xad, 0x02]))
+		await appliedBlock.flush()
+		expect(values.length).toBeGreaterThan(0)
+		expect(values.map((v) => Number(v.split(":")[0]))).toEqual(values.map(() => 299))
+		// The hold is on disk, so a restarted feeder keeps it.
+		const restarted: string[] = []
+		const again = createAppliedBlockWriter({
+			run: async (args) => {
+				restarted.push(Buffer.from(String(args[6]).slice(4), "hex").toString())
+				return ok
+			},
+			minIntervalMs: 0,
+			holdsPath: `${dir}/applied-holds.json`,
+		})
+		await again.note(0, 302)
+		expect(restarted.map((v) => v.split(":")[0])).toEqual(["299"])
+	})
+
+	it("holds the applied-block row at an undecodable message, and at a Space-cap dead letter", async () => {
+		const dir = tmp()
+		const store = new Store(dir)
+		const held: [number, number | null][] = []
+		const appliedBlock = {note: async () => {}, hold: (p: number, b: number | null) => void held.push([p, b])}
+		const bad: Decode = async () => {
+			throw new Error("bad payload")
+		}
+		const withBlock = {offset: "6", value: Uint8Array.from([...message("6").value, 0x42, 3, 0x18, 0xac, 0x02])}
+		expect(await handleMessage({...deps(store, fakeDb(() => ok), bad), appliedBlock}, 2, withBlock)).toBe("dead_letter")
+		const capped = fakeDb(() => ok)
+		capped.db.found = async () => {
+			throw new Error("found n: rc=1 Refused: ResourceExhausted")
+		}
+		expect(await handleMessage({...deps(new Store(tmp()), capped), appliedBlock}, 1, message("7"))).toBe("dead_letter")
+		expect(held).toEqual([
+			[2, 300],
+			[1, null],
+		])
 	})
 
 	it("a replay after a crash mid-message resumes at the stored progress", async () => {

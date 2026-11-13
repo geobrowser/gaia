@@ -7,7 +7,7 @@ import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
 export type Decode = (payload: Uint8Array) => Promise<{ops: GrcOp[]}>
-export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; facets?: boolean; entityTimes?: boolean; legacyMap?: boolean; appliedBlock?: Pick<AppliedBlockWriter, "note">}
+export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; facets?: boolean; entityTimes?: boolean; legacyMap?: boolean; appliedBlock?: Pick<AppliedBlockWriter, "note" | "hold">}
 export type Outcome = "applied" | "empty" | "dead_letter"
 
 /**
@@ -38,6 +38,8 @@ export async function handleMessage(
 		blockNumber = he.blockNumber
 		ops = (await deps.decode(he.payload)).ops
 	} catch (e) {
+		// The edit is skipped whole: the applied-block row must not claim it (appliedBlock.ts `hold`).
+		deps.appliedBlock?.hold(partition, blockNumber)
 		deps.store.deadLetter({...meta, decode: String(e instanceof Error ? e.message : e)})
 		deps.metrics.deadLetters.inc({kind: "message"})
 		return "dead_letter"
@@ -48,6 +50,7 @@ export async function handleMessage(
 		space = await ensureSpace(deps, spaceId)
 	} catch (e) {
 		if (!(e instanceof SpaceCapError)) throw e
+		deps.appliedBlock?.hold(partition, blockNumber)
 		deadLetterSpaceCap(deps, {...meta, edit: editId}, e)
 		return "dead_letter"
 	}
@@ -67,6 +70,9 @@ export async function handleMessage(
 		deps.chunk,
 		from,
 		(done) => deps.store.saveProgress(partition, offset, done),
+		// A refused intent is skipped, so the edit is not wholly in the store: hold the row below its block. The
+		// `note` below still records the partition's position; the hold caps what the row claims.
+		() => deps.appliedBlock?.hold(partition, blockNumber),
 	)
 	// The overlay's journals say "geo-db holds this". An intent that was dead-lettered never reached geo-db, and the marks
 	// are not tied to intents, so an edit with any dead letter commits none: a later translation (a replay, or the next
@@ -77,7 +83,8 @@ export async function handleMessage(
 	if (deadLettered === 0) overlay.commit()
 	else log("warn", "overlay not committed: edit has dead-lettered intents", {...meta, space: spaceId, edit: editId, deadLettered, intents: intents.length})
 	for (const [k, v] of Object.entries(stats)) deps.metrics.opsDetail.inc({counter: k}, v)
-	// Every chunk of the edit is applied: the applied-block row may now name its block (appliedBlock.ts; best effort).
+	// Every chunk of the edit is done (applied, or dead-lettered and held above): the applied-block row may now name
+	// its block, up to any hold (appliedBlock.ts; best effort).
 	await deps.appliedBlock?.note(partition, blockNumber)
 	return intents.length === 0 ? "empty" : "applied"
 }

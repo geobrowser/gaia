@@ -2055,6 +2055,14 @@ reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_deri
   so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
   configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
+- Applied-block holds (`GEODB_APPLIED_BLOCK`): a dead letter of the edits consumer (a refused intent, an undecodable
+  message, a `space_cap` edit) holds its partition in the `geodb-feeder-applied` row one block below the dead-lettered
+  edit's, so the row never claims rows the store lacks (log line "applied block held below a dead-lettered edit").
+  Holds persist in `/data/feeder/applied-holds.json` as `{"<partition>": <highest claimable block>}` and are never
+  released automatically: after a replay applies every dead-lettered edit of a partition, scale the feeder to 0,
+  remove that partition's key (or the file), and scale back to 1. A hold freezes the row's block, not the feeder.
+  Dead letters from before this existed are not held: edit 742e60d9 (partition 0, block 120865, 2026-11-12) needs
+  `{"0": 120864}` written into the file (`kubectl exec`) before the image with holds rolls out, or the row stays past it.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
   `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 

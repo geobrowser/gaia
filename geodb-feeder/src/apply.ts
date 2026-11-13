@@ -90,7 +90,8 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  *
  * - Transient failures (geo-db down, out of a resource) retry forever with backoff; the feeder
  *   never skips an edit because geo-db was unavailable.
- * - A refused range is bisected until the refused intent is alone, which is written to errors.jsonl and skipped.
+ * - A refused range is bisected until the refused intent is alone, which is written to errors.jsonl and skipped;
+ *   `onDeadLetter` runs before that range's `progress`, so whatever it records survives a crash with the progress.
  */
 export async function applyIntents(
 	deps: ApplyDeps,
@@ -100,6 +101,7 @@ export async function applyIntents(
 	chunk: number,
 	from: number,
 	progress: (done: number) => void,
+	onDeadLetter?: () => void,
 ): Promise<{applied: number; deadLettered: number}> {
 	assertPutAllowed(deps, intents)
 	let applied = 0
@@ -124,6 +126,7 @@ export async function applyIntents(
 		deps.metrics.chunks.inc({result: "dead_letter"})
 		log("error", "intent refused by geo-db, skipped", {...meta, error: outcome.error.slice(0, 300)})
 		deadLettered += 1
+		onDeadLetter?.()
 		progress(hi)
 	}
 
