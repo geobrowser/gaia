@@ -112,6 +112,9 @@ spec:
               value: "1"
             - name: GEODB_PROPOSAL_VERSIONS
               value: "1"
+            # "1" also writes each proposal's proposer and owning Space onto its versions. OFF; keep equal to the feeder's value.
+            - name: GEODB_PROPOSAL_VERSION_PROPOSER_SPACE
+              value: "0"
             - name: ENVIRONMENT
               value: testnet
             - name: KAFKA_GROUP_ID

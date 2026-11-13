@@ -29,15 +29,20 @@
  *   they differ shows as `edit_ids` on every comparison. Authors: geo-db may hold none for a Public Space edit (ISS-121),
  *   counted apart as `author_unrecorded`.
  *
+ * - createdAt has no per-edit twin (geo-db's seal time is the feeder's, not the block's), so the page's two ends are
+ *   checked against the entity times `GEODB_ENTITY_TIMES` stamps (`compareVersionTimes`: `newest_time`, `oldest_time`).
+ *   Block number and name are the `edit_meta` shadow's (editMetaShadow.ts, GEODB_EDIT_META_SHADOW); the version key is not served.
+ *
  * `gaia_api_versions_shadow_total{result}`: match, mismatch, unsupported (geo-db cannot answer) or failed (a read
- * failed). `..._mismatch_total{field}`: count, edit_ids, order, author, author_unrecorded (a mismatch can name several).
+ * failed). `..._mismatch_total{field}`: count, edit_ids, order, author, author_unrecorded, newest_time, oldest_time (a mismatch can name several).
+ * `..._times_total{result}`: how the createdAt check ended (ok, mismatch, absent, failed).
  * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), removed (see below), busy (pool or in-flight bound), client (a geodb-client older than
  * geo-db 25360b28c6, which has no `entity-versions` line), server (a node before wire revision 12). `..._skipped_total{reason}`:
  * sample (not the 1-in-N picked) or rate (over the per-minute cap). After a `client` or `server` answer the shadow stops
  * asking for `PROBE_COOLDOWN_MS`, so an old client loses one pipe worker per cooldown, not one per sample.
  */
 
-import {conformingId, type GeoVersionRow} from "./card"
+import {conformingId, entityTimesOf, type GeoCardRow, type GeoVersionRow} from "./card"
 import {entityVersionsUnsupported, type GeoDbCardClient, GeoDbError} from "./client"
 
 export type EntityVersionsShadowConfig = {
@@ -67,13 +72,24 @@ export function readEntityVersionsShadowConfig(env: Record<string, string | unde
 }
 
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
-export const MISMATCH_FIELDS = ["count", "edit_ids", "order", "author", "author_unrecorded"] as const
+export const MISMATCH_FIELDS = [
+	"count",
+	"edit_ids",
+	"order",
+	"author",
+	"author_unrecorded",
+	"newest_time",
+	"oldest_time",
+] as const
+/** `times`: how the createdAt comparison ended (see the header): ok, mismatch, absent (no time to compare) or failed. */
+export const TIME_RESULTS = ["ok", "mismatch", "absent", "failed"] as const
 export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server", "removed"] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Result = (typeof RESULTS)[number]
 type MismatchField = (typeof MISMATCH_FIELDS)[number]
 type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 type SkipReason = (typeof SKIP_REASONS)[number]
+type TimeResult = (typeof TIME_RESULTS)[number]
 
 /** Most rows one geo-db read returns; a page ending past it cannot be compared (`deep_page`). */
 const MAX_FIRST = 100
@@ -86,6 +102,7 @@ const results = new Map<Result, number>()
 const mismatches = new Map<MismatchField, number>()
 const unsupported = new Map<UnsupportedReason, number>()
 const skipped = new Map<SkipReason, number>()
+const timeResults = new Map<TimeResult, number>()
 const bump = <K>(map: Map<K, number>, key: K): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
@@ -120,6 +137,12 @@ export function renderEntityVersionsShadowMetrics(): string {
 	)
 	for (const k of SKIP_REASONS)
 		lines.push(`gaia_api_versions_shadow_skipped_total{reason="${k}"} ${skipped.get(k) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_versions_shadow_times_total Version shadow createdAt comparisons: the newest served version's time against the entity's greatest geo-db updatedAt, and (when the page reaches the oldest version) the oldest's against the least createdAt, by result: ok, mismatch (also counted under the newest_time / oldest_time fields), absent (geo-db holds no entity time, or the client cannot read cards) or failed (the card read failed).",
+		"# TYPE gaia_api_versions_shadow_times_total counter",
+	)
+	for (const t of TIME_RESULTS)
+		lines.push(`gaia_api_versions_shadow_times_total{result="${t}"} ${timeResults.get(t) ?? 0}`)
 	return lines.join("\n")
 }
 
@@ -129,6 +152,7 @@ export function __resetEntityVersionsShadowMetricsForTests(): void {
 	mismatches.clear()
 	unsupported.clear()
 	skipped.clear()
+	timeResults.clear()
 }
 
 /** What the route served: the Postgres page, as `getEntityVersions` returned it. */
@@ -138,7 +162,14 @@ export type ServedVersions = {
 	spaceId?: string | undefined
 	limit: number
 	offset: number
-	versions: readonly {editId: string; createdById: string | null}[]
+	versions: readonly {
+		editId: string
+		createdById: string | null
+		blockNumber?: string
+		name?: string | null
+		/** The edit's chain block time, ISO 8601 (Postgres `edit_versions.created_at`). */
+		createdAt?: string
+	}[]
 }
 
 export type EntityVersionsShadow = {
@@ -177,6 +208,41 @@ export function compareVersions(served: ServedVersions, rows: readonly GeoVersio
 	return MISMATCH_FIELDS.filter((f) => fields.has(f))
 }
 
+/**
+ * The createdAt of the page's ends against the entity times geo-db holds (`GEODB_ENTITY_TIMES`: the feeder stamps
+ * `updatedAt` on every edit that changes one of the entity's statements and `createdAt` on the edit that introduces it to
+ * a Space, both as the edit's chain block time). geo-db has no per-edit time of its own (its seal time is when the feeder
+ * sealed, not the block's), so the page's two ends are what can be checked:
+ * - `newest_time`, on a page that starts at offset 0: the newest served edit's `createdAt` equals the greatest `updatedAt`;
+ * - `oldest_time`, on a page that reaches the end of the log (`offset + served >= total`): the oldest served edit's
+ *   `createdAt` equals the least `createdAt`.
+ * Seconds compare as seconds (Postgres holds unix seconds, geo-db an instant). A side with no time, or a page with no
+ * `createdAt`, is `absent`: nothing is claimed. Pure.
+ */
+export function compareVersionTimes(
+	served: ServedVersions,
+	total: number,
+	times: {createdAt: number | null; updatedAt: number | null},
+): {fields: MismatchField[]; result: "ok" | "mismatch" | "absent"} {
+	const seconds = (iso: string | undefined): number | null => {
+		const ms = iso === undefined ? Number.NaN : Date.parse(iso)
+		return Number.isFinite(ms) ? Math.floor(ms / 1000) : null
+	}
+	const fields: MismatchField[] = []
+	let checked = 0
+	const newest = seconds(served.versions[0]?.createdAt)
+	if (served.offset === 0 && newest !== null && times.updatedAt !== null) {
+		checked++
+		if (newest !== times.updatedAt) fields.push("newest_time")
+	}
+	const oldest = seconds(served.versions[served.versions.length - 1]?.createdAt)
+	if (served.offset + served.versions.length >= total && oldest !== null && times.createdAt !== null) {
+		checked++
+		if (oldest !== times.createdAt) fields.push("oldest_time")
+	}
+	return {fields, result: fields.length > 0 ? "mismatch" : checked > 0 ? "ok" : "absent"}
+}
+
 export function createEntityVersionsShadow(deps: {
 	config: EntityVersionsShadowConfig
 	geoDb: GeoDbCardClient
@@ -195,6 +261,26 @@ export function createEntityVersionsShadow(deps: {
 	let windowCount = 0
 	let blocked: {until: number; reason: "client" | "server"} | null = null
 
+	/** The createdAt comparison; its own failure is counted `failed` there and never fails the rest of the comparison. */
+	async function readTimes(served: ServedVersions, rows: readonly GeoVersionRow[]): Promise<MismatchField[]> {
+		if (!geoDb.readCards) {
+			bump(timeResults, "absent")
+			return []
+		}
+		try {
+			const cards: GeoCardRow[] = await geoDb.readCards({
+				geoSpaceIds: [...new Set(rows.map((r) => r.space))],
+				entityIds: [conformingId("entity", served.entityId)],
+			})
+			const {fields, result} = compareVersionTimes(served, rows[0]?.total ?? 0, entityTimesOf(cards))
+			bump(timeResults, result)
+			return fields
+		} catch {
+			bump(timeResults, "failed")
+			return []
+		}
+	}
+
 	async function compare(served: ServedVersions): Promise<void> {
 		try {
 			if (!geoDb.readEntityVersions) return recordUnsupported("client")
@@ -202,10 +288,14 @@ export function createEntityVersionsShadow(deps: {
 				entityId: served.entityId,
 				first: Math.min(served.offset + Math.max(served.limit, 1), MAX_FIRST),
 			})
-			const fields = compareVersions(served, rows)
+			const fields: MismatchField[] = compareVersions(served, rows)
 			if (rows.length === 0 && served.versions.length > 0 && deps.hasLiveStatements) {
 				const live = await deps.hasLiveStatements(served.entityId).catch(() => true)
 				if (!live) return recordUnsupported("removed")
+			}
+			if (rows.length > 0 && served.versions.length > 0) {
+				const times = await readTimes(served, rows)
+				for (const f of times) if (!fields.includes(f)) fields.push(f)
 			}
 			bump(results, fields.length === 0 ? "match" : "mismatch")
 			for (const f of fields) bump(mismatches, f)

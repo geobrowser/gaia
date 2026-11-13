@@ -8,6 +8,7 @@ from datetime import datetime
 import psycopg
 
 from src.algorithm.models import Entity, Space
+from src.geodb_reads import ScoresServe
 from src.geodb_derived import DerivedMirror, global_rows, key_bytes, local_rows, norm_id as _norm, space_rows
 
 MIRROR_TABLES = ("global_scores", "local_scores", "space_scores")
@@ -38,16 +39,25 @@ def pg_writes_enabled(env: "os._Environ[str] | dict[str, str] | None" = None) ->
 class ScoringDataWriter:
     """Persists calculated scores to PostgreSQL using batch upserts."""
 
-    def __init__(self, connection_string: str, derived: DerivedMirror | None = None, pg_writes: bool | None = None):
+    def __init__(
+        self,
+        connection_string: str,
+        derived: DerivedMirror | None = None,
+        pg_writes: bool | None = None,
+        serve: "ScoresServe | None" = None,
+    ):
         """Initialize the ScoringDataWriter with a database connection string.
 
         Args:
             connection_string: PostgreSQL connection string (e.g., "postgresql://user:pass@host/db")
             derived: Optional best-effort mirror into geo-db's derived class. ``None`` (the default,
                 and what ``GEODB_DERIVED_MIRROR`` unset gives) means no geo-db calls at all.
+            serve: Optional geo-db read of the stored scores for the changed-rows diff (``GEODB_SCORES_SERVE``).
+                ``None`` (the default, and what the flag unset gives) means the diff reads Postgres, as it always did.
         """
         self._connection_string = connection_string
         self._derived = derived
+        self._serve = serve
         # None reads SCORING_WRITER_PG_WRITES. Off: no connection and no statement, the mirror still runs.
         self._pg_writes = pg_writes_enabled() if pg_writes is None else pg_writes
 
@@ -82,13 +92,15 @@ class ScoringDataWriter:
                         t0 = time.monotonic()
                         try:
                             with conn.transaction():  # a savepoint: a failed diff must not abort the write
-                                changed[table] = self._changed_keys(conn, table, entities)
+                                served = self._serve.changed_keys(table, entities) if self._serve is not None else None
+                                # None: serving is off, or it fell back (counted); Postgres answers either way.
+                                changed[table] = served if served is not None else self._changed_keys(conn, table, entities)
                         except Exception:  # noqa: BLE001 - fall back to a full rewrite of this table
                             logger.exception("geodb_derived.diff_failed table=%s; sending every row", table)
                             state[table] = (False, None)
                             continue
                         logger.info(
-                            "Diffed %s against Postgres in %.1fs: %d changed", table, time.monotonic() - t0, len(changed[table])
+                            "Diffed %s in %.1fs: %d changed", table, time.monotonic() - t0, len(changed[table])
                         )
                 t0 = time.monotonic()
                 self._write_global_scores(conn, entities, now)

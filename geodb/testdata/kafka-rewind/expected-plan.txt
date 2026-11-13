@@ -1,0 +1,4 @@
+testnet.hermes.blocks,0,9000,at-timestamp
+testnet.knowledge.edits,0,1500,at-timestamp
+testnet.knowledge.edits,1,800,at-end
+testnet.knowledge.edits,2,100,clamped-to-earliest

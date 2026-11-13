@@ -42,6 +42,9 @@ export function classify(message: string): Failure {
 	if (/ResourceExhausted/.test(message)) return "exhausted"
 	if (/ConnectionRefused|connection refused|ConnectionResetByPeer|BrokenPipe|FileNotFound|Timeout|timed out|Unavailable|AddressNotAvailable|NetworkUnreachable|SessionExpired|\bkilled\b/i.test(message))
 		return "transient"
+	// geodb-client reports a failed connect as `--binding <file>: connect: IoError` (serve restarting: the binding's
+	// address is gone or not listening yet). Nothing was sent, so the apply is safe to repeat.
+	if (/connect: IoError/.test(message)) return "transient"
 	return "permanent"
 }
 
@@ -51,6 +54,8 @@ export const spaceIds = (listing: string): string[] =>
 		.filter(Boolean)
 		.map((l) => l.split("\t")[0] ?? "")
 		.filter((s) => /^[0-9a-f]{32}$/.test(s))
+
+export const SPACES_PROBE_TIMEOUT_MS = 3_000
 
 export class GeoDb {
 	private seq = 0
@@ -63,8 +68,12 @@ export class GeoDb {
 		mkdirSync(opts.runDir, {recursive: true})
 	}
 
-	/** The Space ids geo-db serves, or null while it does not answer. */
-	async spaces(timeoutMs = 20_000): Promise<string[] | null> {
+	/**
+	 * The Space ids geo-db serves, or null while it does not answer. The default kill timeout is short: a healthy
+	 * serve answers in well under a second, and after a roll a connect to a stale pod IP hangs until killed, which
+	 * keeps `waitReady` (and so apply) dark for the whole timeout past Ready.
+	 */
+	async spaces(timeoutMs = SPACES_PROBE_TIMEOUT_MS): Promise<string[] | null> {
 		const r = await this.run(["spaces"], {timeoutMs})
 		return r.rc === 0 ? spaceIds(r.out) : null
 	}

@@ -9,7 +9,8 @@
 //!
 //! `get` answers `<group hex>\t<score>\t<value hex>` or `none`. `scan` answers one
 //! `<score>\t<key hex>\t<value hex>` a line in score order (descending, then key ascending), and a last
-//! line `more` when the group held rows past the page.
+//! line `more` when the group held rows past the page. A scan given a resume cursor (`scan_after`)
+//! answers that last line `more\t<cursor hex>`, the cursor of the page's last row.
 
 use crate::{Config, CursorMirror, MirrorError};
 
@@ -39,6 +40,49 @@ pub struct ScanRow {
 pub struct Page {
     pub rows: Vec<ScanRow>,
     pub more: bool,
+    /// The cursor that resumes after this page, when the request carried a cursor and the group held
+    /// more (`more\t<hex>`). Always `None` for a request without one.
+    pub next: Option<Vec<u8>>,
+}
+
+/// Longest key a derived row holds (`wire_derived`, geo-db `key_max`).
+const CURSOR_KEY_MAX: usize = 48;
+
+/// The order-preserving `u64` of a finite score (geo-db `row.scoreKey`): a non-negative score's sign
+/// bit set, a negative one's bits complemented, `-0.0` as `0.0`. `None` for a NaN or an infinity.
+pub fn score_key(score: f64) -> Option<u64> {
+    if !score.is_finite() {
+        return None;
+    }
+    let bits = if score == 0.0 { 0 } else { score.to_bits() };
+    let sign = 1u64 << 63;
+    Some(if bits & sign != 0 { !bits } else { bits | sign })
+}
+
+/// The encoded scan cursor (geo-db `row.Cursor`) naming the position `(score, key)`: a scan resumed
+/// with it returns the rows after that position, so the row with that score and key is not read
+/// again. Layout: tag 1, the score key as a little-endian `u64`, the key length, the key.
+pub fn cursor_after(score: f64, key: &[u8]) -> Option<Vec<u8>> {
+    if key.is_empty() || key.len() > CURSOR_KEY_MAX {
+        return None;
+    }
+    let mut out = Vec::with_capacity(10 + key.len());
+    out.push(1);
+    out.extend_from_slice(&score_key(score)?.to_le_bytes());
+    out.push(key.len() as u8);
+    out.extend_from_slice(key);
+    Some(out)
+}
+
+/// The cursor that starts a scan at `score` alone: with `inclusive` every row of that score is
+/// read (the key is one zero byte, which sorts before every longer key), without it none is (the
+/// key is 48 bytes of `0xFF`, which sorts after every row key). geo-db `voteUpdatesFrom`.
+pub fn cursor_at_score(score: f64, inclusive: bool) -> Option<Vec<u8>> {
+    if inclusive {
+        cursor_after(score, &[0])
+    } else {
+        cursor_after(score, &[0xFF; CURSOR_KEY_MAX])
+    }
 }
 
 fn hex(b: &[u8]) -> String {
@@ -63,6 +107,14 @@ pub fn get_line(collection: u32, key: &[u8]) -> String {
 /// The pipe's `scan` request line for the first `first` (1 to [`SCAN_MAX`]) rows of `group`.
 pub fn scan_line(collection: u32, group: u128, first: usize) -> String {
     format!("scan\t{collection}\t0x{group:x}\t{first}\t1\n")
+}
+
+/// The pipe's `scan` request line that resumes after the encoded cursor `after`.
+pub fn scan_after_line(collection: u32, group: u128, first: usize, after: &[u8]) -> String {
+    format!(
+        "scan\t{collection}\t0x{group:x}\t{first}\t1\t{}\n",
+        hex(after)
+    )
 }
 
 /// The row a `get` answer names, `None` for `none`. An error on anything else.
@@ -96,12 +148,18 @@ pub fn parse_scan(body: &str) -> Result<Page, MirrorError> {
     let bad = |l: &str| MirrorError::BadFrame(format!("derived scan row: {}", clip(l)));
     let mut rows = Vec::new();
     let mut more = false;
+    let mut next = None;
     for line in body.lines() {
         if line.is_empty() {
             continue;
         }
         if line == "more" {
             more = true;
+            continue;
+        }
+        if let Some(hex) = line.strip_prefix("more\t") {
+            more = true;
+            next = Some(unhex(hex).ok_or_else(|| bad(line))?);
             continue;
         }
         let parts: Vec<&str> = line.split('\t').collect();
@@ -118,7 +176,7 @@ pub fn parse_scan(body: &str) -> Result<Page, MirrorError> {
             value: unhex(value).ok_or_else(|| bad(line))?,
         });
     }
-    Ok(Page { rows, more })
+    Ok(Page { rows, more, next })
 }
 
 fn clip(s: &str) -> String {
@@ -172,6 +230,27 @@ impl DerivedReader {
             .await?;
         parse_scan(bodies.first().map(String::as_str).unwrap_or(""))
     }
+
+    /// As [`scan`](Self::scan), resuming after the encoded cursor `after` (`None` starts at the
+    /// group's first row). See [`cursor_after`] and [`cursor_at_score`].
+    pub async fn scan_after(
+        &self,
+        collection: u32,
+        group: u128,
+        first: usize,
+        after: Option<&[u8]>,
+    ) -> Result<Page, MirrorError> {
+        let first = first.clamp(1, SCAN_MAX);
+        let line = match after {
+            Some(a) => scan_after_line(collection, group, first, a),
+            None => scan_line(collection, group, first),
+        };
+        let bodies = self
+            .pipe
+            .exchange(std::slice::from_ref(&line), READ_FRAME_MAX)
+            .await?;
+        parse_scan(bodies.first().map(String::as_str).unwrap_or(""))
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +273,54 @@ mod tests {
         assert_eq!(get_line(26, &[1, 0xab]), "get\t26\thex:01ab\n");
         assert_eq!(scan_line(11, 0xab, 7), "scan\t11\t0xab\t7\t1\n");
         assert_eq!(scan_line(11, 0, 7), "scan\t11\t0x0\t7\t1\n");
+    }
+
+    #[test]
+    fn a_scan_after_line_carries_the_cursor_hex() {
+        assert_eq!(
+            scan_after_line(33, 0, 7, &[1, 0xab]),
+            "scan\t33\t0x0\t7\t1\t01ab\n"
+        );
+    }
+
+    #[test]
+    fn cursors_encode_as_geo_dbs_row_cursor() {
+        // tag 1, score key little-endian, key length, key.
+        let c = cursor_after(-5.0, &[9, 8]).unwrap();
+        // -5.0 is bits 0xC014000000000000; negative, so the key is the complement 0x3FEBFFFFFFFFFFFF.
+        assert_eq!(c[0], 1);
+        assert_eq!(
+            u64::from_le_bytes(c[1..9].try_into().unwrap()),
+            0x3FEB_FFFF_FFFF_FFFF
+        );
+        assert_eq!(c[9], 2);
+        assert_eq!(&c[10..], &[9, 8]);
+        // Score order: a higher score has a higher key, and -0.0 is 0.0.
+        assert!(score_key(-1.0).unwrap() < score_key(0.0).unwrap());
+        assert!(score_key(0.0).unwrap() < score_key(1.0).unwrap());
+        assert_eq!(score_key(-0.0), score_key(0.0));
+        assert_eq!(score_key(0.0), Some(1 << 63));
+        assert!(score_key(f64::NAN).is_none() && score_key(f64::INFINITY).is_none());
+        assert!(cursor_after(1.0, &[]).is_none());
+        assert!(cursor_after(1.0, &[0; 49]).is_none());
+        // A start at a score alone: inclusive sorts before every key, strict after every key.
+        let inc = cursor_at_score(-5.0, true).unwrap();
+        assert_eq!((inc[9], &inc[10..]), (1, &[0u8][..]));
+        let strict = cursor_at_score(-5.0, false).unwrap();
+        assert_eq!(
+            (strict[9] as usize, strict[10..].iter().all(|b| *b == 0xFF)),
+            (48, true)
+        );
+    }
+
+    #[test]
+    fn a_scan_answer_with_a_cursor_names_the_next_page() {
+        let p = parse_scan("2.5\t0102\t0a\nmore\t01ff\n").unwrap();
+        assert!(p.more);
+        assert_eq!(p.next, Some(vec![1, 0xff]));
+        let p = parse_scan("2.5\t0102\t0a\nmore\n").unwrap();
+        assert!(p.more && p.next.is_none());
+        assert!(parse_scan("more\tzz\n").is_err());
     }
 
     #[test]

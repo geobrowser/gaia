@@ -22,6 +22,8 @@ import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
 import {startOptionalConsumer} from "./optionalConsumer.js"
 import {startProposalStatusConsumer} from "./proposalStatusConsumer.js"
+import {editMetaKeyedEnabled, editMetaOffsetsDir} from "./editMetaKeyed.js"
+import {startEditMetaConsumer} from "./editMetaConsumer.js"
 import {startRanksConsumer} from "./ranksConsumer.js"
 import {ranksKeyedEnabled, ranksOffsetsDir} from "./ranksKeyed.js"
 import {proposalStatusKeyedEnabled, proposalStatusOffsetsDir} from "./proposalStatusKeyed.js"
@@ -45,7 +47,8 @@ import {PendingSpaces} from "./spaceEntities.js"
 import {startSpaceEntityConsumer} from "./spaceEntitiesConsumer.js"
 import {createMetrics, observeFreshness} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
-import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
+import {ReadOnlyPg, readMembershipIds} from "./pgSource.js"
+import {shadowComparePg} from "./shadowComparePg.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {SYSTEM_SPACE_MAP_KEY, SystemSpaces} from "./systemSpaces.js"
 import {startServer} from "./server.js"
@@ -170,7 +173,7 @@ async function main(config: Config): Promise<void> {
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
-				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
+				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk, positions: config.relationPositions, facets: config.relationFacets, entityTimes: config.entityTimes, legacyMap: config.legacyIdMap, appliedBlock}
 				let outcome: string
 				for (;;) {
 					try {
@@ -255,11 +258,9 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 	if (config.membership.shadowCompare && state) {
-		const url = process.env.DATABASE_URL
-		if (!url) log("error", "GEODB_MEMBERSHIP_SHADOW_COMPARE is set without DATABASE_URL; comparison disabled")
-		else {
+		pg = shadowComparePg()
+		if (pg) {
 			const membershipState = state
-			pg = new ReadOnlyPg(pgConfig(url, process.env.DATABASE_SSL_CA))
 			reader = new PipeReader({clientBin: config.clientBin, keyPath: config.membership.readerKeyPath, bindingPath: config.bindingPath})
 			const run = () =>
 				compareMembership({
@@ -467,6 +468,7 @@ async function main(config: Config): Promise<void> {
 					systemSpaces,
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(proposalVersionsOffsetsDir(config.dataDir)),
+					storeProposerSpace: config.proposalVersions.storeProposerSpace,
 				},
 			}),
 		)
@@ -490,6 +492,28 @@ async function main(config: Config): Promise<void> {
 					systemSpaces,
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(proposalStatusOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
+	// Keyed per-edit metadata (editMetaKeyed.ts): GEODB_EDIT_META with GEODB_RECORD_KEYS. Reads the envelope only.
+	let editMeta: Awaited<ReturnType<typeof startEditMetaConsumer>> | null = null
+	if (config.editMeta.enabled && !config.recordKeys) log("warn", "GEODB_EDIT_META is set without GEODB_RECORD_KEYS; edit-meta consumer not started")
+	if (editMetaKeyedEnabled(config)) {
+		editMeta = await startOptionalConsumer("edit_meta", metrics.consumerStartFailed, () =>
+			startEditMetaConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(editMetaOffsetsDir(config.dataDir)),
 				},
 			}),
 		)
@@ -584,6 +608,12 @@ async function main(config: Config): Promise<void> {
 		await ps.poll()
 	}
 
+	if (editMeta) {
+		const em = editMeta
+		setInterval(() => void em.poll(), config.lagPollMs).unref()
+		await em.poll()
+	}
+
 	if (ranks) {
 		const rk = ranks
 		setInterval(() => void rk.poll(), config.lagPollMs).unref()
@@ -633,6 +663,7 @@ async function main(config: Config): Promise<void> {
 		await proposalVersions?.stop()
 		await proposalStatus?.stop()
 		await ranks?.stop()
+		await editMeta?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()

@@ -5,6 +5,12 @@
 #   GeoDbDerivedRowsHigh      geodb_derived_rows above 80% of geodb_derived_rows_max for 15m
 #   GeoDbOutboxMirrorErrors   geodb_outbox_mirror_errors_total rose in the last 15m
 #   GeoDbOutboxMirrorDropped  geodb_outbox_mirror_dropped_total rose in the last 15m
+#   GeoDbOutboxMirrorBacklog  geodb_outbox_mirror_backlog above 0 for 10m (needs gaia#1491, flag
+#                             GEODB_OUTBOX_MIRROR_BACKLOG on; the series does not exist before)
+#   GeoDbOutboxMirrorBacklogDropped
+#                             geodb_outbox_mirror_backlog_dropped_total or _expired_total rose in the last 15m
+#   GeoDbVotesCountMirrorLag  vote-indexer's votes_count mirror (collections 26 and 33) more than 10m
+#                             behind the newest source row for 15m (vote_indexer_votes_count_mirror_lag_seconds)
 #
 #   GeoDbWorkRowsHigh         geodb_work_rows above 80% of geodb_work_rows_max for 15m (serve >= geo-db
 #                             5fbf4ad5ee; printed only while the work class is on)
@@ -90,3 +96,63 @@ spec:
               The bounded queue (4096) was full or its worker is gone, so enqueues were dropped from the
               shadow (geodb_outbox_mirror_queue shows the depth). Postgres delivery is unaffected, but
               the work class is now missing rows and a later shadow-read comparison will show them.
+
+        - alert: GeoDbOutboxMirrorBacklog
+          # Units wait here only while serve refuses or is unreachable; a serve roll clears in under a
+          # minute, so 10m means a real outage, not a roll.
+          expr: |
+            max(geodb_outbox_mirror_backlog{namespace="gaia", job="notification-indexer"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+            service: notification-indexer
+            namespace: gaia
+          annotations:
+            summary: The notification-indexer's outbox mirror has held unsent units for 10 minutes
+            description: >-
+              Units whose geo-db enter failed are kept and retried oldest first (bounded; default 3000).
+              A backlog that does not drain means serve is down or refusing the work key; once the bound
+              is hit the oldest units are dropped (GeoDbOutboxMirrorBacklogDropped). Fix serve, then check
+              the backlog falls to 0 (RUNBOOK section 11).
+
+        - alert: GeoDbOutboxMirrorBacklogDropped
+          # Overflow drops (backlog_dropped) and refused-head expiry (backlog_expired) both lose a
+          # unit from the shadow. Same counter shape as the alerts above: the second clause catches a
+          # series that first appeared inside the window.
+          expr: |
+            sum(increase({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}[15m])) > 0
+            or
+            sum({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}
+                unless {__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"} offset 15m) > 0
+          labels:
+            severity: warning
+            service: notification-indexer
+            namespace: gaia
+          annotations:
+            summary: The notification-indexer's outbox mirror backlog is dropping units
+            description: >-
+              Units were dropped from the backlog: it hit its bound during an outage (backlog_dropped), or
+              a unit geo-db kept refusing was expired from the head (backlog_expired; needs gaia#1507).
+              Postgres delivery is unaffected. Check which counter rose, then replay the window with
+              outbox-replay once serve is healthy (RUNBOOK section 11).
+
+        - alert: GeoDbVotesCountMirrorLag
+          # The gauge is the newest votes_count updated_at the mirror was asked to send minus the newest
+          # whose rows (26 and its 33 pair) geo-db acknowledged, set after every mirror call. It is 0
+          # while the mirror is off, and holds its last value through a quiet spell, so a stall that
+          # starts with no vote after it shows as the next vote's lag, not as a rising line.
+          expr: |
+            max(vote_indexer_votes_count_mirror_lag_seconds{namespace="gaia"}) > 600
+          for: 15m
+          labels:
+            severity: warning
+            service: vote-indexer
+            namespace: gaia
+          annotations:
+            summary: The vote-indexer's votes_count geo-db mirror is more than 10 minutes behind
+            description: >-
+              geo-db's collections 26 (votes_count) and 33 (votes_count_updates) trail Postgres, so the
+              notification poller and any vote-tally read from geo-db are stale. Postgres is unaffected.
+              Check vote_indexer_votes_count_mirror_rows_total{collection} is rising, and
+              geodb_derived_mirror_errors_total / _unacknowledged_total / _dropped_total{table="votes_count"}
+              for why. A vote-indexer restart re-copies the whole table (the start-up snapshot).

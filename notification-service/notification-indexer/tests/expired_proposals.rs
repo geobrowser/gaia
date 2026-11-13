@@ -21,7 +21,8 @@
 //!    skipped.
 
 use notification_indexer::storage::{Storage, REJECTION_FLOOR_CURSOR};
-use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{AssertSqlSafe, PgPool};
 use uuid::Uuid;
 
 /// Mirrors the governance-v2 shape: `end_time` lives on `proposal_versions`,
@@ -95,18 +96,51 @@ async fn seed_proposal(pool: &PgPool, name: &str, hours_ago: i64, executed: bool
     id
 }
 
-async fn connect() -> Option<PgPool> {
+/// A pool bound to a schema of its own, so the tests (which cargo runs in parallel) neither race on
+/// DDL (concurrent `DROP/CREATE TABLE` in one schema collide on `pg_type_typname_nsp_index`) nor see
+/// each other's rows. Returns the pool and the schema name for `cleanup`.
+async fn connect() -> Option<(PgPool, String)> {
     let url = std::env::var("NOTIF_TEST_DATABASE_URL").ok()?;
-    let pool = PgPool::connect(&url).await.expect("connect");
+    let schema = format!("ep_{}", Uuid::new_v4().simple());
+    let admin = PgPool::connect(&url).await.expect("connect");
+    sqlx::query(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin)
+        .await
+        .expect("create schema");
+    admin.close().await;
+    // Schema name is generated here (ep_ + hex), never external input.
+    let path = format!("SET search_path TO {schema}");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(move |c, _| {
+            let path = path.clone();
+            Box::pin(async move {
+                sqlx::query(AssertSqlSafe(path))
+                    .execute(c)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect(&url)
+        .await
+        .expect("connect");
     for stmt in SCHEMA.split(';').filter(|s| !s.trim().is_empty()) {
         sqlx::query(stmt).execute(&pool).await.expect("schema");
     }
-    Some(pool)
+    Some((pool, schema))
+}
+
+/// Drops the test's schema (skipped when an assertion fails first; the schemas are harmless).
+async fn cleanup(pool: PgPool, schema: String) {
+    sqlx::query(AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&pool)
+        .await
+        .expect("drop schema");
 }
 
 #[tokio::test]
 async fn reads_end_time_from_the_current_version_not_the_proposals_table() {
-    let Some(pool) = connect().await else {
+    let Some((pool, schema)) = connect().await else {
         eprintln!("skipping: set NOTIF_TEST_DATABASE_URL to run");
         return;
     };
@@ -123,11 +157,12 @@ async fn reads_end_time_from_the_current_version_not_the_proposals_table() {
 
     let ids: Vec<Uuid> = found.iter().map(|p| p.id).collect();
     assert_eq!(ids, vec![recent], "only the unexecuted in-window proposal");
+    cleanup(pool, schema).await;
 }
 
 #[tokio::test]
 async fn floor_excludes_the_replayed_migration_backlog() {
-    let Some(pool) = connect().await else {
+    let Some((pool, schema)) = connect().await else {
         eprintln!("skipping: set NOTIF_TEST_DATABASE_URL to run");
         return;
     };
@@ -155,11 +190,12 @@ async fn floor_excludes_the_replayed_migration_backlog() {
         3,
         "without a floor the whole backlog fires"
     );
+    cleanup(pool, schema).await;
 }
 
 #[tokio::test]
 async fn already_notified_proposals_are_not_repeated() {
-    let Some(pool) = connect().await else {
+    let Some((pool, schema)) = connect().await else {
         eprintln!("skipping: set NOTIF_TEST_DATABASE_URL to run");
         return;
     };
@@ -180,11 +216,12 @@ async fn already_notified_proposals_are_not_repeated() {
         .await
         .expect("query");
     assert!(found.is_empty(), "the outbox anti-join dedupes");
+    cleanup(pool, schema).await;
 }
 
 #[tokio::test]
 async fn floor_is_seeded_once_and_then_stable() {
-    let Some(pool) = connect().await else {
+    let Some((pool, schema)) = connect().await else {
         eprintln!("skipping: set NOTIF_TEST_DATABASE_URL to run");
         return;
     };
@@ -204,6 +241,7 @@ async fn floor_is_seeded_once_and_then_stable() {
     // proposal that expired during it.
     let second = storage.rejection_floor(999).await.expect("read back");
     assert_eq!(first, second, "an existing floor is never widened or moved");
+    cleanup(pool, schema).await;
 }
 
 fn floor_hours_ago(hours: i64) -> i64 {

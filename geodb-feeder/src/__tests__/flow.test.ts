@@ -65,6 +65,10 @@ describe("classify", () => {
 		expect(classify("error: ResourceExhausted")).toBe("exhausted")
 		expect(classify("error: ConnectionRefused")).toBe("transient")
 		expect(classify("error: FileNotFound")).toBe("transient")
+		// Seen live during a serve restart (2026-11-12): dead-lettered 28 intents before this was transient.
+		expect(classify("error: IoError\n--binding /geodb/binding.txt: connect: IoError\n")).toBe("transient")
+		// An IoError outside connect is not known to be safe to repeat.
+		expect(classify("error: IoError")).toBe("permanent")
 		expect(classify("error: StreamTooLong")).toBe("permanent")
 		expect(classify("error: InvalidIntent")).toBe("permanent")
 	})
@@ -174,6 +178,21 @@ describe("state", () => {
 		const reopened = new Store(dir)
 		expect(reopened.hasEntity(GAIA, "e1")).toBe(true)
 		expect(reopened.hasStatement("s1")).toBe(true)
+	})
+
+	it("journals a relation's cell and current statement across a restart, the last line winning", () => {
+		const dir = tmp()
+		const store = new Store(dir)
+		const first = new Overlay(store, GAIA)
+		first.markRelation("r1", {from: "e1", prop: "p1", current: "r1"})
+		expect(new Store(dir).relationOf("r1")).toBeUndefined()
+		first.commit()
+		const second = new Overlay(store, GAIA)
+		expect(second.relation("r1")?.current).toBe("r1")
+		second.markRelation("r1", {from: "e1", prop: "p1", current: "r2", facets: {toSpace: "aa"}})
+		expect(second.relation("r1")?.current).toBe("r2")
+		second.commit()
+		expect(new Store(dir).relationOf("r1")).toEqual({from: "e1", prop: "p1", current: "r2", facets: {toSpace: "aa"}})
 	})
 
 	it("persists offsets and in-message progress", () => {

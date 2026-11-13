@@ -57,10 +57,10 @@ fi
 if [ -n "${GEODB_OUTBOX_KEYID:-}" ]; then
 	sed -i "/^grant_ttl_s/i principal = $GEODB_OUTBOX_KEYID read=- write=- publish=- work=*" "$RUN/binding.txt"
 fi
-# The score writers' key (vote-indexer + ranking-indexer + topology-indexer, Secret geodb-scores-key): derived collections 0-7, 11, 12, 13 to 19, 20 to 29
-# (entity_type_ranking, entity_topic_ranking, global/local/space_scores, account_weights, ranks.ranking_scores, account_exclusions, space_topic_suggestions, then the per-user 27 external_interest_signals, 28 user_topic_signals, 29 feed_user_seen_daily) and nothing else (RUNBOOK section 12).
+# The score writers' key (vote-indexer + ranking-indexer + topology-indexer, Secret geodb-scores-key): derived collections 0-7, 11, 12, 13 to 19, 20 to 29, 33
+# (entity_type_ranking, entity_topic_ranking, global/local/space_scores, account_weights, ranks.ranking_scores, account_exclusions, space_topic_suggestions, then the per-user 27 external_interest_signals, 28 user_topic_signals, 29 feed_user_seen_daily, 33 votes_count_updates, which the vote-indexer writes in the same frame as 26) and nothing else (RUNBOOK section 12).
 if [ -n "${GEODB_SCORES_KEYID:-}" ]; then
-	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29" "$RUN/binding.txt"
+	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,2,3,4,5,6,7,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,33" "$RUN/binding.txt"
 fi
 
 # The api's private reader key (Secret geodb-private-reader-key, k8s/v2/geodb-private-reader-key-job.yaml): reads the
@@ -111,6 +111,9 @@ TAIL_PID=$!
 node=
 sealer=
 published=0
+# Poll fast until serve's ids appear (each tick saves up to that much off the roll), then slow down: the only
+# remaining work is retrying a failed ConfigMap publish, which should not hit the apiserver ten times a second.
+POLL=0.1
 while kill -0 "$SERVE_PID" 2>/dev/null; do
 	if [ -z "$node" ] || [ -z "$sealer" ]; then
 		node="$(sed -n 's/^node: \([0-9a-f]\{64\}\).*/\1/p' "$RUN/serve.log" | head -n 1)"
@@ -119,12 +122,13 @@ while kill -0 "$SERVE_PID" 2>/dev/null; do
 			printf '%s\n' "$node" > "$CTL/node-id"
 			printf '%s\n' "$sealer" > "$CTL/sealer-id"
 			: > "$CTL/serving"
+			POLL=0.5
 		fi
 	fi
 	if [ -n "$node" ] && [ -n "$sealer" ] && [ "$published" = 0 ]; then
 		publish_ids "$node" "$sealer" && published=1
 	fi
-	sleep 0.5
+	sleep "$POLL"
 done
 
 wait "$SERVE_PID"

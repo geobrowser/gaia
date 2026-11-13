@@ -269,6 +269,33 @@ impl Storage {
         Ok(deliveries)
     }
 
+    /// The url and secret of one webhook, for a delivery claimed from geo-db (which carries only
+    /// the webhook id). From the mounted file in file mode, else `app_webhooks`. `None` when the
+    /// webhook is gone, or the file cannot be read (the unit then stays leased and comes back).
+    pub async fn webhook_target(
+        &self,
+        webhook_id: Uuid,
+    ) -> Result<Option<(String, String)>, StorageError> {
+        if let Some(file) = &self.webhooks_file {
+            return Ok(match file.load().await {
+                Ok(dir) => dir
+                    .get(&webhook_id)
+                    .map(|t| (t.url.clone(), t.secret.clone())),
+                Err(e) => {
+                    hermes_instrumentation::error!(error = %e, "app webhooks file unavailable");
+                    return Err(StorageError::Database(sqlx::Error::Protocol(
+                        "app webhooks file unavailable".into(),
+                    )));
+                }
+            });
+        }
+        let row = sqlx::query("SELECT url, secret FROM app_webhooks WHERE id = $1")
+            .bind(webhook_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| (r.get("url"), r.get("secret"))))
+    }
+
     /// Mark a delivery as successfully delivered.
     #[instrument(name = "delivery_worker.storage.mark_delivered", skip(self))]
     pub async fn mark_delivered(&self, delivery_id: Uuid) -> Result<(), StorageError> {

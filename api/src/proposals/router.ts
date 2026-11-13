@@ -11,6 +11,7 @@ import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import type {FastPathFacts} from "./fastPathFact"
 import type {QueriesShadow} from "./governance/queriesShadow"
 import type {GovernanceShadow} from "./governance/shadow"
 import {
@@ -36,6 +37,7 @@ import {
 	type ProposalStatusResponse,
 	type ProposalWithVotes,
 	RATIO_BASE,
+	type StatusComputationResult,
 	type Vote,
 	type VoteOption,
 } from "./types"
@@ -168,8 +170,13 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
  * Computes the shared response fields from a proposal domain object.
  * Used by both the detail and list response builders.
  */
-function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
-	const {status, isQuorumReached, isThresholdReached} = computeProposalStatus(proposal, nowSeconds)
+function computeResponseFields(
+	proposal: ProposalWithVotes | ProposalListItem,
+	nowSeconds: bigint,
+	/** The status geo-db computed (GEODB_GOVERNANCE_SERVE), used in place of Postgres's. */
+	served?: StatusComputationResult,
+) {
+	const {status, isQuorumReached, isThresholdReached} = served ?? computeProposalStatus(proposal, nowSeconds)
 
 	const now = Number(nowSeconds)
 	const endTime = Number(proposal.endTime)
@@ -249,12 +256,13 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
  * Builds the full detail response for a single proposal.
  * Includes individual voter records and resolves userVote from them.
  */
-function buildProposalResponse(
+export function buildProposalResponse(
 	proposal: ProposalWithVotes,
 	nowSeconds: bigint,
 	voterId?: string,
+	served?: StatusComputationResult,
 ): ProposalStatusResponse {
-	const base = computeResponseFields(proposal, nowSeconds)
+	const base = computeResponseFields(proposal, nowSeconds, served)
 
 	const voters: Vote[] = proposal.votes.map((v) => ({
 		voterId: normalizeUuid(v.voterId),
@@ -279,8 +287,12 @@ function buildProposalResponse(
  * Builds a list item response for a proposal.
  * No individual voter records — userVote comes directly from the query.
  */
-function buildListItemResponse(proposal: ProposalListItem, nowSeconds: bigint): ProposalListItemResponse {
-	const base = computeResponseFields(proposal, nowSeconds)
+export function buildListItemResponse(
+	proposal: ProposalListItem,
+	nowSeconds: bigint,
+	served?: StatusComputationResult,
+): ProposalListItemResponse {
+	const base = computeResponseFields(proposal, nowSeconds, served)
 	return {
 		...base,
 		userVote: proposal.userVote,
@@ -367,6 +379,7 @@ export function createProposalsRouter(
 	runtime: AppRuntime,
 	governanceShadow?: GovernanceShadow | null,
 	queriesShadow?: QueriesShadow | null,
+	fastPathFacts?: FastPathFacts | null,
 ) {
 	const router = new Hono<AppEnv>()
 
@@ -432,7 +445,10 @@ export function createProposalsRouter(
 					)
 				}
 
-				const proposal = yield* getProposalWithVotes(db, proposalId)
+				const stored = yield* getProposalWithVotes(db, proposalId)
+				// Flag-off (PROPOSAL_EXECUTED_AT_FROM_GEODB): fills a missing executedAt from geo-db's fast-path fact.
+				const proposal =
+					stored && fastPathFacts ? (yield* Effect.promise(() => fastPathFacts.apply([stored])))[0] : stored
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -446,7 +462,12 @@ export function createProposalsRouter(
 				// Flag-off shadow (GEODB_GOVERNANCE_SHADOW): compares in the background, never touches the response.
 				governanceShadow?.detail(proposal, nowSeconds)
 				queriesShadow?.detail(proposal)
-				return buildProposalResponse(proposal, nowSeconds, voterId)
+				// GEODB_GOVERNANCE_SERVE: the status geo-db computed when this proposal's last comparison matched (else Postgres's).
+				const servedStatuses = yield* Effect.promise(
+					async () => (await governanceShadow?.serveStatuses("detail", [proposal], nowSeconds)) ?? new Map(),
+				)
+				const served = servedStatuses.get(proposal.id)
+				return buildProposalResponse(proposal, nowSeconds, voterId, served)
 			}).pipe(
 				Effect.tapError((error) => {
 					switch (error._tag) {
@@ -627,7 +648,7 @@ export function createProposalsRouter(
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
 				const normalizedVoterId = voterId ? normalizeUuid(voterId) : undefined
-				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
+				const {proposals: storedProposals, nextCursor} = yield* listProposalsInSpace(db, {
 					spaceId,
 					limit,
 					cursor,
@@ -639,10 +660,16 @@ export function createProposalsRouter(
 					voterId: normalizedVoterId,
 				})
 
+				const proposals = fastPathFacts
+					? yield* Effect.promise(() => fastPathFacts.apply(storedProposals))
+					: storedProposals
 				const nowSeconds = getCurrentTimeSeconds()
 				governanceShadow?.list(proposals, nowSeconds)
 				queriesShadow?.list(proposals, {actionTypes, excludeActionTypes})
-				const proposalResponses = proposals.map((p) => buildListItemResponse(p, nowSeconds))
+				const served = yield* Effect.promise(
+					async () => (await governanceShadow?.serveStatuses("list", proposals, nowSeconds)) ?? new Map(),
+				)
+				const proposalResponses = proposals.map((p) => buildListItemResponse(p, nowSeconds, served.get(p.id)))
 
 				return {
 					proposals: proposalResponses,

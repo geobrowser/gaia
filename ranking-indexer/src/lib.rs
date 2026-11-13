@@ -64,6 +64,7 @@ pub mod topic_suggestions_mirror;
 pub mod user_interest;
 pub mod user_interest_shadow;
 pub mod user_topic_signals_mirror;
+pub mod user_topic_signals_reconcile;
 pub mod wallet_hash;
 
 #[cfg(test)]

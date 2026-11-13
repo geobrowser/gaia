@@ -24,6 +24,15 @@
  * record differ by its writer. A reader takes the rank of the block among the proposal's version records; the gate
  * (proposalVersionsGate.ts) checks that rank against Postgres's ordinal.
  *
+ * PROPOSER AND OWNING SPACE. With GEODB_PROPOSAL_VERSION_PROPOSER_SPACE (storeProposerSpace, default off) a version also
+ * carries `proposer` (the event's `proposer_id`) and `space` (its `space_id`, the proposal's owner), each a `put` of a
+ * reference to `cid("entity", id)` under `recordStatementId(proposalVersion, [record, property, id(target)])`. Postgres
+ * keeps them once per proposal (`proposals.proposed_by`, `proposals.space_id`, written when the proposal is first seen),
+ * so the backfill writes the proposal's values onto every one of its versions. A version whose event came from another
+ * proposer than the proposal's creator would then hold the event's value from the stream and the proposal's from the
+ * backfill; a put closes the cell's other statements, so the last write wins, and the twin counts any difference.
+ * Off, no intent here changes: the records are exactly what they were.
+ *
  * COLUMNS NOT STORED. `proposal_version` (the ordinal, above). `threshold`: kg-indexer's legacy copy, `flat` for a Fast
  * version and `partial` for a Slow one (legacy_threshold), so a reader derives it. `yes_count`, `no_count` and
  * `abstain_count`: written by kg-indexer's tally worker from `proposal_votes`, not by the event; geo-db derives them from
@@ -92,6 +101,9 @@ export type ProposalVersion = {
 	/** Absent when the event has no actions. */
 	name?: string
 	createdAt: bigint
+	/** The event's `proposer_id` and `space_id` (a backfill row: `proposals.proposed_by` and `.space_id`), compact hex. Written only when storeProposerSpace. */
+	proposer?: string
+	space?: string
 }
 
 /** `ProposalAction` oneof member numbers to the label kg-indexer's derive_proposal_name gives them. */
@@ -163,8 +175,8 @@ export function parseProposalVersion(payload: Uint8Array): ProposalVersion {
 			actions.push(v)
 		} else f.set(n, v)
 	}
-	id16(f.get(1), "space_id")
-	id16(f.get(2), "proposer_id")
+	const space = id16(f.get(1), "space_id")
+	const proposer = id16(f.get(2), "proposer_id")
 	const proposal = id16(f.get(3), "proposal_id")
 	const settingsBytes = f.get(6)
 	if (!(settingsBytes instanceof Uint8Array)) throw new Error("proposal version: message has no settings")
@@ -199,6 +211,8 @@ export function parseProposalVersion(payload: Uint8Array): ProposalVersion {
 		...(executeBy !== 0n ? {executeBy: i64(executeBy)} : {}),
 		...(name !== undefined ? {name} : {}),
 		createdAt: i64(createdAt),
+		proposer,
+		space,
 	}
 }
 
@@ -209,8 +223,11 @@ export function proposalVersionRecordId(v: Pick<ProposalVersion, "proposal" | "b
 
 const bits = (v: bigint) => intPart(BigInt.asUintN(64, v))
 
-/** The intents for one version. Pure, and depends on the version alone. */
-export function proposalVersionIntents(v: ProposalVersion): string[] {
+/**
+ * The intents for one version. Pure, and depends on the version and the flag alone. `storeProposerSpace` adds the
+ * proposer and owning Space references (when the version has them); off, the intents are unchanged.
+ */
+export function proposalVersionIntents(v: ProposalVersion, storeProposerSpace = false): string[] {
 	const record = proposalVersionRecordId(v)
 	const proposal = cid("entity", v.proposal)
 	const out = [
@@ -234,14 +251,26 @@ export function proposalVersionIntents(v: ProposalVersion): string[] {
 	n(COL.executeBy, v.executeBy)
 	if (v.name !== undefined) text(COL.name, v.name)
 	n(COL.createdAt, v.createdAt)
+	if (storeProposerSpace) {
+		const ref = (property: string, id: string | undefined) => {
+			if (id === undefined) return
+			const target = cid("entity", id)
+			out.push(putIntent({id: recordStatementId(KIND, [idPart(record), idPart(property), idPart(target)]), entity: record, property, value: `.{ .reference = "${target}" }`}))
+		}
+		ref(COL.proposer, v.proposer)
+		ref(COL.space, v.space)
+	}
 	return out
 }
 
-export type KeyedProposalVersionsDeps = KeyedRecordDeps
+export type KeyedProposalVersionsDeps = KeyedRecordDeps & {
+	/** GEODB_PROPOSAL_VERSION_PROPOSER_SPACE: write the proposer and owning Space onto each version (config.proposalVersions.storeProposerSpace). */
+	storeProposerSpace?: boolean
+}
 
 /** The `governance` system Space holds every version; the apply's `space` is the proposal's, for dead-letter context. */
 export const applyProposalVersion = (deps: KeyedProposalVersionsDeps, v: ProposalVersion, meta: {partition: number; offset: string}): Promise<KeyedOutcome> =>
-	applyKeyedRecord(deps, FAMILY, proposalVersionIntents(v), {...meta, space: v.proposal})
+	applyKeyedRecord(deps, FAMILY, proposalVersionIntents(v, deps.storeProposerSpace === true), {...meta, space: v.proposal})
 
 export async function handleProposalVersionMessage(
 	deps: KeyedProposalVersionsDeps,
@@ -292,6 +321,9 @@ export type ProposalVersionRow = {
 	name: string | null
 	/** `version_created_at`, text. */
 	version_created_at: string
+	/** `proposals.proposed_by` and `proposals.space_id`, uuid text; null when the proposal row is missing (pgSource.readProposalVersionRows). */
+	proposer_id?: string | null
+	space_id?: string | null
 }
 
 const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
@@ -318,12 +350,15 @@ export function proposalVersionFromRow(r: ProposalVersionRow): ProposalVersion {
 		...(r.execute_by !== null ? {executeBy: big("execute_by", r.execute_by)} : {}),
 		...(r.name !== null ? {name: r.name} : {}),
 		createdAt: big("version_created_at", r.version_created_at),
+		...(r.proposer_id ? {proposer: compact(r.proposer_id)} : {}),
+		...(r.space_id ? {space: compact(r.space_id)} : {}),
 	}
 }
 
 /**
  * Write a snapshot of `proposal_versions`. Rerunnable: a held row is written again to the same ids. A row Postgres holds
- * that no event could have written is dead-lettered (counted, the Job fails at the end) rather than invented.
+ * that no event could have written is dead-lettered (counted, the Job fails at the end) rather than invented. With
+ * storeProposerSpace a row whose proposal has no `proposals` row is dead-lettered too: there is no proposer to write.
  */
 export const backfillProposalVersions = (
 	deps: KeyedProposalVersionsDeps,
@@ -333,6 +368,14 @@ export const backfillProposalVersions = (
 	backfillKeyedRows(
 		deps,
 		rows,
-		{topic: "space.governance", fromRow: proposalVersionFromRow, apply: (d, v) => applyProposalVersion(d, v, {partition: -1, offset: "backfill"})},
+		{
+			topic: "space.governance",
+			fromRow: (r) => {
+				const v = proposalVersionFromRow(r)
+				if (deps.storeProposerSpace && (v.proposer === undefined || v.space === undefined)) throw new Error(`proposal_versions: proposal ${v.proposal} has no proposals row`)
+				return v
+			},
+			apply: (d, v) => applyProposalVersion(d, v, {partition: -1, offset: "backfill"}),
+		},
 		progress,
 	)

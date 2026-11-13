@@ -2,13 +2,16 @@
  * geodb-card-replay entrypoint (same image as the feeder). See replay.ts. Env:
  * - REPLAY_API_URL (http://api:3000; only Service `api` is accepted), REPLAY_RATE (0.5 rps, at most 1),
  * - REPLAY_REFRESH_MS (15 min), GEODB_SPACE_MAP_PATH (/etc/geodb/space-map/space-map.json),
- * - DATABASE_URL, DATABASE_SSL_CA (gaia Postgres, read only), METRICS_PORT (9090).
+ * - REPLAY_PAIR_SOURCE: `postgres` (default) reads pairs from gaia Postgres with DATABASE_URL, DATABASE_SSL_CA
+ *   (read only); `api` reads them from the api's POST /geodb/replay-pairs and needs neither, but needs
+ *   REPLAY_API_TOKEN (the api's GAIA_INTERNAL_TOKEN, sent as x-internal-token),
+ * - METRICS_PORT (9090).
  */
 import {readFileSync} from "node:fs"
 import {errorFields, log} from "./log.js"
 import {Series} from "./metrics.js"
 import {ReadOnlyPg, pgConfig} from "./pgSource.js"
-import {type Pools, checkTarget, loadPools, mappedSpaces, parseRate, pick, replayOne} from "./replay.js"
+import {type Pools, checkTarget, loadPools, loadPoolsFromApi, mappedSpaces, parsePairSource, parseRate, pick, replayOne} from "./replay.js"
 import {startServer} from "./server.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -19,8 +22,11 @@ async function main(): Promise<void> {
 	const rate = parseRate(env.REPLAY_RATE)
 	const refreshMs = Number(env.REPLAY_REFRESH_MS ?? 15 * 60_000)
 	const mapPath = env.GEODB_SPACE_MAP_PATH ?? "/etc/geodb/space-map/space-map.json"
+	const source = parsePairSource(env.REPLAY_PAIR_SOURCE)
 	const databaseUrl = env.DATABASE_URL
-	if (!databaseUrl) throw new Error("DATABASE_URL is required")
+	const apiToken = env.REPLAY_API_TOKEN?.trim()
+	if (source === "api" && !apiToken) throw new Error("REPLAY_API_TOKEN is required when REPLAY_PAIR_SOURCE=api")
+	if (source === "postgres" && !databaseUrl) throw new Error("DATABASE_URL is required")
 
 	const requests = new Series("geodb_card_replay_requests_total", "Replayed entity-card requests by result.", "counter")
 	const pairs = new Series("geodb_card_replay_pairs", "Pairs in each replay pool.", "gauge")
@@ -33,7 +39,7 @@ async function main(): Promise<void> {
 		ready: () => true,
 	})
 
-	const pg = new ReadOnlyPg(pgConfig(databaseUrl, env.DATABASE_SSL_CA))
+	const pg = source === "postgres" && databaseUrl ? new ReadOnlyPg(pgConfig(databaseUrl, env.DATABASE_SSL_CA)) : null
 	let mapped = new Set<string>()
 	const readMap = () => {
 		try {
@@ -45,7 +51,7 @@ async function main(): Promise<void> {
 	const refresh = async () => {
 		readMap()
 		try {
-			pools = await loadPools(pg, [...mapped])
+			pools = pg ? await loadPools(pg, [...mapped]) : await loadPoolsFromApi(fetch, target, [...mapped], 50, 1500, 90_000, apiToken)
 			for (const [k, v] of Object.entries(pools)) pairs.set({pool: k}, v.length)
 			refreshed.set({}, Date.now() / 1000)
 			log("info", "replay pools refreshed", {spaces: mapped.size, top: pools.top.length, recent: pools.recent.length, random: pools.random.length})
@@ -61,7 +67,7 @@ async function main(): Promise<void> {
 	process.on("SIGTERM", stop)
 	process.on("SIGINT", stop)
 
-	log("info", "replay starting", {target: target.origin, rate, refreshMs})
+	log("info", "replay starting", {target: target.origin, rate, refreshMs, source})
 	await refresh()
 	let nextRefresh = Date.now() + refreshMs
 	let nextMapRead = Date.now() + 60_000
@@ -82,7 +88,7 @@ async function main(): Promise<void> {
 		due = Math.max(due + interval, Date.now())
 		await sleep(Math.max(0, due - Date.now()))
 	}
-	await pg.close()
+	await pg?.close()
 	server.close()
 }
 

@@ -15,7 +15,7 @@ import {
 	proposalVersionsKeyedEnabled,
 	proposalVersionsOffsetsDir,
 } from "../proposalVersionsKeyed.js"
-import {idPart, intPart, recordEntityId} from "../recordKey.js"
+import {idPart, intPart, recordEntityId, recordStatementId} from "../recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "../recordKinds.js"
 import {SystemSpaceCapError} from "../systemSpaces.js"
 import {deadLetters, fixture, ModelStore} from "./keyedHarness.js"
@@ -93,6 +93,8 @@ describe("parseProposalVersion (kg-indexer's map_proposal_message)", () => {
 			executeBy: 99n,
 			name: "Add Member",
 			createdAt: 1_700_000_000n,
+			proposer: PROPOSER,
+			space: SPACE,
 		})
 	})
 	it("reads any mode but 0 as Slow, as kg-indexer maps it", () => {
@@ -173,7 +175,29 @@ describe("proposalVersionIntents", () => {
 		expect(all).not.toContain(COL.name)
 	})
 	it("never writes the dropped columns: the ordinal, the threshold, the counts", () => {
-		expect(Object.keys(COL).sort()).toEqual(["block", "createdAt", "endTime", "executeBy", "flat", "name", "partial", "proposal", "quorum", "startTime", "universal", "votingMode"])
+		expect(Object.keys(COL).sort()).toEqual(["block", "createdAt", "endTime", "executeBy", "flat", "name", "partial", "proposal", "proposer", "quorum", "space", "startTime", "universal", "votingMode"])
+	})
+	it("with the flag off, the proposer and Space are not written, and the intents are what they were", () => {
+		const v = parseProposalVersion(message({mode: 0n, executeBy: 9n, actions: [flag]}))
+		const all = proposalVersionIntents(v).join("\n")
+		expect(all).not.toContain(COL.proposer)
+		expect(all).not.toContain(COL.space)
+		expect(proposalVersionIntents(v, false)).toEqual(proposalVersionIntents(v))
+		expect(proposalVersionIntents(v).filter((i) => i.includes(".put = ")).length).toBe(10)
+	})
+	it("with the flag on, puts a reference to the proposer's and the owning Space's entity, keyed by the target", () => {
+		const v = parseProposalVersion(message({mode: 0n, actions: [flag]}))
+		const off = proposalVersionIntents(v)
+		const on = proposalVersionIntents(v, true)
+		expect(on.slice(0, off.length)).toEqual(off)
+		expect(on).toHaveLength(off.length + 2)
+		const record = proposalVersionRecordId(v)
+		const stmt = (property: string, id: string) => recordStatementId(KIND, [idPart(record), idPart(property), idPart(cid("entity", id))])
+		expect(on[off.length]).toContain(`.id = "${stmt(COL.proposer, PROPOSER)}"`)
+		expect(on[off.length]).toContain(`.property = "${COL.proposer}", .value = .{ .reference = "${cid("entity", PROPOSER)}" }`)
+		expect(on[off.length + 1]).toContain(`.id = "${stmt(COL.space, SPACE)}"`)
+		expect(on[off.length + 1]).toContain(`.property = "${COL.space}", .value = .{ .reference = "${cid("entity", SPACE)}" }`)
+		expect(on.every((i) => i.startsWith(".{ .create_entity") || i.includes(".add = ") || i.includes(".set_active = ") || i.includes(".put = "))).toBe(true)
 	})
 })
 
@@ -199,6 +223,15 @@ describe("rows and events agree", () => {
 				expect(proposalVersionIntents(proposalVersionFromRow(rowOf(v)))).toEqual(proposalVersionIntents(v))
 			}
 		}
+	})
+	it("a backfill row with the proposal's proposer and Space sends the event's intents with the flag on", () => {
+		const v = parseProposalVersion(message({mode: 0n, actions: [addMember]}))
+		const dashed = (h: string) => `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`.toUpperCase()
+		const row = {...rowOf(v), proposer_id: dashed(PROPOSER), space_id: dashed(SPACE)}
+		expect(proposalVersionIntents(proposalVersionFromRow(row), true)).toEqual(proposalVersionIntents(v, true))
+		// A row read without the proposals join, or whose proposal is missing, has none and writes none.
+		expect(proposalVersionFromRow({...rowOf(v), proposer_id: null, space_id: null})).not.toHaveProperty("proposer")
+		expect(proposalVersionIntents(proposalVersionFromRow(rowOf(v)), true)).toEqual(proposalVersionIntents(proposalVersionFromRow(rowOf(v))))
 	})
 	it("refuses a row no event could have written", () => {
 		const r = rowOf(parseProposalVersion(message()))
@@ -247,6 +280,52 @@ describe("handleProposalVersionMessage", () => {
 		}
 		await expect(backfillProposalVersions(g.deps, [row])).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(typeof applyProposalVersion).toBe("function")
+	})
+})
+
+describe("storeProposerSpace through the consumer and the backfill", () => {
+	const record = (model: ModelStore) => [...model.snapshot().matchAll(new RegExp(COL.proposer, "g"))].length
+	it("the flag on the deps writes the references from an event; off writes none", async () => {
+		const off = new ModelStore()
+		await handleProposalVersionMessage(pfixture({model: off}).deps, 0, msg(message({actions: [addMember]}), 0))
+		expect(record(off)).toBe(0)
+		const on = new ModelStore()
+		await handleProposalVersionMessage({...pfixture({model: on}).deps, storeProposerSpace: true}, 0, msg(message({actions: [addMember]}), 0))
+		expect(record(on)).toBeGreaterThan(0)
+		expect(on.snapshot()).toContain(cid("entity", PROPOSER))
+		expect(on.snapshot()).toContain(cid("entity", SPACE))
+	})
+	it("a backfill rerun with the flag adds the references to a record the event wrote without them, and a second rerun is a no-op", async () => {
+		const model = new ModelStore()
+		const f = pfixture({model})
+		const v = parseProposalVersion(message({actions: [addMember]}))
+		await handleProposalVersionMessage(f.deps, 0, msg(message({actions: [addMember]}), 0))
+		const without = model.snapshot()
+		const row: ProposalVersionRow = {
+			proposal_id: PROPOSAL, block: "123", voting_mode: "Slow", start_time: "1000", end_time: "2000", quorum: "10",
+			partial_percentage_support_threshold: "500000", universal_percentage_support_threshold: "750000", flat_support_threshold: "5",
+			execute_by: null, name: "Add Member", version_created_at: "1700000000", proposer_id: PROPOSER, space_id: SPACE,
+		}
+		const deps = {...f.deps, storeProposerSpace: true}
+		expect(await backfillProposalVersions(deps, [row])).toEqual({rows: 1, applied: 1, deadLetter: 0})
+		const withRefs = model.snapshot()
+		expect(withRefs).not.toBe(without)
+		expect(withRefs).toContain(cid("entity", PROPOSER))
+		expect(model.entities.size).toBe(1)
+		expect(proposalVersionRecordId(v)).toBe(proposalVersionRecordId(proposalVersionFromRow(row)))
+		await backfillProposalVersions(deps, [row])
+		expect(model.snapshot()).toBe(withRefs)
+	})
+	it("with the flag on, a row whose proposal has no proposals row is dead-lettered, not written without a proposer", async () => {
+		const f = pfixture()
+		const row: ProposalVersionRow = {
+			proposal_id: PROPOSAL, block: "1", voting_mode: "Slow", start_time: "1", end_time: "2", quorum: "3",
+			partial_percentage_support_threshold: "4", universal_percentage_support_threshold: "5", flat_support_threshold: "6",
+			execute_by: null, name: null, version_created_at: "7", proposer_id: null, space_id: null,
+		}
+		expect(await backfillProposalVersions({...f.deps, storeProposerSpace: true}, [row])).toEqual({rows: 1, applied: 0, deadLetter: 1})
+		expect(f.applied).toEqual([])
+		expect(await backfillProposalVersions(f.deps, [row])).toEqual({rows: 1, applied: 1, deadLetter: 0})
 	})
 })
 

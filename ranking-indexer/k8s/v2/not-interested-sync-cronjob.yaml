@@ -66,7 +66,7 @@ spec:
           initContainers:
             - name: geodb-setup
               # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
-              image: registry.digitalocean.com/geo/geodb:2eab4e170c
+              image: registry.digitalocean.com/geo/geodb:2103bd8335
               imagePullPolicy: IfNotPresent
               # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
               # binding and the mirror stays disabled even if the flag is turned on.
@@ -144,6 +144,9 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
+                # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
+                - name: RANKING_INDEXER_PG_WRITES
+                  value: "1"
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL

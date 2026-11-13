@@ -23,6 +23,37 @@ export function parseRows(output: string): GeoDbRow[] {
 export const cardDocument = (entity: string) =>
 	`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entity}" } } } }`
 
+/** The same card read asking for each relation's claims (`.relations = true, .claims = true`, as the api's facet read does). */
+export const claimsDocument = (entity: string) =>
+	`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entity}", .relations = true, .claims = true } } } }`
+
+/** A card row with its claim columns: `claimProp` and `claimRaw` are null where the row's statement has no claim. */
+export type GeoDbClaimRow = {prop: string; statement: string; entity: string; claimProp: string | null; claimRaw: string | null}
+
+/** geodb-client output of a `claimsDocument` read: cells (property, value, statement id, entity, claim property, claim value). */
+export function parseClaimRows(output: string): GeoDbClaimRow[] {
+	return output
+		.split("\n")
+		.filter((l) => l !== "")
+		.map((l) => l.split("\t"))
+		.map((c) => {
+			const claimProp = c[4] ?? "-"
+			return {
+				prop: c[0] ?? "",
+				statement: /([0-9a-f]{32})$/.exec(c[2] ?? "")?.[1] ?? "",
+				entity: c[3] ?? "",
+				claimProp: claimProp === "-" ? null : claimProp,
+				claimRaw: claimProp === "-" ? null : (c[5] ?? ""),
+			}
+		})
+}
+
+/** What the relation seed reads: an entity's relation statements with their claims. */
+export type RelationReader = {
+	entityClaimRows(geoSpace: string, entity: string): Promise<GeoDbClaimRow[]>
+	reset(): void
+}
+
 export type EntityReader = {
 	/** The rows geo-db holds for `entity` itself (a card query also answers the entities its backlinks name). */
 	entityRows(geoSpace: string, entity: string): Promise<GeoDbRow[]>
@@ -31,7 +62,7 @@ export type EntityReader = {
 
 type Pending = {resolve: (s: string) => void; reject: (e: Error) => void}
 
-export class PipeReader implements EntityReader {
+export class PipeReader implements EntityReader, RelationReader {
 	private child: ChildProcessWithoutNullStreams | null = null
 	private buffer: Buffer = Buffer.alloc(0)
 	private ready: Promise<void> | null = null
@@ -116,11 +147,19 @@ export class PipeReader implements EntityReader {
 	}
 
 	async entityRows(geoSpace: string, entity: string): Promise<GeoDbRow[]> {
+		return parseRows(await this.ask(geoSpace, cardDocument(entity))).filter((r) => r.entity === entity)
+	}
+
+	async entityClaimRows(geoSpace: string, entity: string): Promise<GeoDbClaimRow[]> {
+		return parseClaimRows(await this.ask(geoSpace, claimsDocument(entity))).filter((r) => r.entity === entity)
+	}
+
+	private async ask(geoSpace: string, document: string): Promise<string> {
 		await this.start()
 		const child = this.child
 		if (!child) throw new Error("geodb-client pipe is not running")
 		const timeoutMs = this.opts.timeoutMs ?? 30_000
-		const payload = await new Promise<string>((resolve, reject) => {
+		return new Promise<string>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.reset()
 				reject(new Error(`geo-db read exceeded ${timeoutMs} ms`))
@@ -135,9 +174,8 @@ export class PipeReader implements EntityReader {
 					reject(e)
 				},
 			}
-			child.stdin.write(`${geoSpace}\t${cardDocument(entity)}\n`)
+			child.stdin.write(`${geoSpace}\t${document}\n`)
 		})
-		return parseRows(payload).filter((r) => r.entity === entity)
 	}
 }
 

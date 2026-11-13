@@ -22,12 +22,18 @@
 //! the relation-map bootstrap. `kg_applied_block` is shadowed separately, against the feeder's
 //! `cursors` row (see `lookup.rs`).
 //!
+//! The twins run only when their lookup does, and `entities_for_spaces` runs on rare events. With
+//! `SEARCH_INDEXER_GEODB_SHADOW_TIMER_SECS` set (off by default, at least 30), one Space of the map is
+//! also compared every period (see [`GeoDbShadow::sample_tick`]), so the counters move on a quiet
+//! indexer.
+//!
 //! `space_entities` is new in the engine and a serve that predates it refuses the argument. Until
 //! the serve is rolled onto it, every `entities_for_spaces` comparison counts `failed`; that is
 //! expected, never reaches the caller, and stops the sample at its first refusal.
 
 pub mod ids;
 pub mod pipe;
+pub mod serve;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -47,18 +53,23 @@ use pipe::{PipeConfig, PipeReader};
 pub const FLAG: &str = "SEARCH_INDEXER_GEODB_SHADOW";
 pub const SAMPLE_VAR: &str = "SEARCH_INDEXER_GEODB_SHADOW_SAMPLE";
 pub const TIMEOUT_VAR: &str = "SEARCH_INDEXER_GEODB_SHADOW_TIMEOUT_MS";
+/// Seconds between timer-driven `entities_for_spaces` comparisons. Unset or `0` leaves the timer
+/// off (the default); a smaller number than [`MIN_TIMER_INTERVAL`] is raised to it.
+pub const TIMER_VAR: &str = "SEARCH_INDEXER_GEODB_SHADOW_TIMER_SECS";
+/// The fastest the timer may run: one Space every 30 s.
+pub const MIN_TIMER_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Items compared per lookup call by default, and at most.
 const DEFAULT_SAMPLE: usize = 4;
 const MAX_SAMPLE: usize = 32;
 const DEFAULT_TIMEOUT: Duration = Duration::from_millis(5000);
-const COOLDOWN: Duration = Duration::from_secs(30);
+const COOLDOWN: Duration = Duration::from_secs(5);
 /// A `space_entities` page, the most the read allows.
 const SCAN_PAGE: usize = 512;
 /// Pages read of one Space, so one comparison costs at most this many reads a Space. A Space past
 /// it (on either side) is skipped and counted `too_large`, never compared on a part.
 const MAX_SCAN_PAGES: usize = 8;
-const MAX_SCAN_ENTITIES: usize = SCAN_PAGE * MAX_SCAN_PAGES;
+pub const MAX_SCAN_ENTITIES: usize = SCAN_PAGE * MAX_SCAN_PAGES;
 /// Extras of one Space classified by the card check; the rest stay plain `extra_in_geodb`. One batch
 /// of the card read's `ids` limit.
 const MAX_EXTRA_CHECKS: usize = 32;
@@ -661,6 +672,8 @@ pub struct GeoDbShadow {
     sample: usize,
     gate: Arc<Semaphore>,
     cursor: AtomicUsize,
+    /// Which Space of the map the timer takes next.
+    timer_cursor: AtomicUsize,
 }
 
 impl GeoDbShadow {
@@ -671,7 +684,108 @@ impl GeoDbShadow {
             sample: sample.clamp(1, MAX_SAMPLE),
             gate: Arc::new(Semaphore::new(1)),
             cursor: AtomicUsize::new(0),
+            timer_cursor: AtomicUsize::new(0),
         }
+    }
+
+    /// `entities_for_spaces` answered from geo-db (see [`serve::entities_for_spaces`]). `Err` names
+    /// why the caller must ask Postgres instead.
+    pub async fn serve_entities_for_spaces(
+        &self,
+        space_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, serve::Fallback> {
+        let spaces = self
+            .spaces
+            .current()
+            .map_err(|e| serve::Fallback::Error(e.to_string()))?;
+        serve::entities_for_spaces(self.reader.as_ref(), &spaces, space_ids).await
+    }
+
+    /// The timer's period from the environment: `None` (off) when [`TIMER_VAR`] is unset or `0`,
+    /// otherwise the seconds given, never under [`MIN_TIMER_INTERVAL`]. A value that is not a
+    /// number is an error, and the caller leaves the timer off.
+    pub fn timer_interval(
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<Duration>, String> {
+        let Some(v) = get(TIMER_VAR) else {
+            return Ok(None);
+        };
+        let secs: u64 = v
+            .trim()
+            .parse()
+            .map_err(|_| format!("{TIMER_VAR} must be a whole number of seconds"))?;
+        if secs == 0 {
+            return Ok(None);
+        }
+        Ok(Some(Duration::from_secs(secs).max(MIN_TIMER_INTERVAL)))
+    }
+
+    /// The next gaia Space for the timer, walking the space map in order and wrapping.
+    fn next_timer_space(&self) -> Option<Uuid> {
+        let ids = self.spaces.current().ok()?.gaia_ids();
+        if ids.is_empty() {
+            return None;
+        }
+        let at = self.timer_cursor.fetch_add(1, Ordering::Relaxed) % ids.len();
+        Some(ids[at])
+    }
+
+    /// One timer tick: take the next Space of the map, ask `fetch` for the pairs Postgres holds for
+    /// it, and hand them to [`Self::observe_entities_for_spaces`], so the comparison, its counters
+    /// and its guards are the ones a real `entities_for_spaces` call gets. `fetch` answers `None`
+    /// for a Space past [`MAX_SCAN_ENTITIES`], counted `too_large`, and is not called while a
+    /// comparison is in flight (counted `busy`), so a tick costs Postgres nothing then.
+    pub async fn sample_tick<F, Fut>(self: &Arc<Self>, fetch: F)
+    where
+        F: FnOnce(Uuid) -> Fut,
+        Fut: std::future::Future<Output = Result<Option<Vec<(Uuid, Uuid)>>, String>>,
+    {
+        let Some(space) = self.next_timer_space() else {
+            skipped(ENTITIES_FOR_SPACES, "space_map_unreadable", 1);
+            return;
+        };
+        if self.gate.available_permits() == 0 {
+            skipped(ENTITIES_FOR_SPACES, "busy", 1);
+            return;
+        }
+        match fetch(space).await {
+            Ok(Some(pairs)) => self.observe_entities_for_spaces(&[space], &pairs),
+            Ok(None) => skipped(ENTITIES_FOR_SPACES, "too_large", 1),
+            Err(e) => warn!(
+                error = %e,
+                space = %space,
+                "geo-db shadow timer: Postgres read of the Space failed; skipped"
+            ),
+        }
+    }
+
+    /// Run [`Self::sample_tick`] every `every` (the first after one period) until the process ends.
+    /// `every` is raised to [`MIN_TIMER_INTERVAL`]. Ticks never overlap and a slow one delays the
+    /// next, never bunches them.
+    pub fn spawn_timer<F, Fut>(self: &Arc<Self>, every: Duration, fetch: F)
+    where
+        F: Fn(Uuid) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Option<Vec<(Uuid, Uuid)>>, String>>
+            + Send
+            + 'static,
+    {
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let every = every.max(MIN_TIMER_INTERVAL);
+        let shadow = self.clone();
+        info!(
+            every_secs = every.as_secs(),
+            "geo-db shadow timer on: one Space compared every period"
+        );
+        rt.spawn(async move {
+            let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                shadow.sample_tick(&fetch).await;
+            }
+        });
     }
 
     /// From the environment: `None` when the flag is off, or when it is on but misconfigured (logged
@@ -1336,5 +1450,137 @@ mod tests {
         // The gate is held until the task finishes; wait for it.
         let _ = s.gate.acquire().await.unwrap();
         assert_eq!(f.calls.lock().unwrap().len(), 1);
+    }
+
+    fn timer_vars(v: Option<&str>) -> Result<Option<Duration>, String> {
+        GeoDbShadow::timer_interval(|k| (k == TIMER_VAR).then(|| v.map(String::from)).flatten())
+    }
+
+    #[test]
+    fn timer_is_off_by_default_and_never_faster_than_30s() {
+        assert_eq!(timer_vars(None), Ok(None));
+        assert_eq!(timer_vars(Some("0")), Ok(None));
+        assert_eq!(timer_vars(Some("1")), Ok(Some(MIN_TIMER_INTERVAL)));
+        assert_eq!(timer_vars(Some("29")), Ok(Some(MIN_TIMER_INTERVAL)));
+        assert_eq!(timer_vars(Some(" 90 ")), Ok(Some(Duration::from_secs(90))));
+        assert!(timer_vars(Some("soon")).is_err());
+        assert!(timer_vars(Some("-5")).is_err());
+    }
+
+    #[tokio::test]
+    async fn timer_tick_walks_the_map_one_space_a_tick_and_compares() {
+        let (a, b) = (u(6001), u(6002));
+        let mut f = Fixture::default();
+        f.scans.insert(g(1), vec![hex(&a)]);
+        f.scans.insert(g(2), vec![hex(&b)]);
+        let f = Arc::new(f);
+        let by_gaia: HashMap<String, String> = [(hex(&sp(1)), g(1)), (hex(&sp(2)), g(2))].into();
+        let s = Arc::new(GeoDbShadow::new(f.clone(), SpaceMap::fixed(by_gaia), 4));
+        let seen = Mutex::new(Vec::new());
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        for _ in 0..3 {
+            s.sample_tick(|space| {
+                seen.lock().unwrap().push(space);
+                async move {
+                    let e = if space == sp(1) { a } else { b };
+                    Ok(Some(vec![(e, space)]))
+                }
+            })
+            .await;
+            let _ = s.gate.acquire().await.unwrap();
+        }
+        // Sorted by id, one a tick, wrapping.
+        let mut order = vec![sp(1), sp(2)];
+        order.sort();
+        assert_eq!(*seen.lock().unwrap(), vec![order[0], order[1], order[0]]);
+        // Each comparison scanned its Space: page one and the empty page.
+        assert_eq!(f.calls.lock().unwrap().len(), 6);
+        let out = handle.render();
+        assert!(
+            out.contains(
+                "search_indexer_geodb_shadow_total{lookup=\"entities_for_spaces\",result=\"match\"} 3"
+            ),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timer_tick_skips_busy_without_asking_postgres() {
+        let f = Arc::new(Fixture::default());
+        let by_gaia: HashMap<String, String> = [(hex(&sp(1)), g(1))].into();
+        let s = Arc::new(GeoDbShadow::new(f.clone(), SpaceMap::fixed(by_gaia), 4));
+        let held = s.gate.clone().acquire_owned().await.unwrap();
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        s.sample_tick(|_| async { panic!("Postgres must not be read while busy") })
+            .await;
+        drop(held);
+        assert!(f.calls.lock().unwrap().is_empty());
+        let out = handle.render();
+        assert!(
+            out.contains(
+                "search_indexer_geodb_shadow_skipped_total{lookup=\"entities_for_spaces\",reason=\"busy\"} 1"
+            ),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timer_tick_counts_too_large_and_never_reaches_geodb() {
+        let f = Arc::new(Fixture::default());
+        let by_gaia: HashMap<String, String> = [(hex(&sp(1)), g(1))].into();
+        let s = Arc::new(GeoDbShadow::new(f.clone(), SpaceMap::fixed(by_gaia), 4));
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _guard = metrics::set_default_local_recorder(&recorder);
+        s.sample_tick(|_| async { Ok(None) }).await;
+        s.sample_tick(|_| async { Err("boom".to_string()) }).await;
+        assert!(f.calls.lock().unwrap().is_empty());
+        let out = handle.render();
+        assert!(
+            out.contains(
+                "search_indexer_geodb_shadow_skipped_total{lookup=\"entities_for_spaces\",reason=\"too_large\"} 1"
+            ),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timer_tick_with_an_empty_map_does_nothing_but_count() {
+        let f = Arc::new(Fixture::default());
+        let s = Arc::new(GeoDbShadow::new(
+            f.clone(),
+            SpaceMap::fixed(HashMap::new()),
+            4,
+        ));
+        s.sample_tick(|_| async { panic!("no Space to read") })
+            .await;
+        assert!(f.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn spawned_timer_waits_a_period_then_ticks_no_faster_than_30s() {
+        let a = u(7001);
+        let mut f = Fixture::default();
+        f.scans.insert(g(1), vec![hex(&a)]);
+        let f = Arc::new(f);
+        let by_gaia: HashMap<String, String> = [(hex(&sp(1)), g(1))].into();
+        let s = Arc::new(GeoDbShadow::new(f.clone(), SpaceMap::fixed(by_gaia), 4));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let r = reads.clone();
+        // Asked for every second; held to 30.
+        s.spawn_timer(Duration::from_secs(1), move |space| {
+            r.fetch_add(1, Ordering::SeqCst);
+            async move { Ok(Some(vec![(a, space)])) }
+        });
+        tokio::time::sleep(Duration::from_secs(29)).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
     }
 }

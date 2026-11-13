@@ -5,7 +5,8 @@
 # no Space and creates no entity. Its cursor is /data/feeder/held-repair/, apart from the Space backfill's.
 # See geodb/RUNBOOK.md §2b-ter and geodb-feeder/src/heldRepair.ts.
 #
-# NOT in deploy-v2: it runs by hand. DRY_RUN "1" reads and logs counts only and writes nothing; "0" writes, and then
+# NOT in deploy-v2: it runs by hand. DRY_RUN "1" reads and logs counts only and writes nothing (it still mounts the feeder's RWO volume, so it runs on the feeder's node and stays Pending if that node
+# lacks room; see geodb/RUNBOOK.md "Where the Job runs"); "0" writes, and then
 # the feeder must be scaled to 0 (it mounts the feeder's RWO state volume and refuses to start while the feeder's
 # consumer group has members). Two placeholders are replaced at run time; the Job refuses to start if __DRY_RUN__
 # is left in:
@@ -68,7 +69,7 @@ spec:
       initContainers:
         # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:2eab4e170c
+          image: registry.digitalocean.com/geo/geodb:2103bd8335
           imagePullPolicy: IfNotPresent
           command:
             - sh
