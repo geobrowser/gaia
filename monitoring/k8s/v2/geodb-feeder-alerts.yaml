@@ -322,15 +322,25 @@ spec:
               for "consumer failed to start", fix the cause, then restart the feeder.
 
         - alert: GeoDbFeederDeadLetters
-          expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m]) > 0
+          # The counter is labelled by kind (message, intent, space_cap) and a labelled series does not exist
+          # until its first increment, so a burst from nothing (192 intents with "connect: Refused" at 23:01Z
+          # on 11-12) makes increase() see one sample and return 0. The second arm catches a series that is
+          # new in the last 30m and already above 0.
+          expr: |
+            sum by (kind) (increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m])) > 0
+            or
+            sum by (kind) (geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}) > 0
+            unless
+            sum by (kind) (geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"} offset 30m)
           labels:
             severity: warning
             service: geodb-feeder
             namespace: gaia
           annotations:
-            summary: The geo-db feeder skipped an edit or an intent
+            summary: "The geo-db feeder skipped something ({{ $labels.kind }})"
             description: >-
-              A message could not be decoded or geo-db refused an intent for good; it is written to
+              kind {{ $labels.kind }} (intent = geo-db refused one write, message = a whole message was skipped,
+              space_cap = founding a Space hit the cap). A message could not be decoded or geo-db refused an intent for good; it is written to
               /data/feeder/errors.jsonl and skipped. Read it with
               kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
               is a card that can differ in shadow mode.
