@@ -1441,13 +1441,18 @@ impl Storage {
         }
         let mut tx = self.pool.begin().await?;
         // This Rank's own items, plus items an indexer older than 0125 wrote
-        // for this id with no space, but only while no space has the id
-        // registered: those can only be this Rank's own earlier writes, and
-        // keeping them would bring old votes back once the Rank is registered.
+        // for this id with no space, unless another space has the id
+        // registered. With no other space they can only be this Rank's own
+        // earlier writes (registered in this space or not, including by this
+        // very edit, whose upsert runs first), and keeping them would bring
+        // old votes back: the fill attributes them to this space. With another
+        // space registered they could be that space's, so they are left to the
+        // fill.
         sqlx::query(
             "DELETE FROM ranks.ranking_items WHERE ranking_id = $1 \
                AND (rank_space_id = $2 OR (rank_space_id IS NULL \
-                    AND NOT EXISTS (SELECT 1 FROM ranks.rankings k WHERE k.id = $1)))",
+                    AND NOT EXISTS (SELECT 1 FROM ranks.rankings k \
+                                    WHERE k.id = $1 AND k.space_id <> $2)))",
         )
         .bind(ranking_id)
         .bind(space_id)

@@ -4321,3 +4321,95 @@ async fn a_resubmission_clears_an_unregistered_ranks_stale_unattributed_votes() 
     );
     assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(NEW), 1)]);
 }
+
+/// Patrick's re-review: as the test above, but the re-submitting edit also
+/// registers the Rank (its TYPES relation and rank_type, as the web
+/// publishes it). That edit's upsert runs before its items are written, so
+/// the Rank is already registered in this space then; the stale unattributed
+/// vote must still go. Left alone only when another space registers the id.
+#[tokio::test]
+async fn a_registering_resubmission_clears_the_ranks_stale_unattributed_votes() {
+    let Some(url) = e2e_database_url() else {
+        return;
+    };
+    let _serial = SERIAL.lock().await;
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+    const SPACE: u128 = 0xE2E5_35A0_0001;
+    const S: u128 = 0xE2E5_35A0_0011;
+    const T: u128 = 0xE2E5_35A0_0012;
+    const BLOCK: u128 = 0xE2E5_35A0_0021;
+    const R: u128 = 0xE2E5_35A0_0041;
+    const SHARED: u128 = 0xE2E5_35A0_0042;
+    const OLD: u128 = 0xE2E5_35A0_0031;
+    const NEW: u128 = 0xE2E5_35A0_0032;
+    fresh_dao_block(&storage, SPACE, &[S, T], BLOCK, &[R, SHARED], None).await;
+    let old_row = |rank: u128| async move {
+        sqlx::query(
+            "INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position) \
+             VALUES ($1, $2, $3, 'a0')",
+        )
+        .bind(u(rank))
+        .bind(u(OLD))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    };
+    let items_of = |rank: u128| async move {
+        sqlx::query_as::<_, (Uuid, Option<Uuid>)>(
+            "SELECT entity_id, rank_space_id FROM ranks.ranking_items WHERE ranking_id = $1 \
+             ORDER BY entity_id",
+        )
+        .bind(u(rank))
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+
+    // R: never registered; an old pod's vote for OLD (gone from the graph).
+    // The ranker publishes R in full (TYPES, rank_type, link, vote for NEW).
+    old_row(R).await;
+    apply_in(
+        &storage,
+        S,
+        &ballot_edit(R, BLOCK, 0x35A0_1000, SPACE, &[NEW]),
+        10,
+    )
+    .await;
+    storage.fill_missing_relation_ids().await.unwrap();
+    recompute_block(u(BLOCK), BlockMeta::default(), Utc::now(), &storage)
+        .await
+        .unwrap();
+    assert_eq!(
+        items_of(R).await,
+        vec![(u(NEW), Some(u(S)))],
+        "the cleared vote is not back"
+    );
+    assert_eq!(score_rows(&storage, BLOCK).await, vec![(u(NEW), 1)]);
+
+    // SHARED is registered in T too: its unattributed row may be T's, so S's
+    // re-submission leaves it for the fill.
+    sqlx::query(
+        "INSERT INTO ranks.rankings (id, space_id, updated_at_block, update_index) \
+         VALUES ($1, $2, 1, 0)",
+    )
+    .bind(u(SHARED))
+    .bind(u(T))
+    .execute(pool)
+    .await
+    .unwrap();
+    old_row(SHARED).await;
+    apply_in(
+        &storage,
+        S,
+        &ballot_edit(SHARED, BLOCK, 0x35A0_2000, SPACE, &[NEW]),
+        11,
+    )
+    .await;
+    assert_eq!(
+        items_of(SHARED).await,
+        vec![(u(OLD), None), (u(NEW), Some(u(S)))],
+        "another space registers the id: its unattributed row is kept"
+    );
+}
