@@ -654,6 +654,29 @@ describe("entities with the light selection", () => {
 		expect(results()).toEqual({mismatch: 1})
 	})
 
+	it("flags an entity whose only cells in the named Space are the reserved createdAt/updatedAt times", async () => {
+		// An entity PostGraphile answers with no values or relations, so that nothing but the Space is left to judge.
+		const bare = clone(ENTITY)
+		bare.name = null as never
+		bare.description = null as never
+		bare.values.nodes = []
+		bare.lightRels.nodes = []
+		bare.heavyRels.nodes = []
+		const entities = [bare]
+		const id = bare.id
+		const times =
+			`${CREATED_AT_PROPERTY}\t2026-01-01T00:00:00Z\ts1\t${id}\t-\t-\t1\n` +
+			`${UPDATED_AT_PROPERTY}\t2026-01-02T00:00:00Z\ts2\t${id}\t-\t-\t1\n`
+		const s = setup({[geoSpace(SPACE_B.replaceAll("-", ""))]: times})
+		await call(
+			s.points.get("entities") as never,
+			withArgs(`spaceIds: {in: ["${SPACE_B}"]}`),
+			{},
+			{data: {entities}},
+		)
+		expect(results()).toEqual({mismatch: 1})
+	})
+
 	describe("widening a cross_space comparison (GEODB_CROSS_SPACE_HOLDERS_SHADOW)", () => {
 		// The query names Space A, selects a relation row in A and neither spaceIds nor description. The Name is held in A
 		// (the first comparison settles) or in B (loaded, outside the read: the first comparison is cross_space).
