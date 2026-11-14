@@ -13,7 +13,8 @@
 //!
 //! Twinned, each through an engine read that exists today:
 //! - `spaces_for_entities`: the `holders` read (which Spaces hold any statement of an entity).
-//! - `empty_in_space`: the same `holders` read, scoped to the pair's Spaces.
+//! - `empty_in_space`: the same `holders` read, scoped to the pair's Spaces, plus a card read where
+//!   Postgres says empty and `holders` says held (to ignore the reserved createdAt/updatedAt).
 //! - `docs_for_relations`: the `statement` read on the relation's statement id (live relations).
 //!
 //! - `entities_for_spaces`: the `space_entities` scan, one Space at a time (see below).
@@ -488,9 +489,15 @@ pub async fn compare_spaces_for_entities(
 }
 
 /// Twin of `empty_in_space`: for each `(entity, Space)` pair and whether Postgres found it empty,
-/// whether geo-db holds anything of the entity in that Space. Both sides mean the same thing (no
-/// statement of the entity at all in the Space), so any disagreement is a real one: Postgres holds
-/// but geo-db is empty is `missing_in_geodb`, the reverse `extra_in_geodb`.
+/// whether geo-db holds anything of the entity in that Space. Postgres holds but geo-db is empty is
+/// `missing_in_geodb`, the reverse `extra_in_geodb`.
+///
+/// The two sides do not mean quite the same thing. Postgres reads `values` and `relations` only; with
+/// `GEODB_ENTITY_TIMES` on, geo-db also holds the reserved createdAt and updatedAt statements
+/// ([`ENTITY_TIME_PROPERTIES`]) of every entity an edit touched, and `holders` counts them. So where
+/// Postgres says empty and `holders` says held, one card read of the entity in that Space settles
+/// it: a Space holding only the reserved time statements agrees with Postgres. A failed card read
+/// leaves the item `extra_in_geodb`.
 ///
 /// One `holders` read per entity, scoped to that entity's sampled Spaces.
 pub async fn compare_empty_in_space(
@@ -521,7 +528,12 @@ pub async fn compare_empty_in_space(
         match holders(reader, &scope, &id).await {
             Ok(held) => {
                 for (space, geo, sql_empty) in list {
-                    let geo_holds = held.contains(geo);
+                    let mut geo_holds = held.contains(geo);
+                    if geo_holds && *sql_empty {
+                        if let Ok(only) = times_only(reader, geo, std::slice::from_ref(&id)).await {
+                            geo_holds = !only.contains(&id);
+                        }
+                    }
                     let (missing, extra) = match (*sql_empty, geo_holds) {
                         (false, false) => (1, 0),
                         (true, true) => (0, 1),
@@ -587,15 +599,13 @@ async fn space_entities(
     Ok(None)
 }
 
-/// Which of `entities` (at most [`MAX_EXTRA_CHECKS`], geo-db ids) hold nothing but the reserved
-/// createdAt and updatedAt statements in `space`: one batched card read, the property being the
-/// first cell of each row. An entity with no row at all is not returned.
-async fn times_only(
+/// The properties of the active statements each of `entities` (geo-db ids, a batch) holds in `space`:
+/// one card read, the property being the first cell of each row. An entity with no row is absent.
+async fn statement_properties(
     reader: &dyn GeoDbReader,
     space: &str,
     entities: &[String],
-) -> Result<BTreeSet<String>, ShadowError> {
-    let scope = [space.to_string()];
+) -> Result<HashMap<String, BTreeSet<String>>, ShadowError> {
     let ids = entities
         .iter()
         .map(|e| format!("\"{e}\""))
@@ -605,20 +615,34 @@ async fn times_only(
         ".{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", \
          .args = .{{ .ids = .{{ {ids} }} }} }} }} }}"
     );
-    let body = reader.query(&scope, &doc).await?;
-    let mut only: HashMap<String, bool> = HashMap::new();
+    let body = reader.query(&[space.to_string()], &doc).await?;
+    let mut props: HashMap<String, BTreeSet<String>> = HashMap::new();
     for cells in rows(&body) {
         let entity = cells
             .get(3)
             .filter(|e| e.len() == 32)
             .ok_or_else(|| ShadowError::BadRow(cells.join("\t")))?;
-        let time = cells.first().is_some_and(|p| is_entity_time(p));
-        let all_times = only.entry((*entity).to_string()).or_insert(true);
-        *all_times &= time;
+        let prop = cells.first().copied().unwrap_or_default();
+        props
+            .entry((*entity).to_string())
+            .or_default()
+            .insert(prop.to_string());
     }
-    Ok(only
+    Ok(props)
+}
+
+/// Which of `entities` (at most [`MAX_EXTRA_CHECKS`], geo-db ids) hold nothing but the reserved
+/// createdAt and updatedAt statements in `space`, by one [`statement_properties`] read. An entity
+/// with no row at all is not returned.
+async fn times_only(
+    reader: &dyn GeoDbReader,
+    space: &str,
+    entities: &[String],
+) -> Result<BTreeSet<String>, ShadowError> {
+    Ok(statement_properties(reader, space, entities)
+        .await?
         .into_iter()
-        .filter(|(_, all_times)| *all_times)
+        .filter(|(_, props)| props.iter().all(|p| is_entity_time(p)))
         .map(|(e, _)| e)
         .collect())
 }
@@ -1491,8 +1515,47 @@ mod tests {
         let o = compare_empty_in_space(&f, &spaces, &sample).await;
         assert_eq!((o.matched, o.mismatched), (2, 2));
         assert_eq!((o.missing, o.extra, o.unmapped), (1, 1, 1));
-        // One read per entity, scoped to that entity's Spaces only.
-        assert_eq!(*f.calls.lock().unwrap(), vec![3, 1]);
+        // One holders read per entity, scoped to that entity's Spaces only, then one card read for
+        // the pair Postgres calls empty and geo-db holds.
+        assert_eq!(*f.calls.lock().unwrap(), vec![3, 1, 1]);
+    }
+
+    #[tokio::test]
+    async fn an_entity_holding_only_its_reserved_times_is_empty_on_both_sides() {
+        let (e1, e2) = (u(1), u(2));
+        let mut f = Fixture::default();
+        for e in [e1, e2] {
+            f.holders.insert(hex(&e), vec![g(1)]);
+        }
+        let times: Vec<String> = ENTITY_TIME_PROPERTIES.map(String::from).into();
+        f.card_props.insert((g(1), hex(&e1)), times.clone());
+        // e2 also holds an ordinary value next to the times.
+        let mut with_value = times;
+        with_value.push(hex(&u(50)));
+        f.card_props.insert((g(1), hex(&e2)), with_value);
+        let sample = vec![((e1, sp(1)), true), ((e2, sp(1)), true)];
+        let o = compare_empty_in_space(&f, &map(&[1]), &sample).await;
+        // e1: Postgres empty, geo-db holds only the times: a match. e2: a real extra.
+        assert_eq!((o.matched, o.mismatched, o.extra), (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_failed_card_read_leaves_an_empty_in_space_extra_a_mismatch() {
+        let e = u(1);
+        let mut f = Fixture::default();
+        f.holders.insert(hex(&e), vec![g(1)]);
+        struct HoldersOnly(Fixture);
+        #[async_trait]
+        impl GeoDbReader for HoldersOnly {
+            async fn query(&self, s: &[String], d: &str) -> Result<String, ShadowError> {
+                if d.contains(".ids = ") {
+                    return Err(ShadowError::Refused("no".into()));
+                }
+                self.0.query(s, d).await
+            }
+        }
+        let o = compare_empty_in_space(&HoldersOnly(f), &map(&[1]), &[((e, sp(1)), true)]).await;
+        assert_eq!((o.mismatched, o.extra, o.failed), (1, 1, 0));
     }
 
     #[tokio::test]

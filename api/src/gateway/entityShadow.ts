@@ -54,6 +54,7 @@ import {
 	DERIVED_PROPERTIES,
 	diffCards,
 	type EdgeFacets,
+	ENTITY_TIME_PROPERTIES,
 	entityTimesOf,
 	facetDiff,
 	type GeoCardRow,
@@ -1106,7 +1107,7 @@ export function compareDerived(
 	const uncompared = new Set<UncomparedReason>()
 	// One space (the plan's), or the several the entity lives in (every space): `geo` is the union of their cards.
 	const spaces = new Set(scope?.spaces ?? (plan.spaceId ? [plan.spaceId] : []))
-	const populated = scope?.populated ?? (geo.length > 0 ? [...spaces] : [])
+	const populated = scope?.populated ?? (holdsStatement(geo) ? [...spaces] : [])
 
 	// The spaces PostGraphile attributes the entity to, when the answer says: `spaceIds`, else every row's space.
 	let known: Set<string> | null = null
@@ -1395,6 +1396,14 @@ export type WideRead =
 	| {ok: false; result: "unsupported"; reason: UnsupportedReason}
 
 /**
+ * Whether `rows` hold a statement of the card. The reserved createdAt/updatedAt cells are not statements:
+ * PostGraphile lists no Space for an entity whose only cells there are those, so such a Space is not populated.
+ */
+function holdsStatement(rows: readonly GeoRow[]): boolean {
+	return rows.some((row) => !ENTITY_TIME_PROPERTIES.has(row.prop))
+}
+
+/**
  * Reads the card of `entityId` in each of `spaces` (concurrently, within the read budget) and concatenates the
  * rows. A space geo-db has not loaded, too many spaces, or an exhausted budget make the entity unsupported
  * rather than failed: geo-db was not asked a question it should have answered. Never throws.
@@ -1417,7 +1426,7 @@ export async function readWide(
 		try {
 			const bySpace = await askGeoDbSpaces(deps, conformingId("entity", entityId), spaces, {names: true})
 			const rows = spaces.flatMap((spaceId) => bySpace.get(spaceId) ?? [])
-			const populated = spaces.filter((spaceId) => (bySpace.get(spaceId)?.length ?? 0) > 0)
+			const populated = spaces.filter((spaceId) => holdsStatement(bySpace.get(spaceId) ?? []))
 			return {ok: true, rows, bySpace, scope: {spaces, populated}, ms: Math.round(performance.now() - started)}
 		} catch (error) {
 			const reason = error instanceof GeoDbError ? error.reason : "error"
@@ -1450,7 +1459,7 @@ export async function readWide(
 			})
 			return {ok: false, result: "failed"}
 		}
-		if (answer.rows.length > 0) populated.push(answer.spaceId)
+		if (holdsStatement(answer.rows)) populated.push(answer.spaceId)
 		bySpace.set(answer.spaceId, answer.rows)
 		rows.push(...answer.rows)
 	}
@@ -1616,7 +1625,7 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 		ok: true,
 		rows: plain,
 		bySpace,
-		scope: {spaces, populated: [...bySpace.keys()]},
+		scope: {spaces, populated: [...bySpace].filter(([, held]) => holdsStatement(held)).map(([space]) => space)},
 		ms: Math.round(performance.now() - started),
 	}
 }
@@ -1803,7 +1812,7 @@ export async function checkCard(
 				ok: true,
 				rows,
 				bySpace: new Map([[plan.spaceId, rows]]),
-				scope: {spaces, populated: rows.length > 0 ? spaces : []},
+				scope: {spaces, populated: holdsStatement(rows) ? spaces : []},
 				ms: Math.round(performance.now() - started),
 			}
 		} catch (error) {

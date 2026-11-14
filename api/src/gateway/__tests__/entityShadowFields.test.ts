@@ -1,7 +1,7 @@
 import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {conformingId, rowsFromGeoDbOutput, type ValueRow, valueKey} from "../../geodb/card"
+import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, type ValueRow, valueKey} from "../../geodb/card"
 import {readGatewayConfig} from "../config"
 import {
 	analyzeEntityOperation,
@@ -482,6 +482,13 @@ describe("derived field checks", () => {
 		expect(ok.uncompared).toContain("cross_space")
 		// a space with no statements may or may not be listed (derived rows live only in Postgres)
 		expect(compareDerived(plan, withCard(ENTITY_A, {spaceIds: [SPACE_B]}), []).checks.spaceIds).toBe("ok")
+		// nor does a space holding only the reserved createdAt cell: Postgres lists none for it
+		const times = rowsFromGeoDbOutput(
+			`${CREATED_AT_PROPERTY}\t2026-01-01T00:00:00Z\ts1\t${ENTITY_HEX}\t-\t-\t1\n`,
+			ENTITY_HEX,
+			{names: true},
+		)
+		expect(compareDerived(plan, withCard(ENTITY_A, {spaceIds: [SPACE_B]}), times).checks.spaceIds).toBe("ok")
 	})
 
 	it("spaceIds are read in either id form", () => {
