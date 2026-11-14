@@ -1577,6 +1577,15 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		)
 	})
 
+	it("does not count a Space holding only the reserved createdAt/updatedAt cells as a holder of an absent entity", async () => {
+		const times =
+			`${CREATED_AT_PROPERTY}\t2026-01-01T00:00:00Z\ts1\t${ABSENT}\t-\t-\t1\n` +
+			`${UPDATED_AT_PROPERTY}\t2026-01-02T00:00:00Z\ts2\t${ABSENT}\t-\t-\t1\n`
+		const s = everySetup({[geoSpace(SPACE_B)]: times})
+		await run(s, EVERY.entityAbsent)
+		expect(results()).toEqual({match: 1})
+	})
+
 	it("stays no_space and reads nothing with the switch off", async () => {
 		const s = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)}, {flag: false})
 		await run(s, EVERY.entityExists)
