@@ -52,13 +52,17 @@ customRules:
 prometheus:
   prometheusSpec:
     retention: 10d
+    # 2Gi OOM-looped on WAL replay (20 restarts in 11d, 2026-11-13): the head
+    # outgrew it, and each OOM kill leaves a longer WAL to replay. 6Gi leaves
+    # about 3x headroom over the 2Gi that was not enough; the 2 CPU limit
+    # (GOMAXPROCS follows it) shortens replay inside the 15 min startup probe.
     resources:
       requests:
-        cpu: 200m
-        memory: 512Mi
+        cpu: 500m
+        memory: 3Gi
       limits:
-        cpu: 1000m
-        memory: 2Gi
+        cpu: 2000m
+        memory: 6Gi
 
     # Persistent TSDB. With emptyDir, every pod reschedule (node drain, node
     # replacement, pool migration) wiped all history — the 2026-09-24 move to
