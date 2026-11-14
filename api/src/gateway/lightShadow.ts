@@ -51,6 +51,7 @@ import {
 	type EntityCardPlan,
 	type EntityShadowDeps,
 	fieldsOf,
+	holdsStatement,
 	isPlainField,
 	type ListPlan,
 	orNull,
@@ -1567,7 +1568,9 @@ export async function checkLight(
 		}
 		heldIn = mapped
 	}
-	const notHeld = heldIn.length > 0 ? !heldIn.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0) : false
+	// Only a statement makes geo-db hold the entity in a Space: the reserved createdAt/updatedAt cells alone leave it
+	// out of the Space, as they do in PostGraphile's answer.
+	const notHeld = heldIn.length > 0 ? !heldIn.some((space) => holdsStatement(read.bySpace.get(space) ?? [])) : false
 	// PostGraphile counts an entity as in a Space when it has any value or outgoing relation there, derived ones
 	// included; geo-db never holds those, so a Space the answer shows holding only derived rows (a vote Score in the
 	// voter's Space) is not a membership geo-db can settle.

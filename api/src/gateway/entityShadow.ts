@@ -1399,7 +1399,7 @@ export type WideRead =
  * Whether `rows` hold a statement of the card. The reserved createdAt/updatedAt cells are not statements:
  * PostGraphile lists no Space for an entity whose only cells there are those, so such a Space is not populated.
  */
-function holdsStatement(rows: readonly GeoRow[]): boolean {
+export function holdsStatement(rows: readonly GeoRow[]): boolean {
 	return rows.some((row) => !ENTITY_TIME_PROPERTIES.has(row.prop))
 }
 
