@@ -1304,7 +1304,7 @@ mod tests {
         assert_eq!((o.matched, o.mismatched, o.failed), (1, 2, 0));
         assert_eq!((o.missing, o.extra, o.unmapped, o.oversized), (1, 1, 1, 0));
         // One Space a read, so the answer is (entity, Space) pairs, never a union.
-        assert_eq!(f.calls.lock().unwrap().len(), 8); // + 2 card reads for sp(3)'s extra
+        assert_eq!(f.calls.lock().unwrap().len(), 9); // + 3 card reads for sp(3)'s extra
     }
 
     #[tokio::test]
