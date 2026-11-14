@@ -1403,6 +1403,18 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: [geoSpace(SPACE_C)], names: true})
 		})
 
+		it("does not count a holder Space whose only cells are the reserved createdAt/updatedAt times", async () => {
+			const times =
+				`${CREATED_AT_PROPERTY}\t2026-01-01T00:00:00Z\ts1\t${ABSENT}\t-\t-\t1\n` +
+				`${UPDATED_AT_PROPERTY}\t2026-01-02T00:00:00Z\ts2\t${ABSENT}\t-\t-\t1\n`
+			const holders = holdersOf(async () => [geoSpace(SPACE_B)])
+			const s = everySetup({[geoSpace(SPACE_B)]: times}, {holders})
+			await run(s, EVERY.entityAbsent)
+			expect(holders.readHolders).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(results()).toEqual({match: 1})
+		})
+
 		it("reads no card where no Space holds the entity", async () => {
 			const holders = holdersOf(async () => [])
 			const s = everySetup({}, {holders})
