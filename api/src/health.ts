@@ -39,6 +39,7 @@ import {renderUserVotesTwinMetrics} from "./pairFit/userVotesShadow"
 import {renderProfileShadowMetrics} from "./profile/shadow"
 import {renderGovernanceMetrics} from "./proposals/governance/metrics"
 import {renderQueriesMetrics} from "./proposals/governance/queriesMetrics"
+import {renderRuntimeMemoryMetrics} from "./runtimeMemoryMetrics"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
@@ -198,6 +199,8 @@ function renderPrometheusMetrics(): string {
 		renderAccountWeightsMetrics(),
 		// geo-db twins of the user_votes reads (pair-fit shared claims, the votedBy argument) against Postgres (GEODB_USER_VOTES_TWIN) — see pairFit/userVotesShadow.ts.
 		renderUserVotesTwinMetrics(),
+		// Process memory and JavaScriptCore heap census, to find what grows per pod (#1600) — see runtimeMemoryMetrics.ts.
+		renderRuntimeMemoryMetrics(),
 		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
 		renderScoresShadowMetrics(),
 		// Ordered entity pages against geo-db's collections 2/3/21 (GEODB_ENTITIES_BEST_ORDER_SHADOW) — see geodb/entitiesBestOrderShadow.ts.
