@@ -63,9 +63,11 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
+    #
+    # CPU only, no memory target. An api pod's working set grows ~25-50 MiB an
+    # hour from boot whatever the traffic (480 -> 800 MiB in 10 h, ~1.9 GiB by
+    # ~35 h, then OOMKilled at the 2Gi limit), so average memory sits above 80%
+    # of the 768Mi request once pods are a day old. Adding pods does not lower
+    # it, so a memory target held the HPA at maxReplicas=24 from 11-11 onwards
+    # while CPU sat at ~42% of target. Memory is a leak to fix, not a load
+    # signal to scale on.
