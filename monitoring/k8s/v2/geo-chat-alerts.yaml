@@ -1,0 +1,37 @@
+# Alerts for geo-chat-api (namespace geo-chat), scraped by the geo-chat-api
+# ServiceMonitor (job="geo-chat-api", 2 pods).
+#
+#   GeoChatRecordingFinalizeGivenUp — geo_chat_debate_recordings_finalize_given_up
+#       (geo-chat#366) counts debate recordings whose finalize gave up after 5
+#       attempts. The healthy value is 0. Every pod reports the same DB-wide count,
+#       so aggregate with max(), not sum(), or the value doubles with the replica
+#       count. max() drops the scrape labels, so namespace/service are set in the
+#       rule's labels (Alertmanager's Slack template prints namespace/alertname).
+#
+#   kubectl apply -f monitoring/k8s/v2/geo-chat-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geo-chat-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geo-chat
+      rules:
+        - alert: GeoChatRecordingFinalizeGivenUp
+          expr: |
+            max(geo_chat_debate_recordings_finalize_given_up{namespace="geo-chat", job="geo-chat-api"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: geo-chat-api
+            namespace: geo-chat
+          annotations:
+            summary: A debate recording has no seekable file because its finalize gave up
+            description: >-
+              A recording has no seekable file and needs its finalize_error read (see the finalization
+              section of debate-media-processing.md in geo-chat docs). The gauge
+              geo_chat_debate_recordings_finalize_given_up counts recordings whose finalize failed 5
+              times; the healthy value is 0. Runbook: docs/runbooks/observability.md in geo-chat.

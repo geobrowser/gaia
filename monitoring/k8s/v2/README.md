@@ -59,6 +59,7 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 | `kg-indexer-alerts.yaml` | new: `KgIndexerBlockDropped` (GEO-2884's silent loss) and `KgIndexerMetricsMissing` |
 | `indexer-alerts.yaml` | new: `IndexerMetricsMissing`, `IndexerHalted`, `IndexerDroppedData` and `IndexerRestartingRepeatedly` for the indexers below |
 | `api-security-alerts.yaml`, `api-security-dashboard.yaml` | new: probe, rejection-surge and detector-health alerts plus their dashboard, for the api's security signals (runbook: `docs/runbooks/graphql-probing.md`) |
+| `geo-chat-alerts.yaml` | new: `GeoChatRecordingFinalizeGivenUp` for the geo-chat-api gauge `geo_chat_debate_recordings_finalize_given_up` (geo-chat#366) |
 
 ## Deliberately not ported
 
