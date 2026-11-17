@@ -11,7 +11,8 @@
 -- WHAT. Per claim on an agenda dated from 6 days ago to today (every published agenda, block items and Claims
 -- relations, as 0113/0118 count claim listings; the newest Date wins when several list it, nothing stacks):
 --   1. Number the ranked debates on it by weighted place value (best first, then entity_id DESC). Only debates with a
---      ranking place (so typed Debate, rankable and not pushed down) that link exactly one claim are numbered.
+--      ranking place (so typed Debate, rankable and not pushed down) that link exactly one claim are numbered (a
+--      debate also typed Claim counts itself as one of its claims, listed or not).
 --      Unranked debates are never numbered and get nothing.
 --   2. #1 gets lift = agenda_claim_steps × S × agenda_day_factor^days.
 --   3. #2.. lose place_drop = agenda_follower_drop_steps × S × agenda_day_factor^days from their place value, never
@@ -122,13 +123,15 @@ LANGUAGE sql STABLE AS $$
     FROM trending.ranking_place_sources_of(ARRAY(SELECT DISTINCT debate_id FROM links)) v
     WHERE NOT EXISTS (SELECT 1 FROM trending.ranking_pushdowns p WHERE p.entity_id = v.entity_id)
   ),
-  -- Every claim each placed debate counts for (listed or not), and the debate itself if it is a claim.
+  -- Every claim each placed debate counts for (listed or not), and the debate itself if it is typed Claim, listed
+  -- or not: listing a Claim+Debate that links another claim must not turn it from single-claim into multi-claim.
   claim_counts AS (
     SELECT x.debate_id, count(DISTINCT x.claim_id)::integer AS claims
     FROM (
       SELECT d.debate_id, d.claim_id FROM trending.debate_links('{}', ARRAY(SELECT entity_id FROM placed)) d
       UNION
-      SELECT l.debate_id, l.claim_id FROM links l WHERE l.debate_id = l.claim_id
+      SELECT k.entity_id, k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT entity_id FROM placed)) k
+      WHERE k.is_claim
     ) x
     GROUP BY x.debate_id
   ),
