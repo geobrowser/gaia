@@ -473,7 +473,8 @@ pub async fn compare_spaces_for_entities(
                 // `holders` counts the reserved time statements; a Space holding nothing else of
                 // the entity is not one Postgres lists. A failed card read leaves it counted.
                 let extras: Vec<String> = got.difference(&expected).cloned().collect();
-                for space in extras.iter().take(MAX_EXTRA_CHECKS) {
+                // Every extra is checked: a cap here left the rest counted `extra_in_geodb`, a false mismatch.
+                for space in &extras {
                     let only = times_only(reader, space, std::slice::from_ref(&id)).await;
                     if only.is_ok_and(|t| t.contains(&id)) {
                         got.remove(space);
@@ -647,6 +648,19 @@ async fn times_only(
         .collect())
 }
 
+/// [`times_only`] over any number of `entities`, [`MAX_EXTRA_CHECKS`] a read, so no entity goes unchecked.
+async fn times_only_all(
+    reader: &dyn GeoDbReader,
+    space: &str,
+    entities: &[String],
+) -> Result<BTreeSet<String>, ShadowError> {
+    let mut out = BTreeSet::new();
+    for chunk in entities.chunks(MAX_EXTRA_CHECKS) {
+        out.extend(times_only(reader, space, chunk).await?);
+    }
+    Ok(out)
+}
+
 /// Which of `entities` (at most [`MAX_EXTRA_CHECKS`], geo-db ids) `space` holds through relations
 /// alone: two batched card reads, every statement and the reference statements only, and an entity
 /// whose counts are equal (and not zero) has no literal. Postgres's rule reads `values`, so such an
@@ -699,7 +713,7 @@ async fn relation_only(
 /// [`MAX_EXTRA_CHECKS`] of a Space, by [`relation_only`]): those holding relations alone count
 /// `extra_relation_only` and are no mismatch; the rest, past the cap or after a failed check, stay
 /// `extra_in_geodb`. Extras holding only the reserved createdAt and updatedAt statements
-/// ([`times_only`]) are no mismatch. A Space past the scan cap on either side is skipped (`too_large`), and the
+/// ([`times_only`], checked for every extra, not just the first [`MAX_EXTRA_CHECKS`]) are no mismatch. A Space past the scan cap on either side is skipped (`too_large`), and the
 /// sample stops at its first failed scan.
 pub async fn compare_entities_for_spaces(
     reader: &dyn GeoDbReader,
@@ -732,10 +746,12 @@ pub async fn compare_entities_for_spaces(
                 o.relation_only += rel.len() as u64;
                 // Entities holding only the reserved time statements are not ones Postgres lists
                 // and are no mismatch either; a failed read leaves them extras.
-                let times = if check.is_empty() {
+                let times = if extras.is_empty() {
                     BTreeSet::new()
                 } else {
-                    times_only(reader, geo, check).await.unwrap_or_default()
+                    times_only_all(reader, geo, &extras)
+                        .await
+                        .unwrap_or_default()
                 };
                 let missing = expected.difference(&got).count();
                 o.item(
@@ -1392,6 +1408,36 @@ mod tests {
             .push(hex(&u(50)));
         let o = compare_entities_for_spaces(&f, &map(&[1]), &[(sp(1), vec![a])]).await;
         assert_eq!((o.extra, o.mismatched), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn time_only_extras_past_the_check_cap_are_still_no_mismatch() {
+        // More time-only entities in one Space than one batch read holds: none is a plain extra.
+        let n = MAX_EXTRA_CHECKS as u128 * 2 + 5;
+        let times: Vec<String> = ENTITY_TIME_PROPERTIES.map(String::from).into();
+        let mut f = Fixture::default();
+        f.scans.insert(g(1), many(n));
+        for e in many(n) {
+            f.card_props.insert((g(1), e), times.clone());
+        }
+        let o = compare_entities_for_spaces(&f, &map(&[1]), &[(sp(1), vec![])]).await;
+        assert_eq!((o.extra, o.mismatched, o.failed), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn an_entity_held_time_only_in_more_spaces_than_the_cap_is_no_mismatch() {
+        let n = MAX_EXTRA_CHECKS as u64 + 8;
+        let times: Vec<String> = ENTITY_TIME_PROPERTIES.map(String::from).into();
+        let e = u(77);
+        let spaces: Vec<u128> = (1..=n as u128).collect();
+        let mut f = Fixture::default();
+        f.holders
+            .insert(hex(&e), spaces.iter().map(|i| g(*i)).collect());
+        for i in &spaces {
+            f.card_props.insert((g(*i), hex(&e)), times.clone());
+        }
+        let o = compare_spaces_for_entities(&f, &map(&spaces), &[(e, vec![])]).await;
+        assert_eq!((o.extra, o.mismatched, o.failed), (0, 0, 0));
     }
 
     #[test]

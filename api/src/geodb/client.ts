@@ -43,6 +43,7 @@ import {
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
+	timeOnlySpaces,
 	typeCountFromGeoDbOutput,
 	typeScanIdsFromGeoDbOutput,
 	versionAtFromGeoDbOutput,
@@ -120,7 +121,17 @@ export type GeoDbCardClient = {
 	 * read is refused. Needs a store from geo-db 48739dfef5 or later, which an older one refuses (the refusal rejects
 	 * with `client_failed`). Absent on a client that cannot do it.
 	 */
-	readHolders?(args: {geoSpaceIds: string[]; entityId: string; timeoutMs?: number}): Promise<string[]>
+	readHolders?(args: {
+		geoSpaceIds: string[]
+		entityId: string
+		timeoutMs?: number
+		/**
+		 * Leave out a Space holding only the reserved createdAt and updatedAt statements (a second read, one card read of
+		 * the entity over the holder Spaces, made only when some Space holds). Off by default: a caller that goes on to
+		 * read the card in each holder wants the time-only Spaces too.
+		 */
+		ignoreTimeOnly?: boolean
+	}): Promise<string[]>
 	/**
 	 * One page of an entity's version log (`entity-versions` pipe line, wire revision 12): newest first by seal time, then
 	 * Space, then version_seq, across the Public Spaces holding it, `first` rows at most (1 to 4096), each carrying the
@@ -1039,7 +1050,7 @@ export function createPipeGeoDbClient(
 			)
 			return answers.flat()
 		},
-		async readHolders({geoSpaceIds, entityId, timeoutMs}) {
+		async readHolders({geoSpaceIds, entityId, timeoutMs, ignoreTimeOnly = false}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
 				throw new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids")
 			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
@@ -1057,7 +1068,20 @@ export function createPipeGeoDbClient(
 				false,
 				true,
 			)
-			return rows.map((row) => row.raw)
+			const held = rows.map((row) => row.raw)
+			if (!ignoreTimeOnly || held.length === 0) return held
+			const card = await submit(
+				`${held.join(",")}\t${cardsDocument([entityId])}\n`,
+				NO_ENTITY,
+				false,
+				held.length > 1,
+				false,
+				false,
+				true,
+				timeoutMs,
+			)
+			const timeOnly = timeOnlySpaces(card, held)
+			return held.filter((space) => !timeOnly.has(space))
 		},
 		async readEntityVersions({entityId, first, timeoutMs}) {
 			if (!HEX32.test(entityId) || !Number.isInteger(first) || first < 1 || first > MAX_ENTITY_VERSIONS)

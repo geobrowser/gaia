@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::ids::Spaces;
-use super::{relation_only, space_entities, GeoDbReader, MAX_EXTRA_CHECKS};
+use super::{relation_only, space_entities, times_only_all, GeoDbReader, MAX_EXTRA_CHECKS};
 
 /// Comma list of reads to serve from geo-db: `applied_block`, `entities_for_spaces`.
 pub const SERVE_VAR: &str = "SEARCH_INDEXER_GEODB_SERVE";
@@ -208,7 +208,8 @@ impl Fallback {
 
 /// `entities_for_spaces` from geo-db: for each distinct Space, the entities it holds through
 /// `values` (what Postgres reads), as `(entity, space)` pairs. geo-db counts relation-only entities
-/// too, so every entity is checked with [`relation_only`] and those are left out. Any Space geo-db
+/// too, so every entity is checked with [`relation_only`] and those are left out, as are those holding only the
+/// reserved createdAt and updatedAt statements ([`times_only_all`]). Any Space geo-db
 /// cannot answer whole (unmapped, over [`MAX_SERVE_ENTITIES`], a failed read) fails the whole call:
 /// a part of an answer is never returned.
 pub async fn entities_for_spaces(
@@ -237,7 +238,12 @@ pub async fn entities_for_spaces(
                     .map_err(|e| Fallback::Error(e.to_string()))?,
             );
         }
-        for entity in held.difference(&rel) {
+        // The shadow twin leaves out an entity holding only the reserved createdAt and updatedAt statements, as
+        // Postgres keeps those times off `values`; the serve must too.
+        let times = times_only_all(reader, geo, &all)
+            .await
+            .map_err(|e| Fallback::Error(e.to_string()))?;
+        for entity in held.difference(&rel).filter(|e| !times.contains(*e)) {
             let id = Uuid::parse_str(entity).map_err(|_| Fallback::BadId(entity.clone()))?;
             out.push((id, space));
         }
@@ -316,6 +322,8 @@ mod tests {
     struct Fake {
         scans: HashMap<String, Vec<String>>,
         relation_only: BTreeSet<String>,
+        /// Entities holding nothing but the reserved createdAt and updatedAt statements.
+        time_only: BTreeSet<String>,
         fail: bool,
     }
 
@@ -347,6 +355,15 @@ mod tests {
                 let list = &doc[at + ".ids = .{ ".len()..];
                 let list = &list[..list.find('}').unwrap()];
                 for id in list.split('"').filter(|t| t.len() == 32) {
+                    if self.time_only.contains(id) {
+                        if !rel_narrow {
+                            out.push_str(&format!(
+                                "{}\tx\tx\t{id}\n",
+                                crate::geodb_shadow::ENTITY_TIME_PROPERTIES[0]
+                            ));
+                        }
+                        continue;
+                    }
                     // A relation-only entity has one statement, a reference; any other has a
                     // reference too and a literal.
                     out.push_str(&format!("x\tx\tx\t{id}\n"));
@@ -398,6 +415,26 @@ mod tests {
             .collect();
         got.sort();
         assert_eq!(got, vec![a, c]);
+    }
+
+    #[tokio::test]
+    async fn serves_the_spaces_entities_without_the_time_only_ones() {
+        let space = v4(1);
+        // More than one batch read holds, so the check must go past the first chunk.
+        let all: Vec<Uuid> = (10..10 + MAX_EXTRA_CHECKS as u8 + 6).map(v4).collect();
+        let (kept, dropped) = (all[0], &all[1..]);
+        let mut f = Fake::default();
+        f.scans.insert(
+            GEO.into(),
+            all.iter().map(|e| conforming_id("entity", e)).collect(),
+        );
+        for e in dropped {
+            f.time_only.insert(conforming_id("entity", e));
+        }
+        let got = entities_for_spaces(&f, &spaces_with(&[(space, GEO)]), &[space])
+            .await
+            .unwrap();
+        assert_eq!(got, vec![(kept, space)]);
     }
 
     #[tokio::test]

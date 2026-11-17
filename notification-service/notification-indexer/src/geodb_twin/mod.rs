@@ -68,7 +68,7 @@ use hermes_instrumentation::{info, warn};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use ids::{conforming_compact, conforming_id, is_hex32, SpaceMap, Spaces};
+use ids::{conforming_compact, conforming_id, is_hex32, is_statement_cell, SpaceMap, Spaces};
 use pipe::{PipeConfig, PipeReader};
 
 /// The flag: `1` or `true` turns the twin on. Anything else, or unset, leaves it off.
@@ -85,7 +85,8 @@ const MAX_BACKLINKS: usize = 4096;
 /// The one counter family: `read`, `result` = `match` | `mismatch` | `unsupported` | `failed`, and
 /// `why` (`none` for a match; the kind of disagreement; the reason a comparison could not be made).
 pub const TWIN: &str = "notification_indexer_geodb_twin_total";
-/// Comparisons not started: `read`, `reason` = `busy` | `space_map_unreadable`. A skip is not a result.
+/// Comparisons not started: `read`, `reason` = `busy` | `space_map_unreadable`. A skip is not a result. Also rows
+/// a read left out on purpose: `reason` = `statement_referrer` (a backlink whose referrer is a `statement:<hex>` cell).
 pub const TWIN_SKIPPED: &str = "notification_indexer_geodb_twin_skipped_total";
 
 pub const EDITORS: &str = "editors";
@@ -141,7 +142,8 @@ pub fn describe() {
     );
     metrics::describe_counter!(
         TWIN_SKIPPED,
-        "Twin comparisons not started, by read and reason (busy, space_map_unreadable)"
+        "Twin comparisons not started or rows left out, by read and reason (busy, \
+         space_map_unreadable, statement_referrer)"
     );
 }
 
@@ -422,15 +424,21 @@ async fn read_backlinks(
     let body = reader
         .query(&[space.to_string()], &card_doc(entity, Some(MAX_BACKLINKS)))
         .await?;
-    Ok(rows(&body)
-        .filter(|c| c.get(1) == Some(&entity) && c.get(3).is_some_and(|f| is_hex32(f)))
-        .map(|c| {
-            (
-                c.first().copied().unwrap_or("").to_string(),
-                c[3].to_string(),
-            )
-        })
-        .collect())
+    let mut links = Vec::new();
+    for c in rows(&body).filter(|c| c.get(1) == Some(&entity)) {
+        match c.get(3) {
+            Some(from) if is_hex32(from) => {
+                links.push((
+                    c.first().copied().unwrap_or("").to_string(),
+                    from.to_string(),
+                ));
+            }
+            // A claim about a statement that refers to the entity holds no Postgres twin: left out, counted.
+            Some(from) if is_statement_cell(from) => skipped("backlinks", "statement_referrer"),
+            _ => {}
+        }
+    }
+    Ok(links)
 }
 
 /// The entity a gaia id has in geo-db.
@@ -842,6 +850,11 @@ async fn read_end_time_window(
             if is_hex32(entity) {
                 out.push((end, (*entity).to_string()));
                 last = Some(end);
+            } else if is_statement_cell(entity) {
+                // A claim carrying `endTime` prints `statement:<hex>`: no proposal version, but its value
+                // is a position in the window, so the cursor moves past it (a page of them is not the
+                // end, and is not a page that did not advance).
+                last = Some(last.map_or(end, |l| l.max(end)));
             }
         }
         // An empty page is the end of the window.
