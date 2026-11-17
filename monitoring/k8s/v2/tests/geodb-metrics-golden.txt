@@ -3,7 +3,7 @@
 # Copied verbatim (comment header aside) from geo-db tests/server/metrics_names.txt at geo-db
 # commit 89c1bf8d90 (the file's last change; origin/final was 4bf0051912 when copied).
 # geodb_store_fenced added by hand from geo-db 8b634bc456 (refresh by copying the file again).
-# Used only by lint-series.sh. To refresh: copy the file again and update the commit above.
+# Used only by lint-series.sh (label values for each series: geodb-label-values.txt). To refresh: copy the file again and update the commit above.
 geodb_claim_bytes_held{class,session}
 geodb_claim_bytes_held{class}
 geodb_claims_in_use_max{claim_class}
