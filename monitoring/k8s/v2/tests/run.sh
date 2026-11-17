@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs promtool over every PrometheusRule that has a tests/<name>.test.yaml next to it.
 # promtool reads plain rule files, so the PrometheusRule's spec is extracted with yq first.
+# Finally lint-series.sh checks the geodb_* series geodb-serve-alerts.yaml selects against the golden copy.
 # Needs promtool (brew install prometheus) and yq. Run from anywhere.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,4 +15,5 @@ for t in "${here}"/*.test.yaml; do
   promtool check rules "${work}/${name}.rules.yaml"
   promtool test rules "${work}/${name}.test.yaml" || status=1
 done
+"${here}/lint-series.sh" || status=1
 exit "${status}"
