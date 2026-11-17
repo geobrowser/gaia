@@ -1,4 +1,5 @@
 import type {DocumentNode} from "graphql"
+import {withFailureScope} from "../geodb/failReason"
 import {type Classification, classifyRequestWithDocument, type GraphqlRequestParams} from "./classify"
 import type {FieldMode, GatewayConfig} from "./config"
 import {activateServeMetrics, observeServe, recordServeFallback, recordServeSource} from "./serveMetrics"
@@ -174,7 +175,7 @@ function scheduleShadow<Ctx>(
 		if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) return
 		const clone = response.clone()
 		setTimeout(() => {
-			shadow({classification, params, document, response: clone}).catch(() => {})
+			withFailureScope(() => shadow({classification, params, document, response: clone})).catch(() => {})
 		}, 0)
 	} catch {
 		// A shadow must never fail a read.

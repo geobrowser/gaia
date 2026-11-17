@@ -11,12 +11,14 @@ import {conformingId, diffCards, ENTITY_TIME_PROPERTIES, isEmptyDiff, statements
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
 import type {GeoDbCardMode} from "./config"
+import {failReason} from "./failReason"
 import {
 	observeGeoDbRead,
 	observePostgresCardRead,
 	recordFallback,
 	recordServed,
 	recordShadow,
+	recordShadowFailed,
 	type ShadowResult,
 } from "./metrics"
 
@@ -215,6 +217,7 @@ export async function shadowCompare(
 		// A Space geo-db has not loaded is not a question it failed: there is nothing to compare, so nothing to count.
 		if (error instanceof GeoDbError && error.reason === "unmapped_space") return
 		recordShadow("failed")
+		recordShadowFailed(failReason(error))
 		deps.log.warn("geodb card shadow read failed", {
 			entityId,
 			spaceId,

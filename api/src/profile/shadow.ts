@@ -20,6 +20,7 @@
 import {ContentIds, SystemIds} from "@geoprotocol/geo-sdk"
 import {conformingId, type GeoCardRow} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
+import {FAIL_REASONS, failReason} from "../geodb/failReason"
 import type {Profile} from "./types"
 
 export type ProfileShadowConfig = {
@@ -55,6 +56,7 @@ export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 let active = false
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
+const failed = new Map<string, number>()
 const bump = (map: Map<string, number>, key: string): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
@@ -83,6 +85,15 @@ export function renderProfileShadowMetrics(): string {
 			lines.push(
 				`gaia_api_profile_shadow_unsupported_total{surface="${s}",reason="${r}"} ${unsupported.get(`${s}\t${r}`) ?? 0}`,
 			)
+	lines.push(
+		"# HELP gaia_api_profile_shadow_failed_total Profile shadow comparisons whose geo-db read failed (the failed result above), by surface and reason: timeout, client_failed, cooling_down or other.",
+		"# TYPE gaia_api_profile_shadow_failed_total counter",
+	)
+	for (const s of SURFACES)
+		for (const r of FAIL_REASONS)
+			lines.push(
+				`gaia_api_profile_shadow_failed_total{surface="${s}",reason="${r}"} ${failed.get(`${s}\t${r}`) ?? 0}`,
+			)
 	return lines.join("\n")
 }
 
@@ -90,6 +101,7 @@ export function __resetProfileShadowMetricsForTests(): void {
 	active = false
 	results.clear()
 	unsupported.clear()
+	failed.clear()
 }
 
 /** Most distinct avatar relations of one card the shadow reads; a card with more is counted `ambiguous`. */
@@ -156,6 +168,7 @@ export function createProfileShadow(deps: {
 			if (error instanceof GeoDbError && error.reason === "unmapped_space")
 				return recordUnsupported(surface, "unmapped_space")
 			recordResult(surface, "failed")
+			bump(failed, `${surface}\t${failReason(error)}`)
 			if (!(error instanceof GeoDbError)) log.warn("profile shadow failed", {error: String(error)})
 		}
 	}

@@ -4,7 +4,10 @@
  * Empty until the route is mounted (`activateGeoDbMetrics`), so a flag-off deploy exports nothing and
  * a removed route cannot look healthy through zero-valued series. Once active every series is
  * registered at zero, so `increase()` sees the first event after a deploy.
+
  */
+
+import {FAIL_REASONS, type FailReason} from "./failReason"
 
 export const FALLBACK_REASONS = [
 	"timeout",
@@ -53,6 +56,7 @@ let active = false
 const served = new Map<string, number>()
 const fallbacks = new Map<string, number>()
 const shadow = new Map<string, number>()
+const shadowFailed = new Map<string, number>()
 const buckets = new Map<string, number[]>()
 const sums = new Map<string, number>()
 const pgBuckets = new Map<string, number[]>()
@@ -110,6 +114,8 @@ export function recordFallback(reason: string): void {
 }
 
 export const recordShadow = (result: ShadowResult) => bump(shadow, result)
+/** Why a shadow card read failed; call beside `recordShadow("failed")`. The reasons sum to that series. */
+export const recordShadowFailed = (reason: FailReason) => bump(shadowFailed, reason)
 export const recordRowSkipped = (reason: RowSkipReason, count = 1) =>
 	rowSkips.set(reason, (rowSkips.get(reason) ?? 0) + count)
 export const recordWorkerStart = (reason: WorkerStartReason) => bump(workerStarts, reason)
@@ -203,6 +209,13 @@ export function renderGeoDbCardMetrics(): string {
 			shadow,
 		),
 		...counter(
+			"gaia_api_geodb_card_shadow_failed_total",
+			"Mode-shadow card reads that failed (the failed result above), by reason: timeout, client_failed, cooling_down or other.",
+			"reason",
+			FAIL_REASONS,
+			shadowFailed,
+		),
+		...counter(
 			"gaia_api_geodb_worker_starts_total",
 			"geodb-client pipe workers started: demand (a read found none) or ahead (replaced before a read needed it).",
 			"reason",
@@ -262,6 +275,7 @@ export function __resetGeoDbMetricsForTests(): void {
 		served,
 		fallbacks,
 		shadow,
+		shadowFailed,
 		buckets,
 		sums,
 		pgBuckets,

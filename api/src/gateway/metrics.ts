@@ -5,6 +5,7 @@
  * active, every series for a registered field is created at zero so `increase()` sees the first event.
  */
 
+import {FAIL_REASONS, notedFailReason} from "../geodb/failReason"
 import {__resetSearchMetricsForTests, renderSearchMetrics} from "./searchMetrics"
 
 export const SHADOW_RESULTS = ["match", "mismatch", "unsupported_selection", "failed"] as const
@@ -110,6 +111,7 @@ export type UncomparedReason = (typeof UNCOMPARED_REASONS)[number]
 const fields = new Set<string>()
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
+const failed = new Map<string, number>()
 const uncompared = new Map<string, number>()
 const shapes = new Map<string, number>()
 
@@ -125,6 +127,8 @@ export function activateGatewayMetrics(field: string): void {
 
 export function recordGatewayShadow(field: string, result: ShadowResult): void {
 	bump(results, `${field}\t${result}`)
+	// Why a read failed comes from the pool's failure scope (see geodb/failReason.ts); `other` when none was noted.
+	if (result === "failed") bump(failed, `${field}\t${notedFailReason()}`)
 }
 
 export function recordGatewayUnsupported(field: string, reason: UnsupportedReason): void {
@@ -156,6 +160,15 @@ export function renderGatewayMetrics(): string {
 		for (const result of SHADOW_RESULTS)
 			lines.push(
 				`gaia_api_gateway_shadow_total{field="${field}",result="${result}"} ${results.get(`${field}\t${result}`) ?? 0}`,
+			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_failed_total Gateway shadow comparisons whose geo-db read failed (the failed result above), by root field and reason: timeout, client_failed, cooling_down or other.",
+		"# TYPE gaia_api_gateway_shadow_failed_total counter",
+	)
+	for (const field of fields)
+		for (const reason of FAIL_REASONS)
+			lines.push(
+				`gaia_api_gateway_shadow_failed_total{field="${field}",reason="${reason}"} ${failed.get(`${field}\t${reason}`) ?? 0}`,
 			)
 	lines.push(
 		"# HELP gaia_api_gateway_shadow_unsupported_total Shadowed operations whose selection geo-db cannot answer, by root field and reason.",
@@ -194,6 +207,7 @@ export function __resetGatewayMetricsForTests(): void {
 	results.clear()
 	unsupported.clear()
 	uncompared.clear()
+	failed.clear()
 	shapes.clear()
 	__resetSearchMetricsForTests()
 }

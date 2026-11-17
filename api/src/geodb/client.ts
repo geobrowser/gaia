@@ -49,6 +49,7 @@ import {
 	versionAtFromGeoDbOutput,
 } from "./card"
 import type {GeoDbCardConfig} from "./config"
+import {BACKING_OFF_MESSAGE, noteReadFailure} from "./failReason"
 import {observeReadStage, type ReadShape, recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
 
 const HEX32 = /^[0-9a-f]{32}$/
@@ -780,6 +781,12 @@ export function createPipeGeoDbClient(
 		else settle(request, failure)
 	}
 
+	/** Notes a rejected read in the running shadow's failure scope (this runs in the caller's async context). */
+	const noted = (error: unknown): never => {
+		noteReadFailure(error)
+		throw error
+	}
+
 	function submit(
 		line: string,
 		entityId: string,
@@ -799,9 +806,9 @@ export function createPipeGeoDbClient(
 		claims = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
-			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
+			return Promise.reject(new GeoDbError("client_failed", BACKING_OFF_MESSAGE)).catch(noted)
 		}
-		return new Promise((resolve, reject) => {
+		return new Promise<GeoCardRow[]>((resolve, reject) => {
 			const request: Request = {
 				line,
 				entityId,
@@ -833,7 +840,7 @@ export function createPipeGeoDbClient(
 				clearTimeout(request.timer)
 				reject(new GeoDbError("overloaded", `${queue.length} geo-db reads already waiting`))
 			} else queue.push(request)
-		})
+		}).catch(noted)
 	}
 
 	/**
