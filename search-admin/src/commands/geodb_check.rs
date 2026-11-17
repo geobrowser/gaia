@@ -84,7 +84,8 @@ pub fn holders_line(entity: &str) -> String {
 
 /// The Spaces a holders answer names. Each row is tab-separated (property, value, statement,
 /// entity): the value is the Space, the entity the one asked. A row that is anything else is an
-/// error, never skipped, so an answer that is not a holders list is not read as an empty one.
+/// error, never skipped, so an answer that is not a holders list is not read as an empty one. A Space holding
+/// only the reserved time statements is still named here; [`without_time_only`] drops it.
 pub fn parse_holders(body: &str, entity: &str) -> Result<HashSet<String>> {
     let mut spaces = HashSet::new();
     for line in body.lines().filter(|l| !l.is_empty()) {
@@ -99,6 +100,49 @@ pub fn parse_holders(body: &str, entity: &str) -> Result<HashSet<String>> {
         spaces.insert(space.to_string());
     }
     Ok(spaces)
+}
+
+/// The reserved createdAt and updatedAt properties geo-db stamps on every touched entity when entity times are
+/// on. Copied from `api/src/geodb/card.ts` (`CREATED_AT_PROPERTY`, `UPDATED_AT_PROPERTY`); a test fails on drift.
+const ENTITY_TIME_PROPERTIES: [&str; 2] = [
+    "74d9c34835444345969a3c9d70362ea5",
+    "c5f5b46a774442acb138c3cba948acec",
+];
+
+/// The pipe request line for one entity's card over the Spaces named (a Space list, comma-separated).
+pub fn card_line(spaces: &[String], entity: &str) -> String {
+    format!(
+        "{}\t.{{ .version = 1, .select = .{{ .c = .{{ .field = \"entity\", .args = .{{ .id = \"{entity}\" }} }} }} }}\n",
+        spaces.join(",")
+    )
+}
+
+/// `held` without the Spaces whose rows of `entity`, in a [`card_line`] answer over those Spaces, are all the
+/// reserved time statements. `holders` counts any active statement, and with entity times on every touched entity
+/// has the two, so a Space whose values were all deleted still holds; geo-db's orphan check must not read that as
+/// present. A Space with no row in the answer stays held: the read said nothing about it. On a one-Space read the
+/// rows carry no `<space>:` prefix, and belong to that Space.
+pub fn without_time_only(held: HashSet<String>, card: &str, entity: &str) -> HashSet<String> {
+    let mut only: BTreeMap<String, bool> = BTreeMap::new();
+    for line in card.lines().filter(|l| !l.is_empty()) {
+        let cells: Vec<&str> = line.split('\t').collect();
+        if cells.get(3).copied() != Some(entity) {
+            continue;
+        }
+        let space = match cells.get(2).and_then(|c| c.split_once(':')) {
+            Some((space, _)) if is_hex32(space) => space.to_string(),
+            _ if held.len() == 1 => held.iter().next().cloned().unwrap_or_default(),
+            _ => continue,
+        };
+        let time = cells
+            .first()
+            .is_some_and(|p| ENTITY_TIME_PROPERTIES.contains(p));
+        let entry = only.entry(space).or_insert(true);
+        *entry = *entry && time;
+    }
+    held.into_iter()
+        .filter(|s| !only.get(s).copied().unwrap_or(false))
+        .collect()
 }
 
 fn is_hex32(s: &str) -> bool {
@@ -223,7 +267,22 @@ impl GeoDbChecker {
             }
             let pipe = guard.as_mut().expect("started above");
             match tokio::time::timeout(READ_TIMEOUT, pipe.read(&holders_line(entity))).await {
-                Ok(Ok(body)) => return parse_holders(&body, entity),
+                Ok(Ok(body)) => {
+                    let held = parse_holders(&body, entity)?;
+                    if held.is_empty() {
+                        return Ok(held);
+                    }
+                    // A Space holding only the reserved times is no holder: one card read over the holders.
+                    let mut spaces: Vec<String> = held.iter().cloned().collect();
+                    spaces.sort();
+                    match tokio::time::timeout(READ_TIMEOUT, pipe.read(&card_line(&spaces, entity)))
+                        .await
+                    {
+                        Ok(Ok(card)) => return Ok(without_time_only(held, &card, entity)),
+                        Ok(Err(e)) => last = e,
+                        Err(_) => last = anyhow!("read timed out after {READ_TIMEOUT:?}"),
+                    }
+                }
                 Ok(Err(e)) => last = e,
                 Err(_) => last = anyhow!("read timed out after {READ_TIMEOUT:?}"),
             }
@@ -401,6 +460,66 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_space_holding_only_the_reserved_times_is_not_a_holder() {
+        let e = "13711444bd8d405f99852b523d112166";
+        let (a, b, c) = ("a".repeat(32), "b".repeat(32), "c".repeat(32));
+        let held = HashSet::from([a.clone(), b.clone(), c.clone()]);
+        let [created, updated] = ENTITY_TIME_PROPERTIES;
+        let other = "98012398829d48b083738f2589675894";
+        // a: times only; b: times and a value; c: no row at all (stays held).
+        let card = format!(
+            "{created}\tt\t{a}:s1\t{e}\n{updated}\tt\t{a}:s2\t{e}\n{created}\tt\t{b}:s3\t{e}\n{other}\tv\t{b}:s4\t{e}\n"
+        );
+        let got = without_time_only(held, &card, e);
+        assert_eq!(got, HashSet::from([b.clone(), c]));
+        // One Space: the rows carry no prefix.
+        let one = HashSet::from([a.clone()]);
+        let times = format!("{created}\tt\ts1\t{e}\n{updated}\tt\ts2\t{e}\n");
+        assert!(without_time_only(one.clone(), &times, e).is_empty());
+        let mixed = format!("{times}{other}\tv\ts3\t{e}\n");
+        assert_eq!(without_time_only(one.clone(), &mixed, e), one);
+        // An answer with nothing in it, or about another entity, leaves the holders alone.
+        assert_eq!(without_time_only(one.clone(), "", e), one);
+        assert_eq!(without_time_only(one.clone(), &times, &"0".repeat(32)), one);
+        // Only an entity with no live statement but the times is an orphan once its holders are filtered.
+        let none = without_time_only(HashSet::from([a.clone()]), &times, e);
+        assert_eq!(
+            classify_holders(&none, &a, false, false),
+            Some(OrphanKind::MissingEntity)
+        );
+    }
+
+    #[test]
+    fn the_card_line_names_the_holder_spaces_and_one_entity() {
+        let line = card_line(
+            &["a".repeat(32), "b".repeat(32)],
+            "13711444bd8d405f99852b523d112166",
+        );
+        assert!(line.starts_with(&format!(
+            "{},{}\t.{{ .version = 1,",
+            "a".repeat(32),
+            "b".repeat(32)
+        )));
+        assert!(line.contains(".id = \"13711444bd8d405f99852b523d112166\""));
+        assert!(!line.contains(".holders"));
+        assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    #[test]
+    fn the_time_properties_match_the_apis_literals() {
+        let ts = include_str!("../../../api/src/geodb/card.ts");
+        for (name, id) in ["CREATED_AT_PROPERTY", "UPDATED_AT_PROPERTY"]
+            .iter()
+            .zip(ENTITY_TIME_PROPERTIES)
+        {
+            assert!(
+                ts.contains(&format!("export const {name} = \"{id}\"")),
+                "{name} drifted from api/src/geodb/card.ts"
+            );
+        }
     }
 
     #[test]

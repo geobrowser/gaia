@@ -24,6 +24,15 @@ export const WORKER_START_REASONS = ["demand", "ahead"] as const
  */
 export const WORKER_END_REASONS = ["dead_session", "refusal", "exit", "timeout", "broken", "recycled"] as const
 
+/**
+ * Why a geo-db row was skipped on purpose by a reader: a `statement:<hex>` cell is legal on the wire (docs/api/10) but
+ * names no entity the Postgres-shaped callers can use. `statement_referrer`: a backlink whose referrer is a statement;
+ * `statement_entity`: a card or lookup row whose entity cell is a statement; `statement_hit`: a lexical search hit on
+ * a statement. A skip is right, but silent it hides how often a claim was dropped.
+ */
+export const ROW_SKIP_REASONS = ["statement_referrer", "statement_entity", "statement_hit"] as const
+export type RowSkipReason = (typeof ROW_SKIP_REASONS)[number]
+
 export type FallbackReason = (typeof FALLBACK_REASONS)[number]
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
 export type ServedSource = (typeof SERVED_SOURCES)[number]
@@ -50,6 +59,7 @@ const pgBuckets = new Map<string, number[]>()
 const pgSums = new Map<string, number>()
 const workerStarts = new Map<string, number>()
 const workerEnds = new Map<string, number>()
+const rowSkips = new Map<string, number>()
 
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
 
@@ -100,6 +110,8 @@ export function recordFallback(reason: string): void {
 }
 
 export const recordShadow = (result: ShadowResult) => bump(shadow, result)
+export const recordRowSkipped = (reason: RowSkipReason, count = 1) =>
+	rowSkips.set(reason, (rowSkips.get(reason) ?? 0) + count)
 export const recordWorkerStart = (reason: WorkerStartReason) => bump(workerStarts, reason)
 export const recordWorkerEnd = (reason: WorkerEndReason) => bump(workerEnds, reason)
 
@@ -204,6 +216,13 @@ export function renderGeoDbCardMetrics(): string {
 			WORKER_END_REASONS,
 			workerEnds,
 		),
+		...counter(
+			"gaia_api_geodb_row_skipped_total",
+			"geo-db rows a reader skipped on purpose (a statement cell where an entity is needed), by reason.",
+			"reason",
+			ROW_SKIP_REASONS,
+			rowSkips,
+		),
 		...histogram(
 			"gaia_api_geodb_read_seconds",
 			"Latency of one geo-db card read through the pipe pool, queue wait included.",
@@ -249,6 +268,7 @@ export function __resetGeoDbMetricsForTests(): void {
 		pgSums,
 		workerStarts,
 		workerEnds,
+		rowSkips,
 		stageBuckets,
 		stageSums,
 		lagBuckets,

@@ -772,6 +772,26 @@ lines((line) => {
 		client.close()
 	})
 
+	it("leaves out a Space holding only the reserved time statements when asked", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	if (doc.includes(".holders = true")) return frame("+", spaces.split(",").map((s) => ["-", s, "-", "${ENTITY}", "1"].join("\\t")).join("\\n") + "\\n")
+	const rows = [["74d9c34835444345969a3c9d70362ea5", "t", "${SPACE}:s1", "${ENTITY}"], ["${PROP}", "v", "${OTHER_SPACE}:s2", "${ENTITY}"], ["c5f5b46a774442acb138c3cba948acec", "t", "${OTHER_SPACE}:s3", "${ENTITY}"]]
+	frame("+", rows.map((r) => r.join("\\t")).join("\\n") + "\\n")
+})
+`)
+		expect(await client.readHolders?.({geoSpaceIds: [SPACE, OTHER_SPACE], entityId: ENTITY})).toEqual([
+			SPACE,
+			OTHER_SPACE,
+		])
+		expect(
+			await client.readHolders?.({geoSpaceIds: [SPACE, OTHER_SPACE], entityId: ENTITY, ignoreTimeOnly: true}),
+		).toEqual([OTHER_SPACE])
+		client.close()
+	})
+
 	it("answers an empty list for an entity no Space holds", async () => {
 		const {client} = fakePipe(`
 process.stdout.write("ready\\n")
