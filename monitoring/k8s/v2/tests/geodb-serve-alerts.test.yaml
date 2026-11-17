@@ -266,6 +266,35 @@ tests:
     alert_rule_test:
       - {eval_time: 60m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
 
+  - name: worker pool saturated fires only when the queue peak and the ceiling hold for 25m
+    interval: 1m
+    input_series:
+      # a: busy peak at 8 (its ceiling) and a queue peak of 3 from minute 30 on
+      - series: 'geodb_workers_busy_max{namespace="gaia", job="geodb", pod="a"}'
+        values: '6x20 8x80'
+      - series: 'geodb_worker_queue_depth_max{namespace="gaia", job="geodb", pod="a"}'
+        values: '0x30 3x70'
+      # b: today's shape, queue peak above 0 but busy peak 1 to 2 under its ceiling most minutes
+      - series: 'geodb_workers_busy_max{namespace="gaia", job="geodb", pod="b"}'
+        values: '8x5 6 7 6 7 6x70'
+      - series: 'geodb_worker_queue_depth_max{namespace="gaia", job="geodb", pod="b"}'
+        values: '4x80'
+      # c: pool pinned at a ceiling of 2, under the floor of 4
+      - series: 'geodb_workers_busy_max{namespace="gaia", job="geodb", pod="c"}'
+        values: '2x80'
+      - series: 'geodb_worker_queue_depth_max{namespace="gaia", job="geodb", pod="c"}'
+        values: '5x80'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbWorkerPoolSaturated, exp_alerts: []}
+      - eval_time: 70m
+        alertname: GeoDbWorkerPoolSaturated
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, job: geodb, pod: a}
+            exp_annotations:
+              summary: geo-db's worker pool has been saturated with jobs waiting for 25m
+              description: >-
+                For 15m every scrape showed all workers busy at some point in its minute and a queue peak above 0, and it held 10m more. Requests wait and park (GeoDbParkWaitSustained). Look for a slow or stuck job (geodb_request_duration_us by class, slow=1 request-log lines), then raise the reactor worker count if the load is real. Plot geodb:workers_busy_max:max5m and geodb:worker_queue_depth_max:max5m.
+
   # session="" on park wait and claim parked: serve prints the node's fold (no session label) and one
   # row per live session, so a sum by (class) over both counts each live room twice.
   - name: park wait counts the node row once; a slow session row beside a fast node row stays silent
