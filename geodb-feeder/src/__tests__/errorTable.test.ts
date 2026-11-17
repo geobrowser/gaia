@@ -183,6 +183,9 @@ const CODE_DEFINITE = [
 	"NodeNotPinned",
 	"Cancelled",
 	"PublishPastEditBound",
+	// a Relay-bound grant whose graph authority has lapsed (ISS-698-417); the feeder's grant is unbound, so it never
+	// meets this, and it is a verdict on the grant like CapabilityTokenExpired
+	"GraphAuthorityStale",
 ]
 const CODE: Record<string, Failure> = {
 	...Object.fromEntries(CODE_TRANSIENT.map((c) => [c, T])),
