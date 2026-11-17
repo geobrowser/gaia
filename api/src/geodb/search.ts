@@ -11,8 +11,10 @@
  */
 
 import {execFile} from "node:child_process"
+import {STATEMENT_CELL} from "./card"
 import {GeoDbError} from "./client"
 import type {GeoDbCardConfig} from "./config"
+import {recordRowSkipped} from "./metrics"
 
 const HEX32 = /^[0-9a-f]{32}$/
 const DEFAULT_TIMEOUT_MS = 3000
@@ -74,6 +76,8 @@ export function parseSearchOutput(output: string): string[] {
 	for (const line of output.split("\n")) {
 		const entity = line.split("\t", 1)[0] ?? ""
 		if (HEX32.test(entity)) seen.add(entity)
+		// A hit on a claim's text is under the claim's statement: no entity to rank, counted so it is not silent.
+		else if (STATEMENT_CELL.test(entity)) recordRowSkipped("statement_hit")
 	}
 	return [...seen]
 }

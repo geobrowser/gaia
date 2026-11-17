@@ -1,18 +1,23 @@
 import {readFileSync} from "node:fs"
 import {describe, expect, it} from "vitest"
 import {
+	backlinkRowsFromGeoDbOutput,
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
 	isEmptyDiff,
 	MEMBERSHIP_PROPERTIES,
+	pageRowsFromGeoDbOutput,
 	pointNorm,
 	rowsFromGeoDbOutput,
 	statementsFromPostgres,
+	timeOnlySpaces,
 	typeScanIdsFromGeoDbOutput,
 	type ValueRow,
 } from "../card"
 import {parseMode, readGeoDbCardConfig} from "../config"
+import {__resetGeoDbMetricsForTests, activateGeoDbMetrics, renderGeoDbCardMetrics} from "../metrics"
+import {parseSearchOutput} from "../search"
 
 const PROP = "98012398829d48b083738f2589675894"
 const ENTITY = "073ff16be7fe4591a984c325d629d92d"
@@ -263,5 +268,67 @@ describe("the type scan flag and reader", () => {
 		const a = "55555555555545558555555555555555"
 		expect(typeScanIdsFromGeoDbOutput(`# plan\n${a}\t1\n\n`)).toEqual([a])
 		expect(() => typeScanIdsFromGeoDbOutput("nope\t1\n")).toThrow()
+	})
+})
+
+const STATEMENT = `statement:${"9".repeat(32)}`
+const CREATED = "74d9c34835444345969a3c9d70362ea5"
+const UPDATED = "c5f5b46a774442acb138c3cba948acec"
+const SP_A = "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa"
+const SP_B = "bbbbbbbbbbbb4bbb8bbbbbbbbbbbbbbb"
+
+const skipped = (reason: string) =>
+	Number(
+		renderGeoDbCardMetrics()
+			.split("\n")
+			.find((l) => l.startsWith(`gaia_api_geodb_row_skipped_total{reason="${reason}"} `))
+			?.split(" ")[1],
+	)
+
+describe("statement rows in geo-db output", () => {
+	it("an ordered page skips a statement row and keeps the rest", () => {
+		const out = [
+			[PROP, "a", "s1", ENTITY, "1"].join("\t"),
+			[PROP, "b", "s2", STATEMENT, "1"].join("\t"),
+			[PROP, "c", "s3", "ffffffffffff4fff8fffffffffffffff", "1"].join("\t"),
+		].join("\n")
+		expect(pageRowsFromGeoDbOutput(out).map((r) => r.raw)).toEqual(["a", "c"])
+		expect(pageRowsFromGeoDbOutput([PROP, "b", "s2", STATEMENT].join("\t"))).toEqual([])
+	})
+
+	it("a page row with any other entity cell is still refused", () => {
+		expect(() => pageRowsFromGeoDbOutput([PROP, "b", "s2", "statement:zz"].join("\t"))).toThrow(/no entity cell/)
+		expect(() => pageRowsFromGeoDbOutput([PROP, "b", "s2", "-"].join("\t"))).toThrow(/no entity cell/)
+	})
+
+	it("counts the statement rows a batch card, a backlinks read and a search drop", () => {
+		__resetGeoDbMetricsForTests()
+		activateGeoDbMetrics()
+		const batch = [[PROP, "a", "s", ENTITY].join("\t"), [PROP, "b", "s", STATEMENT].join("\t")].join("\n")
+		expect(rowsFromGeoDbOutput(batch, null)).toHaveLength(1)
+		expect(skipped("statement_entity")).toBe(1)
+		const back = [
+			[PROP, ENTITY, "s", "ffffffffffff4fff8fffffffffffffff"].join("\t"),
+			[PROP, ENTITY, "s", STATEMENT].join("\t"),
+		].join("\n")
+		expect(backlinkRowsFromGeoDbOutput(back, ENTITY)).toHaveLength(1)
+		expect(skipped("statement_referrer")).toBe(1)
+		expect(parseSearchOutput(`${ENTITY}\t1\n${STATEMENT}\t1\n`)).toEqual([ENTITY])
+		expect(skipped("statement_hit")).toBe(1)
+		// A read of one entity's own card drops other entities' rows without counting them.
+		rowsFromGeoDbOutput(batch, ENTITY)
+		expect(skipped("statement_entity")).toBe(1)
+		__resetGeoDbMetricsForTests()
+	})
+
+	it("finds the Spaces that hold only the reserved time statements", () => {
+		const row = (prop: string, space?: string) => ({prop, raw: "x", ...(space ? {space} : {})})
+		const rows = [row(CREATED, SP_A), row(UPDATED, SP_A), row(CREATED, SP_B), row(PROP, SP_B)]
+		expect([...timeOnlySpaces(rows, [SP_A, SP_B, "cccccccccccc4ccc8ccccccccccccccc"])]).toEqual([SP_A])
+		// One Space: the rows carry no prefix.
+		expect([...timeOnlySpaces([row(CREATED), row(UPDATED)], [SP_A])]).toEqual([SP_A])
+		expect(timeOnlySpaces([row(CREATED), row(PROP)], [SP_A]).size).toBe(0)
+		// No row at all: nothing is said, so the Space stays a holder.
+		expect(timeOnlySpaces([], [SP_A]).size).toBe(0)
 	})
 })

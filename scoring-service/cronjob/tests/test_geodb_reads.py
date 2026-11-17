@@ -341,6 +341,27 @@ class TestFlagAndParsing:
         except GeoDbReadError:
             pass
 
+    def test_backlinks_read_skips_a_statement_referrer_and_other_reads_refuse_it(self) -> None:
+        e, stmt = "c" * 32, "statement:" + "9" * 32
+        payload = f"q\t{e}\tsid\t{stmt}\nq\t{e}\tsid\t{'d' * 32}\nq\t{e}\tsid\t{stmt}\n"
+        out = parse_rows(payload, backlinks_of=e)
+        assert [(r.prop, r.entity) for r in out] == [("q", "d" * 32)]
+        # A page of nothing but statement referrers is an empty answer, not a failed read.
+        assert parse_rows(f"q\t{e}\tsid\t{stmt}\n", backlinks_of=e) == []
+        # A card read names the entities asked: a statement there is still a wrong answer.
+        for kwargs in ({}, {"only_entity": e}):
+            try:
+                parse_rows(f"q\t{e}\tsid\t{stmt}\n", **kwargs)
+                raise AssertionError("should refuse")
+            except GeoDbReadError:
+                pass
+        # A malformed cell is refused on a backlinks read too.
+        try:
+            parse_rows(f"q\t{e}\tsid\tstatement:zz\n", backlinks_of=e)
+            raise AssertionError("should refuse")
+        except GeoDbReadError:
+            pass
+
 
 def test_pipe_reader_prefers_the_read_key_over_the_mirror_key():
     env = {"GEODB_KEY_PATH": "/w", "GEODB_READ_KEY_PATH": "/r", "GEODB_BINDING_PATH": "/b", "GEODB_CLIENT_BIN": "c"}

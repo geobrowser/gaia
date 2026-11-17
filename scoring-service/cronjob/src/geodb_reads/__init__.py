@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 _UUID_V4 = re.compile(r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$")
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
+_STATEMENT_CELL = re.compile(r"^statement:[0-9a-f]{32}$")
 
 # Pinned like the feeder's copies (geodb-feeder/src/membership.ts ROLE_PROPERTY, recordKinds.ts) and the api's
 # (api/src/geodb/keyedRecordsShadow.ts USER_VOTE_COLUMNS); a test holds them to the values below.
@@ -152,6 +153,10 @@ def parse_rows(payload: str, only_entity: str | None = None, backlinks_of: str |
         if not line:
             continue
         cells = line.split("\t")
+        # A claim about a statement that refers to the entity prints ``statement:<hex>`` as its entity: a legal
+        # backlink row (docs/api/10), but no entity to read a voter from, so a backlinks read leaves it out.
+        if backlinks_of is not None and len(cells) >= 4 and _STATEMENT_CELL.match(cells[3]):
+            continue
         if len(cells) < 4 or not _HEX32.match(cells[3]):
             raise GeoDbReadError(f"a card row has no entity cell: {line[:60]}")
         if only_entity is not None and cells[3] != only_entity:

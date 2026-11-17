@@ -9,6 +9,7 @@
  */
 
 import {createHash} from "node:crypto"
+import {recordRowSkipped} from "./metrics"
 
 /** `text` carries a string compared as written; `num` a number compared by value. */
 export type StatementKind = "text" | "num"
@@ -185,6 +186,9 @@ export type CardOutputOptions = {
 	spaces?: boolean
 }
 
+/** The entity cell of a row about a statement (`statement:` and the statement's 32 hex digits). */
+export const STATEMENT_CELL = /^statement:[0-9a-f]{32}$/
+
 /** A names cell: `-` (what geodb-client prints for none) is no name (or a target outside the Space), anything else the name as written. */
 const nameCell = (cell: string): string | null => (cell === "-" ? null : unescapeText(cell))
 
@@ -207,7 +211,13 @@ export function rowsFromGeoDbOutput(
 		.split("\n")
 		.filter((line) => line !== "")
 		.map((line) => line.split("\t"))
-		.filter((cells) => (entityId === null ? /^[0-9a-f]{32}$/.test(cells[3] ?? "") : cells[3] === entityId))
+		.filter((cells) => {
+			if (entityId !== null) return cells[3] === entityId
+			if (/^[0-9a-f]{32}$/.test(cells[3] ?? "")) return true
+			// A `statement:<hex>` entity cell is legal (docs/api/10) but names no entity of a batch card.
+			if (STATEMENT_CELL.test(cells[3] ?? "")) recordRowSkipped("statement_entity")
+			return false
+		})
 		.map((cells) => {
 			const row: GeoCardRow = {prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
 			// A batch read (`entityId` null) keeps each row's owner, as the rows of several cards share one answer.
@@ -247,6 +257,23 @@ export function holderSpacesFromGeoDbOutput(output: string, entityId: string): s
 				throw new Error(`a holders row is not a Space of the entity: ${line.slice(0, 60)}`)
 			return cells[1] as string
 		})
+}
+
+/**
+ * Of `spaces` (the Spaces a holders read named), those whose rows in a card read of the entity hold nothing but the
+ * reserved createdAt and updatedAt statements. A holders row cannot say it: `holders` counts any active statement, and
+ * with entity times on every touched entity has the two, so a Space whose values were all deleted still holds. `rows`
+ * is that card read over the holder Spaces (each row's `space` on a multi-Space read, else the one Space). A Space with
+ * no row at all is not returned: the read said nothing about it, so it stays a holder.
+ */
+export function timeOnlySpaces(rows: GeoCardRow[], spaces: string[]): Set<string> {
+	const held = new Map<string, boolean>()
+	for (const row of rows) {
+		const space = row.space ?? (spaces.length === 1 ? spaces[0] : undefined)
+		if (space === undefined) continue
+		held.set(space, (held.get(space) ?? true) && ENTITY_TIME_PROPERTIES.has(row.prop))
+	}
+	return new Set([...held].filter(([, only]) => only).map(([space]) => space))
 }
 
 /**
@@ -352,7 +379,13 @@ export function backlinkRowsFromGeoDbOutput(
 		.split("\n")
 		.filter((line) => line !== "")
 		.map((line) => line.split("\t"))
-		.filter((cells) => cells[1] === entityId && /^[0-9a-f]{32}$/.test(cells[3] ?? ""))
+		.filter((cells) => {
+			if (cells[1] !== entityId) return false
+			if (/^[0-9a-f]{32}$/.test(cells[3] ?? "")) return true
+			// A claim about a statement that refers to the entity: no Postgres twin holds it, so it is left out, counted.
+			if (STATEMENT_CELL.test(cells[3] ?? "")) recordRowSkipped("statement_referrer")
+			return false
+		})
 		.map((cells) => {
 			const row: GeoBacklinkRow = {prop: cells[0] ?? "", raw: entityId, from: cells[3] as string}
 			if (options.spaces) {
@@ -548,7 +581,7 @@ export type GeoPageRow = {entity: string; prop: string; raw: string}
 /**
  * geodb-client output for an `entities` page: rows a line like a card's (property, value, statement, entity, ..), the
  * entity cell naming the page's object, the page's objects in order. Several Spaces print `<space>:<statement>`; the
- * statement cell is not read. A line without a 32-digit entity cell is refused.
+ * statement cell is not read. A `statement:<hex>` entity cell is skipped, the row of a claim and no page object; any other line without a 32-digit entity cell is refused.
  */
 export function pageRowsFromGeoDbOutput(output: string): GeoPageRow[] {
 	return output
@@ -557,9 +590,12 @@ export function pageRowsFromGeoDbOutput(output: string): GeoPageRow[] {
 		.map((line) => {
 			const cells = line.split("\t")
 			const entity = cells[3] ?? ""
+			// A claim matching the page's filter prints `statement:<hex>`: legal, and no object of the page.
+			if (STATEMENT_CELL.test(entity)) return null
 			if (!/^[0-9a-f]{32}$/.test(entity)) throw new Error(`a page row has no entity cell: ${line.slice(0, 60)}`)
 			return {entity, prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
 		})
+		.filter((row): row is GeoPageRow => row !== null)
 }
 
 /**

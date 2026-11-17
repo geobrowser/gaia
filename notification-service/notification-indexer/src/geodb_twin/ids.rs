@@ -50,6 +50,11 @@ pub fn is_hex32(s: &str) -> bool {
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
 
+/// An entity cell of a row about a statement: `statement:` and its 32 hex digits (docs/api/10).
+pub fn is_statement_cell(s: &str) -> bool {
+    s.strip_prefix("statement:").is_some_and(is_hex32)
+}
+
 /// Parse a space map file: `{"<gaia space id>": {"geo": "<geo-db space id>", "loaded"?: false}}`,
 /// the file the feeder maintains and the api reads (`api/src/geodb/client.ts` `parseSpaceMap`).
 /// Keys and `geo` must be 32 hex digits (a dashed uuid is compacted); any other entry refuses the

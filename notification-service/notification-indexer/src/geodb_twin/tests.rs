@@ -1137,6 +1137,64 @@ async fn reverse_resumes_through_a_tie_and_across_pages() {
     );
 }
 
+/// A `value_page` row naming a claim (`statement:<hex>`) that carries `endTime`.
+fn statement_end_row(end: i64) -> String {
+    format!(
+        "{VERSION_END_TIME}\t{end}.0\tstmt\tstatement:{}\n",
+        hex(0x7777)
+    )
+}
+
+fn put_page(fake: &Fake, after: Option<i64>, body: String) {
+    fake.answers
+        .lock()
+        .unwrap()
+        .insert((GOV.into(), value_page_doc(FLOOR, NOW - 1, after)), body);
+}
+
+#[tokio::test]
+async fn reverse_advances_past_a_page_made_only_of_statement_rows() {
+    // Page one is a claim at 1100 alone: the window goes on (it is not the end), and does not
+    // refuse for want of progress. The proposal on page two is still listed.
+    let e = vec![listed(12, 1300)];
+    let fake = reverse_fixture(&e, &[vec![0]]);
+    put_page(&fake, None, statement_end_row(1100));
+    put_page(
+        &fake,
+        Some(1100),
+        format!("{VERSION_END_TIME}\t1300.0\tstmt\t{}\n", hex(e[0].version)),
+    );
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only")]
+    );
+}
+
+#[tokio::test]
+async fn reverse_moves_the_cursor_over_a_statement_row_at_the_end_of_a_mixed_page() {
+    let e = vec![listed(10, 1100), listed(12, 1300)];
+    let fake = reverse_fixture(&e, &[vec![0], vec![1]]);
+    // Page one: the proposal at 1100 and a claim at 1150; page two resumes after 1150.
+    put_page(
+        &fake,
+        None,
+        format!(
+            "{VERSION_END_TIME}\t1100.0\tstmt\t{}\n{}",
+            hex(e[0].version),
+            statement_end_row(1150)
+        ),
+    );
+    put_page(
+        &fake,
+        Some(1150),
+        format!("{VERSION_END_TIME}\t1300.0\tstmt\t{}\n", hex(e[1].version)),
+    );
+    assert_eq!(
+        reverse(&fake, Some(&[])).await,
+        vec![Verdict::Mismatch("listed_by_geodb_only"); 2]
+    );
+}
+
 #[tokio::test]
 async fn reverse_empty_page_is_a_match() {
     let fake = Fake::default();
