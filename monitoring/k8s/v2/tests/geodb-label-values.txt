@@ -1,0 +1,19 @@
+# Allowed label values for the geodb_* series that geodb-metrics-golden.txt lists, one row each:
+#   <series or *>{<label>} = <value> <value> ...      (a lone * as the value list means any value)
+# A series row wins over a * row. lint-series.py fails a rule that selects label="value" (or !=,
+# or =~ / !~ with literal alternatives or a regex) naming a value not listed here, and a selected
+# label that has no row at all, so a new label in the golden list needs a row here too.
+# Read from geo-db origin/final at 9b2546092b (src/server/server.zig WireRefusal, src/server/http.zig,
+# src/storage/derived/store.zig ImageOutcome, src/engine/budget/region.zig ClaimClass,
+# docs/api/13-serve-metrics-reference.md). Refresh by re-reading those when the golden list is refreshed.
+geodb_wire_refused_total{reason} = revision magic header_crc opcode flags not_permitted not_authenticated session_revision frame_too_large handshake_payload handshake_revision grammar binding anonymous handshake_reply auth_shape auth_strength auth_rejected handshake_timeout
+geodb_claims_refused_by_cause_total{cause} = claim_over_clamp ceiling
+geodb_claims_short_total{claim_class} = query_eval
+geodb_derived_image_outcome{outcome} = off absent loaded bad_header layout config log_moved epoch body
+geodb_start_phase_seconds{phase} = main before_open open before_recovery setup listen
+*{claim_class} = construction maintenance query_eval
+*{class} = pinned live write bulk
+*{quantile} = 0.500 0.990
+*{kind} = flush compaction_merge branch_consolidation space_compaction file_reclaim value_index_rebuild
+*{session} = *
+*{collection} = *

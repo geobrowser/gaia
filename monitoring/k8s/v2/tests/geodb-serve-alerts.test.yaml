@@ -128,3 +128,331 @@ tests:
       - {eval_time: 50m, alertname: GeoDbClaimsNearPeak, exp_alerts: []}
       - {eval_time: 50m, alertname: GeoDbClaimsRefused, exp_alerts: []}
       - {eval_time: 50m, alertname: GeoDbClaimParkedSustained, exp_alerts: []}
+
+  - name: new-metric rules, absent series fire nothing
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_rows{namespace="gaia", job="geodb"}'
+        values: '1x400'
+    alert_rule_test:
+      - {eval_time: 380m, alertname: GeoDbSpacesNearCap, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbRoomsNearCap, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbRoomsAtCap, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbParkWaitSustained, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
+
+  - name: spaces at 80% stay silent, at 95% fire after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_spaces_in_use{namespace="gaia", job="geodb"}'
+        values: '1638x20 1946x40'
+      - series: 'geodb_spaces_max{namespace="gaia", job="geodb"}'
+        values: '2047x60'
+    alert_rule_test:
+      - {eval_time: 19m, alertname: GeoDbSpacesNearCap, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbSpacesNearCap, exp_alerts: []}
+      - eval_time: 45m
+        alertname: GeoDbSpacesNearCap
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's Space table is more than 90% full
+              description: >-
+                A founding past geodb_spaces_max is refused ResourceExhausted, so the feeder dead-letters
+                space_cap and a new Space gets no geo-db copy. Raise spaces in the geodb-serve-config ConfigMap
+                (serve.cfg; one serve restart; RUNBOOK capacity section) before the table fills.
+
+  - name: rooms near cap warn after 10m, at cap go critical after 5m, below stay silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_rooms_taken{namespace="gaia", job="geodb"}'
+        values: '10x10 92x20 100x30'
+      - series: 'geodb_rooms_max{namespace="gaia", job="geodb"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 9m, alertname: GeoDbRoomsNearCap, exp_alerts: []}
+      - {eval_time: 15m, alertname: GeoDbRoomsNearCap, exp_alerts: []}
+      - eval_time: 25m
+        alertname: GeoDbRoomsNearCap
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db has 90% of its rooms taken
+              description: >-
+                Each open connection or session holds a room; at the cap a new connection is refused. Compare
+                geodb_sessions_open and look for a client that leaks connections (a feeder or api pod that
+                reconnects without closing), then raise the room count only if the load is real.
+      - {eval_time: 25m, alertname: GeoDbRoomsAtCap, exp_alerts: []}
+      - eval_time: 40m
+        alertname: GeoDbRoomsAtCap
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db has no free room; new connections are refused
+              description: >-
+                geodb_rooms_taken has equalled geodb_rooms_max for 5m, so every new connection or handshake
+                is refused. Find the client holding the rooms (geodb_sessions_open, the feeder and api logs),
+                restart it, and if it is real load raise the room carving in serve.cfg (one serve restart).
+
+  - name: park wait mean 50 ms stays silent, 300 ms fires per class
+    interval: 1m
+    input_series:
+      # query: 10 parks a minute at 5 ms each (50 ms mean needs 50000us/park: 500000us/min)
+      - series: 'geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", class="query"}'
+        values: '0+500000x60'
+      - series: 'geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", class="query"}'
+        values: '0+10x60'
+      # write: 10 parks a minute at 300 ms each
+      - series: 'geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", class="write"}'
+        values: '0+3000000x60'
+      - series: 'geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", class="write"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbParkWaitSustained, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbParkWaitSustained
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, class: write}
+            exp_annotations:
+              summary: geo-db write requests wait over 100 ms parked, on average
+              description: >-
+                Requests park until a claim or a worker is free. A mean above 100 ms for 10m means the claim
+                region or the worker pool is short for the load. Check geodb_requests_parked_now and
+                geodb_requests_park_wait_us_max by class, geodb_claims_in_use against its _max,
+                geodb_query_region_free_bytes and geodb_worker_queue_depth; slow requests log park_wait_us=.
+
+  - name: park wait with no ended park (count flat) stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", class="query"}'
+        values: '0x60'
+      - series: 'geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", class="query"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbParkWaitSustained, exp_alerts: []}
+
+  - name: worker queue rising with workers pinned fires; busy below its ceiling stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_worker_queue_depth{namespace="gaia", job="geodb", pod="a"}'
+        values: '0x20 1+1x60'
+      - series: 'geodb_workers_busy{namespace="gaia", job="geodb", pod="a"}'
+        values: '2x80'
+      # b: queue rising but workers were at 4 earlier and now only 2, so not pinned
+      - series: 'geodb_worker_queue_depth{namespace="gaia", job="geodb", pod="b"}'
+        values: '0x20 1+1x60'
+      - series: 'geodb_workers_busy{namespace="gaia", job="geodb", pod="b"}'
+        values: '4x10 2x70'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
+      - eval_time: 60m
+        alertname: GeoDbWorkerQueueGrowing
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, job: geodb, pod: a}
+            exp_annotations:
+              summary: geo-db's worker queue is growing with every worker busy
+              description: >-
+                Jobs queue faster than the pool finishes them, so requests wait and park
+                (GeoDbParkWaitSustained). Look for a slow or stuck job (geodb_request_duration_us by class,
+                slow=1 request-log lines), then raise the reactor worker count if the load is real.
+
+  - name: worker queue flat above zero stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_worker_queue_depth{namespace="gaia", job="geodb"}'
+        values: '3x80'
+      - series: 'geodb_workers_busy{namespace="gaia", job="geodb"}'
+        values: '2x80'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
+
+  # session="" on park wait and claim parked: serve prints the node's fold (no session label) and one
+  # row per live session, so a sum by (class) over both counts each live room twice.
+  - name: park wait counts the node row once; a slow session row beside a fast node row stays silent
+    interval: 1m
+    input_series:
+      # node fold: 10 parks a minute at 50 ms each
+      - series: 'geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", class="query"}'
+        values: '0+500000x60'
+      - series: 'geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", class="query"}'
+        values: '0+10x60'
+      # one live session's own row: 10 parks a minute at 300 ms. Unfiltered, the two rows would sum to
+      # a 175 ms mean and fire; with session="" only the node row is read (50 ms).
+      - series: 'geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", class="query", session="7"}'
+        values: '0+3000000x60'
+      - series: 'geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", class="query", session="7"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbParkWaitSustained, exp_alerts: []}
+
+  - name: claim parked counts the node row once; node at 0.15/s with a session row beside it stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="query"}'
+        values: '0+9x60'
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="query", session="7"}'
+        values: '0+9x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbClaimParkedSustained, exp_alerts: []}
+
+  - name: claim parked above 0.2/s on the node row fires
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_claim_parked_total{namespace="gaia", job="geodb", class="query"}'
+        values: '0+18x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GeoDbClaimParkedSustained
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, class: query}
+            exp_annotations:
+              summary: geo-db is parking query requests for want of a claim, steadily
+              description: >-
+                Requests wait for a claim in the region instead of taking one. A burst is normal; ten minutes
+                of it means the region is too small for the load or claims are held too long. Compare
+                geodb_claims_in_use{claim_class} with its _max and check geodb_claims_refused_total.
+
+  # Counter rules: rows print at 0 from the first scrape, then move.
+  - name: wire revision refusals fire on a rise and stay silent when flat
+    interval: 1m
+    input_series:
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="revision"}'
+        values: '0x10 1+1x10 11x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbWireRevisionRefused, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbWireRevisionRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused a client for its wire revision in the last 15m
+              description: >-
+                A client outside the serve's accepted revision range (7..18) connected. This is a stray client (newer than the serve, or older than 7), not a rollback check: a rollback to a tag at 15 or 17 is inside the range and does not move the counter. Read the counter, not the log line, which is rate limited. Find the client by its "serve refused wire revision" line.
+      - {eval_time: 50m, alertname: GeoDbWireRevisionRefused, exp_alerts: []}
+
+  - name: claims short fires on a rise in query_eval and stays silent flat
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_short_total{namespace="gaia", job="geodb", claim_class="query_eval"}'
+        values: '0x10 1+1x5 6x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbClaimsShort, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbClaimsShort
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db cut a request mid-flight for want of its claim in the last 15m
+              description: >-
+                The query region was too small at execution although admission passed the request. Steady state is zero. Compare geodb_claims_in_use{claim_class="query_eval"} with its _max and check geodb_requests_claim_parked_total.
+      - {eval_time: 50m, alertname: GeoDbClaimsShort, exp_alerts: []}
+
+  - name: admission refusals split by cause, ceiling at warning and claim_over_clamp at info
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="ceiling"}'
+        values: '0x10 1+1x5 6x40'
+      - series: 'geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="claim_over_clamp"}'
+        values: '0x10 1+1x5 6x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbAdmissionCeiling, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbAdmissionCeiling
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused a request at admission for a class ceiling in the last 15m
+              description: >-
+                A class hit its admission ceiling, so requests were refused. This is load, not a bug; check geodb_requests_refused_total by class and geodb_claims_in_use against its _max. Separate from geodb_claims_refused_total (the pool) and geodb_claims_short_total (mid-flight).
+      - eval_time: 15m
+        alertname: GeoDbAdmissionClaimOverClamp
+        exp_alerts:
+          - exp_labels: {severity: info, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused a read whose priced need passed the service claim in the last 15m
+              description: >-
+                A read priced above the service's claim is refused by design, so one oversized query makes this nonzero legitimately. Info until a week of scrapes gives a baseline; tighten to warning after that.
+      - {eval_time: 50m, alertname: GeoDbAdmissionCeiling, exp_alerts: []}
+
+  - name: derived image refused fires at info after 1m
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="epoch"}'
+        values: '1x30'
+    alert_rule_test:
+      - {eval_time: 30s, alertname: GeoDbDerivedImageNotUsed, exp_alerts: []}
+      - eval_time: 10m
+        alertname: GeoDbDerivedImageNotUsed
+        exp_alerts:
+          - exp_labels: {severity: info, service: geodb, namespace: gaia, outcome: epoch}
+            exp_annotations:
+              summary: geo-db found a derived image at start and refused it (epoch)
+              description: >-
+                The derived table was replayed from the log instead (a slow start, not data loss). The row is published once at start, so this stays up for the process life and clears on the next restart. absent (first start) and off (switch off) are excluded.
+
+  - name: derived image loaded, off and absent stay silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="loaded"}'
+        values: '1x30'
+      - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="absent"}'
+        values: '1x30'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbDerivedImageNotUsed, exp_alerts: []}
+
+  - name: derived refused cap, view failures and work open rows
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_refused_cap_total{namespace="gaia", job="geodb"}'
+        values: '0x10 1+1x5 6x40'
+      - series: 'geodb_derived_view_failures_total{namespace="gaia", job="geodb"}'
+        values: '0x60'
+      - series: 'geodb_work_open_rows{namespace="gaia", job="geodb"}'
+        values: '90x60'
+      - series: 'geodb_work_open_rows_max{namespace="gaia", job="geodb"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbDerivedRefusedCap, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbDerivedRefusedCap
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused a derived write past the table cap in the last 15m
+              description: >-
+                GeoDbDerivedRowsHigh warns at 80%; this fires if it was missed. Raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+      - {eval_time: 50m, alertname: GeoDbDerivedViewFailures, exp_alerts: []}
+      - {eval_time: 10m, alertname: GeoDbWorkOpenRowsHigh, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbWorkOpenRowsHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's work class holds more than 80% of work_open_rows_max
+              description: >-
+                Open (pending plus in-progress) units are near their cap, so new units will be refused. Check geodb_work_pending and geodb_work_in_progress for a stalled consumer, then raise the cap in serve.cfg (one serve restart).
+
+  - name: store fenced fires at 1, silent at 0
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fenced{namespace="gaia", job="geodb"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - {eval_time: 9m, alertname: GeoDbStoreFenced, exp_alerts: []}
+      - {eval_time: 10m, alertname: GeoDbStoreFenced, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbStoreFenced
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's store has fenced; every write is refused
+              description: >-
+                geodb_store_fenced is 1. Serve printed one stderr line, "store fenced: <cause>; every write is refused StoreFenced until the store reopens", so read the cause there. Writes stay refused until the store reopens (a serve restart); reads are unaffected.
+
+  - name: store fenced silent when the series is absent
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_open{namespace="gaia", job="geodb"}'
+        values: '1x30'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbStoreFenced, exp_alerts: []}
