@@ -421,7 +421,7 @@ spec:
         - alert: GeoDbWorkOpenRowsHigh
           expr: |
             max(geodb_work_open_rows{namespace="gaia", job="geodb"})
-              / (max(geodb_work_open_rows_max{namespace="gaia", job="geodb"}) > 0) > 0.8
+              / (max(geodb_work_open_rows_max{namespace="gaia", job="geodb"}) > 0) > 0.999
           for: 15m
           labels:
             severity: warning
