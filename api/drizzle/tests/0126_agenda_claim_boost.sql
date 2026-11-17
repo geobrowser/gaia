@@ -89,7 +89,7 @@ UPDATE entity_ranking_config
 --    2 P1    on C7, downvoted by M2 and M3 (no ballot): pushed down, so no place
 --    3 A1    on C1 (listed today in S1)                       → #1 on C1: lifted
 --    4 MD    on C1 and C9 (C9 listed, nothing else ranked on it) → drop on C1 (C1 has a lifted #1); nothing on C9
---    5 A2    on C1                                            → #2: dropped
+--    5 A2    on C1                                            → #3 (under MD): dropped
 --    6 MD2   on C5 (listed, only unranked debates) and UNL    → nothing
 --    7 D9    on UNL (unlisted); named by agenda AD's Debates relation → nothing
 --   10 B1    on C2 (listed 3 days ago in S1 and today in S2)  → lifted, the newest Date (today)
@@ -98,7 +98,7 @@ UPDATE entity_ranking_config
 --   40 CD    typed Claim and Debate, itself listed today      → lifted as a debate on itself
 --   50 OLD1  on C3 (listed 7 days ago: outside)               → nothing
 --   60 FUT1  on C4 (listed tomorrow)                          → nothing
---   95 A3    on C1                                            → #3: dropped, floored at the place base
+--   95 A3    on C1                                            → #4: dropped, floored at the place base
 --   96 F1    on C11 (listed 6 days ago: the window's last day) → lifted, faded 6 days
 --   97 F2    on C11                                           → #2: dropped, faded 6 days
 --   98 MG    on C12 (listed today) and UNL                    → drop on C12 though it outranks G1: rank 2, never 1
@@ -189,6 +189,21 @@ CREATE OR REPLACE FUNCTION pg_temp.drop_steps() RETURNS numeric LANGUAGE sql AS 
   SELECT agenda_follower_drop_steps FROM entity_ranking_config WHERE id $$;
 CREATE OR REPLACE FUNCTION pg_temp.b() RETURNS numeric LANGUAGE sql AS $$
   SELECT trending_boost FROM entity_ranking_config WHERE id $$;
+-- How many claims a debate is on: its Claims links that count, and itself when typed Claim and Debate.
+CREATE OR REPLACE FUNCTION pg_temp.nclaims(d uuid) RETURNS integer LANGUAGE sql AS $$
+  SELECT count(*)::integer FROM (
+    SELECT l.claim_id FROM trending.debate_links('{}', ARRAY[d]) l
+    UNION SELECT k.entity_id FROM trending.claims_and_debates(ARRAY[d]) k WHERE k.is_claim AND k.is_debate) x $$;
+-- The stored numbering: per claim the ranks are distinct and run 1..n, exactly one row is rank 1, it alone has a
+-- lift, and it is never a debate on several claims.
+CREATE OR REPLACE FUNCTION pg_temp.ranks_ok() RETURNS boolean LANGUAGE sql AS $$
+  SELECT NOT EXISTS (
+           SELECT 1 FROM trending.agenda_boosts b GROUP BY b.claim_id
+           HAVING count(DISTINCT b.rank_on_claim) <> count(*) OR min(b.rank_on_claim) <> 1
+               OR max(b.rank_on_claim) <> count(*) OR count(*) FILTER (WHERE b.rank_on_claim = 1) <> 1
+               OR count(*) FILTER (WHERE b.lift > 0) <> 1 OR bool_or(b.rank_on_claim = 1 AND b.lift <= 0))
+     AND NOT EXISTS (SELECT 1 FROM trending.agenda_boosts b
+                     WHERE b.rank_on_claim = 1 AND pg_temp.nclaims(b.entity_id) > 1) $$;
 CREATE OR REPLACE FUNCTION pg_temp.full_pass() RETURNS integer LANGUAGE sql AS $$
   SELECT trending.refresh_agenda_listings(true) $$;
 CREATE TEMP TABLE snaps (tag text, entity_id uuid, ranking_score numeric, trending_score numeric,
@@ -298,10 +313,10 @@ SELECT pg_temp.full_pass();
 SELECT assert((pg_temp.boost('A1')).rank_on_claim = 1 AND (pg_temp.boost('A1')).claim_id = pg_temp.i('C1')
               AND pg_temp.trend('A1') = pg_temp.v('A1') + pg_temp.steps(pg_temp.lift_steps(), 1, 0),
               '2: the best ranked debate on a claim listed today gets the full lift on top of its place value');
-SELECT assert((pg_temp.boost('A2')).rank_on_claim = 2
+SELECT assert((pg_temp.boost('A2')).rank_on_claim = 3
               AND pg_temp.trend('A2') = pg_temp.v('A2') - pg_temp.steps(pg_temp.drop_steps(), 1, 0),
               '2: the next ranked debate on it loses the drop from its place value');
-SELECT assert((pg_temp.boost('A3')).rank_on_claim = 3
+SELECT assert((pg_temp.boost('A3')).rank_on_claim = 4
               AND pg_temp.trend('A3') = pg_temp.v('A3') - pg_temp.steps(pg_temp.drop_steps(), 1, 0),
               '2: and so does every ranked debate after it');
 -- A drop bigger than the place values: floored at the place base.
@@ -376,6 +391,35 @@ SELECT pg_temp.full_pass();
 SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 17
               AND NOT EXISTS (SELECT 1 FROM trending.agenda_boosts WHERE lift <= 0 AND place_drop <= 0),
               '2: seventeen rows (A1, A2, A3, MD, B1, E1, P2, CD, H, H2, F1, F2, MG, G1, W, CDX, G2), each with a lift or a drop');
+SELECT assert(pg_temp.ranks_ok(),
+              '2: per claim the ranks run 1..n with no repeats, and only the one rank 1 (never multi-claim) is lifted');
+-- Listing every claim the ranked debates are on (and every Claim+Debate itself) never moves a debate between
+-- single-claim and multi-claim: every lifted debate stays lifted on the same claim, every dropped one stays dropped.
+CREATE TEMP TABLE base_boosts AS SELECT * FROM trending.agenda_boosts;
+CREATE TEMP TABLE extra_listed AS
+SELECT c.claim_id FROM (
+  SELECT l.claim_id FROM trending.debate_links('{}', ARRAY(SELECT entity_id FROM trending.ranking_places)) l
+  UNION SELECT k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT entity_id FROM trending.ranking_places)) k
+  WHERE k.is_claim AND k.is_debate) c
+WHERE NOT EXISTS (SELECT 1 FROM relations r WHERE r.from_entity_id = pg_temp.i('A0') AND r.to_entity_id = c.claim_id);
+INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id, is_system)
+SELECT gen_random_uuid(), gen_random_uuid(), 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, pg_temp.i('A0'), claim_id,
+       pg_temp.i('S1'), false FROM extra_listed;
+SELECT pg_temp.full_pass();
+SELECT assert((SELECT count(*) FROM extra_listed) >= 6
+              AND NOT EXISTS (SELECT 1 FROM base_boosts o LEFT JOIN trending.agenda_boosts n USING (entity_id)
+                              WHERE n.entity_id IS NULL OR (o.lift > 0) <> (n.lift > 0)
+                                 OR (o.lift > 0 AND (n.claim_id <> o.claim_id OR n.rank_on_claim <> 1))
+                                 OR (o.lift = 0 AND n.place_drop <= 0))
+              AND pg_temp.ranks_ok(),
+              '2: listing every claim of the ranked debates keeps each lifted debate lifted and each dropped one dropped');
+DELETE FROM relations WHERE from_entity_id = pg_temp.i('A0') AND to_entity_id IN (SELECT claim_id FROM extra_listed);
+SELECT pg_temp.full_pass();
+SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 17
+              AND NOT EXISTS (SELECT entity_id, claim_id, rank_on_claim, listed_on, lift, place_drop FROM base_boosts
+                              EXCEPT SELECT entity_id, claim_id, rank_on_claim, listed_on, lift, place_drop
+                              FROM trending.agenda_boosts),
+              '2: (listings removed again: the same rows as before)');
 -- A vote's own re-score of one debate reads the stored row: the lift is never handed to two debates.
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('A1'), pg_temp.i('A2')]);
 SELECT assert(pg_temp.trend('A1') = pg_temp.v('A1') + pg_temp.steps(pg_temp.lift_steps(), 1, 0)
@@ -402,7 +446,7 @@ SELECT assert(trending.refresh_agenda_listings(false) > 0, '4: a removed Claims 
 SELECT assert(pg_temp.boost('A1') IS NULL AND pg_temp.trend('A1') = pg_temp.v('A1')
               AND (pg_temp.boost('A2')).rank_on_claim = 1
               AND pg_temp.trend('A2') = pg_temp.v('A2') + pg_temp.steps(pg_temp.lift_steps(), 1, 0)
-              AND (pg_temp.boost('A3')).rank_on_claim = 2,
+              AND (pg_temp.boost('MD')).rank_on_claim = 2 AND (pg_temp.boost('A3')).rank_on_claim = 3,
               '4: and the lift moves to the sibling, with every changed debate re-scored in the same run');
 SELECT pg_temp.claims('A1', 'C1');
 SELECT trending.refresh_agenda_listings(false);
@@ -438,3 +482,5 @@ TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ra
          ranks.ranking_items, ranks.ranking_scores, ranks.members, ranks.editors CASCADE;
 DROP TABLE ids;
 DROP TABLE snaps;
+DROP TABLE base_boosts;
+DROP TABLE extra_listed;

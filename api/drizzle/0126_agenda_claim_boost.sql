@@ -10,14 +10,14 @@
 --
 -- WHAT. Per claim on an agenda dated from 6 days ago to today (every published agenda, block items and Claims
 -- relations, as 0113/0118 count claim listings; the newest Date wins when several list it, nothing stacks):
---   1. Number the ranked debates on it by weighted place value (best first, then entity_id DESC). Only debates with a
---      ranking place (so typed Debate, rankable and not pushed down) that link exactly one claim are numbered (a
---      debate also typed Claim counts itself as one of its claims, listed or not).
---      Unranked debates are never numbered and get nothing.
---   2. #1 gets lift = agenda_claim_steps × S × agenda_day_factor^days.
---   3. #2.. lose place_drop = agenda_follower_drop_steps × S × agenda_day_factor^days from their place value, never
---      below min(place value, ranking_place_base), so a follower stays above every unranked debate. A ranked debate
---      linking several claims takes the drop on a listed claim only when that claim has a lifted #1.
+--   1. Its lead is the best ranked debate on it (by weighted place value, then entity_id DESC) that is on no other
+--      claim. Ranked means it has a ranking place (so typed Debate, rankable and not pushed down); a debate also typed
+--      Claim counts itself as one of its claims, listed or not. Unranked debates get nothing, and a claim with no lead
+--      gets nothing.
+--   2. The lead is #1 and gets lift = agenda_claim_steps × S × agenda_day_factor^days.
+--   3. Every other ranked debate on the claim (one that is on several claims included, whatever its place) is #2..
+--      in place order and loses place_drop = agenda_follower_drop_steps × S × agenda_day_factor^days from its place
+--      value, never below min(place value, ranking_place_base), so a follower stays above every unranked debate.
 --   S = ranking_place_step × the weight of the source that gave the debate its place value (the largest weighted
 --   value when several do), so a step is one place in that debate's source (Patrick, 17 Nov). days = New York days
 --   since the listing's Date.
@@ -111,74 +111,64 @@ LANGUAGE sql STABLE AS $$
       AND l.listed_on BETWEEN cfg.today - 6 AND cfg.today
     GROUP BY l.entity_id
   ),
-  -- Debates on them: Claims links that count, plus a listed claim that is itself typed Debate.
-  links AS (
-    SELECT d.debate_id, d.claim_id FROM trending.debate_links(ARRAY(SELECT claim_id FROM listed), '{}') d
-    UNION
-    SELECT k.entity_id, k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT claim_id FROM listed)) k
-    WHERE k.is_debate
-  ),
+  -- Candidate debates: Claims links that count, plus a listed claim that is itself typed Debate.
   placed AS (
     SELECT v.entity_id, v.place_value, v.weight
-    FROM trending.ranking_place_sources_of(ARRAY(SELECT DISTINCT debate_id FROM links)) v
+    FROM trending.ranking_place_sources_of(ARRAY(
+      SELECT d.debate_id FROM trending.debate_links(ARRAY(SELECT claim_id FROM listed), '{}') d
+      UNION
+      SELECT k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT claim_id FROM listed)) k
+      WHERE k.is_claim AND k.is_debate)) v
     WHERE NOT EXISTS (SELECT 1 FROM trending.ranking_pushdowns p WHERE p.entity_id = v.entity_id)
   ),
-  -- Every claim each placed debate counts for (listed or not), and the debate itself if it is typed Claim, listed
-  -- or not: listing a Claim+Debate that links another claim must not turn it from single-claim into multi-claim.
-  claim_counts AS (
-    SELECT x.debate_id, count(DISTINCT x.claim_id)::integer AS claims
-    FROM (
-      SELECT d.debate_id, d.claim_id FROM trending.debate_links('{}', ARRAY(SELECT entity_id FROM placed)) d
-      UNION
-      SELECT k.entity_id, k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT entity_id FROM placed)) k
-      WHERE k.is_claim
-    ) x
-    GROUP BY x.debate_id
+  -- The one debate-to-claim edge set, used both to count a debate's claims and to find the listed claims it is on:
+  -- every claim each placed debate links (listed or not), and itself when it is typed Claim too (listed or not).
+  edges AS (
+    SELECT d.debate_id, d.claim_id FROM trending.debate_links('{}', ARRAY(SELECT entity_id FROM placed)) d
+    UNION
+    SELECT k.entity_id, k.entity_id FROM trending.claims_and_debates(ARRAY(SELECT entity_id FROM placed)) k
+    WHERE k.is_claim AND k.is_debate
   ),
-  numbered AS (
-    SELECT l.claim_id, ls.listed_on, p.entity_id, p.weight,
-           row_number() OVER (PARTITION BY l.claim_id ORDER BY p.place_value DESC, p.entity_id DESC)::integer AS rank_on_claim
-    FROM links l
-    JOIN placed p ON p.entity_id = l.debate_id
-    JOIN claim_counts cc ON cc.debate_id = l.debate_id AND cc.claims = 1
-    JOIN listed ls ON ls.claim_id = l.claim_id
+  -- Ranked debates on listed claims, with how many claims each debate is on.
+  on_claim AS (
+    SELECT e.claim_id, ls.listed_on, p.entity_id, p.place_value, p.weight,
+           count(*) OVER (PARTITION BY e.debate_id) AS claims
+    FROM edges e
+    JOIN placed p ON p.entity_id = e.debate_id
+    LEFT JOIN listed ls ON ls.claim_id = e.claim_id
   ),
-  -- Ranked debates linking several claims, on a listed claim with a lifted #1: they take the drop.
-  multi AS (
-    SELECT l.claim_id, ls.listed_on, p.entity_id, p.weight, NULL::integer AS rank_on_claim
-    FROM links l
-    JOIN placed p ON p.entity_id = l.debate_id
-    JOIN claim_counts cc ON cc.debate_id = l.debate_id AND cc.claims > 1
-    JOIN listed ls ON ls.claim_id = l.claim_id
-    WHERE EXISTS (SELECT 1 FROM numbered n WHERE n.claim_id = l.claim_id AND n.rank_on_claim = 1)
+  -- Per listed claim, its lead: the best ranked debate on it that is on no other claim.
+  leads AS (
+    SELECT DISTINCT ON (o.claim_id) o.claim_id, o.entity_id AS lead_id
+    FROM on_claim o
+    WHERE o.claims = 1 AND o.listed_on IS NOT NULL
+    ORDER BY o.claim_id, o.place_value DESC, o.entity_id DESC
   ),
+  -- One numbering per claim with a lead: the lead is #1 and lifted, every other ranked debate on it (multi-claim ones
+  -- included, whatever their place) is #2.. and dropped. A claim with no lead gets no rows.
   rows AS (
-    SELECT n.entity_id, n.claim_id, n.rank_on_claim, n.listed_on,
-           CASE WHEN n.rank_on_claim = 1 THEN cfg.agenda_claim_steps ELSE 0 END
-             * cfg.ranking_place_step * n.weight * power(cfg.agenda_day_factor, cfg.today - n.listed_on) AS lift,
-           CASE WHEN n.rank_on_claim = 1 THEN 0 ELSE cfg.agenda_follower_drop_steps END
-             * cfg.ranking_place_step * n.weight * power(cfg.agenda_day_factor, cfg.today - n.listed_on) AS place_drop
-    FROM numbered n CROSS JOIN cfg
-    UNION ALL
-    -- A multi-claim debate's rank is the one it would have among the claim's numbered debates, always below the
-    -- lifted #1 (it takes the drop even when its place is better), so a dropped row is never rank 1.
-    SELECT m.entity_id, m.claim_id,
-           1 + (SELECT count(*) FROM numbered n JOIN placed pn ON pn.entity_id = n.entity_id
-                JOIN placed pm ON pm.entity_id = m.entity_id
-                WHERE n.claim_id = m.claim_id
-                  AND (n.rank_on_claim = 1
-                       OR (pn.place_value, pn.entity_id) > (pm.place_value, pm.entity_id)))::integer,
-           m.listed_on, 0,
-           cfg.agenda_follower_drop_steps * cfg.ranking_place_step * m.weight
-             * power(cfg.agenda_day_factor, cfg.today - m.listed_on)
-    FROM multi m CROSS JOIN cfg
+    SELECT o.entity_id, o.claim_id, o.listed_on,
+           row_number() OVER (PARTITION BY o.claim_id
+                              ORDER BY o.entity_id = ld.lead_id DESC, o.place_value DESC, o.entity_id DESC)::integer
+             AS rank_on_claim,
+           o.weight
+    FROM on_claim o
+    JOIN leads ld ON ld.claim_id = o.claim_id
+  ),
+  boosts AS (
+    SELECT r.entity_id, r.claim_id, r.rank_on_claim, r.listed_on,
+           CASE WHEN r.rank_on_claim = 1 THEN cfg.agenda_claim_steps ELSE 0 END
+             * cfg.ranking_place_step * r.weight * power(cfg.agenda_day_factor, cfg.today - r.listed_on) AS lift,
+           CASE WHEN r.rank_on_claim = 1 THEN 0 ELSE cfg.agenda_follower_drop_steps END
+             * cfg.ranking_place_step * r.weight * power(cfg.agenda_day_factor, cfg.today - r.listed_on) AS place_drop
+    FROM rows r CROSS JOIN cfg
   )
   -- One row per debate: a lift beats a drop (only single-claim debates are lifted, so this only orders a
   -- multi-claim debate's drops), then the larger drop, then the newer listing and the lower claim id.
-  SELECT DISTINCT ON (r.entity_id) r.entity_id, r.claim_id, r.rank_on_claim, r.listed_on, r.lift, r.place_drop
-  FROM rows r
-  WHERE r.lift > 0 OR r.place_drop > 0
-  ORDER BY r.entity_id, r.lift DESC, r.place_drop DESC, r.listed_on DESC, r.claim_id
+  SELECT DISTINCT ON (b.entity_id) b.entity_id, b.claim_id, b.rank_on_claim, b.listed_on, b.lift, b.place_drop
+  FROM boosts b
+  WHERE b.lift > 0 OR b.place_drop > 0
+  ORDER BY b.entity_id, b.lift DESC, b.place_drop DESC, b.listed_on DESC, b.claim_id
 $$;
 --> statement-breakpoint
 
