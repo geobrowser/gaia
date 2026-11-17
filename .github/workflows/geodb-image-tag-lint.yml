@@ -1,0 +1,26 @@
+name: geodb image tag lint
+
+# Every manifest that pins registry.digitalocean.com/geo/geodb (the geodb-setup init containers,
+# Job and CronJob templates, the serve) must name the same tag as the serve container in
+# geodb/k8s/v2/geodb.yaml. Prints each file:line and tag that differs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '.github/scripts/lint-geodb-image-tags.sh'
+  pull_request:
+    paths:
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '.github/scripts/lint-geodb-image-tags.sh'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint geodb image tags
+        run: bash .github/scripts/lint-geodb-image-tags.sh --self-test
