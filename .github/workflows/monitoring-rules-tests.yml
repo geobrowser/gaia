@@ -1,0 +1,50 @@
+name: monitoring rule tests
+
+# Runs monitoring/k8s/v2/tests/run.sh: promtool check + test over every PrometheusRule that has a
+# tests/<name>.test.yaml, then the geodb_* series lint against the golden /metrics copy.
+# promtool and yq are pinned by exact version and verified by sha256 before use.
+# No `branches:` filter on pull_request, so a PR stacked on another PR branch is tested too.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'monitoring/k8s/**'
+      - '.github/workflows/monitoring-rules-tests.yml'
+  pull_request:
+    paths:
+      - 'monitoring/k8s/**'
+      - '.github/workflows/monitoring-rules-tests.yml'
+
+env:
+  PROMETHEUS_VERSION: 3.16.0
+  PROMETHEUS_SHA256: 68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34
+  YQ_VERSION: v4.54.3
+  YQ_SHA256: 129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install pinned promtool and yq
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/monitoring-bin"
+          mkdir -p "${bin}"
+          curl -fsSL -o "${RUNNER_TEMP}/prometheus.tar.gz" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "${PROMETHEUS_SHA256}  ${RUNNER_TEMP}/prometheus.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/prometheus.tar.gz" -C "${bin}" --strip-components=1 \
+            "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          curl -fsSL -o "${bin}/yq" \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  ${bin}/yq" | sha256sum -c -
+          chmod +x "${bin}/yq"
+          echo "${bin}" >> "${GITHUB_PATH}"
+      - name: Show tool versions
+        run: |
+          promtool --version | head -1
+          yq --version
+      - name: Run rule tests and series lint
+        run: bash monitoring/k8s/v2/tests/run.sh
