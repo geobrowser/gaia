@@ -157,12 +157,14 @@ LANGUAGE sql STABLE AS $$
              * cfg.ranking_place_step * n.weight * power(cfg.agenda_day_factor, cfg.today - n.listed_on) AS place_drop
     FROM numbered n CROSS JOIN cfg
     UNION ALL
-    -- A multi-claim debate's rank is the one it would have among the claim's numbered debates.
+    -- A multi-claim debate's rank is the one it would have among the claim's numbered debates, always below the
+    -- lifted #1 (it takes the drop even when its place is better), so a dropped row is never rank 1.
     SELECT m.entity_id, m.claim_id,
            1 + (SELECT count(*) FROM numbered n JOIN placed pn ON pn.entity_id = n.entity_id
                 JOIN placed pm ON pm.entity_id = m.entity_id
                 WHERE n.claim_id = m.claim_id
-                  AND (pn.place_value, pn.entity_id) > (pm.place_value, pm.entity_id))::integer,
+                  AND (n.rank_on_claim = 1
+                       OR (pn.place_value, pn.entity_id) > (pm.place_value, pm.entity_id)))::integer,
            m.listed_on, 0,
            cfg.agenda_follower_drop_steps * cfg.ranking_place_step * m.weight
              * power(cfg.agenda_day_factor, cfg.today - m.listed_on)

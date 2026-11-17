@@ -98,7 +98,13 @@ UPDATE entity_ranking_config
 --   50 OLD1  on C3 (listed 7 days ago: outside)               → nothing
 --   60 FUT1  on C4 (listed tomorrow)                          → nothing
 --   95 A3    on C1                                            → #3: dropped, floored at the place base
--- Block BLK2 (source 'half', weight 0.5, 100 slots): 1 H on C10 (listed today) → lifted by half the points.
+--   96 F1    on C11 (listed 6 days ago: the window's last day) → lifted, faded 6 days
+--   97 F2    on C11                                           → #2: dropped, faded 6 days
+--   98 MG    on C12 (listed today) and UNL                    → drop on C12 though it outranks G1: rank 2, never 1
+--   99 G1    on C12                                           → #1 on C12 (MG is multi-claim): lifted
+-- Block BLK2 (source 'half', weight 0.5, 100 slots): 1 H on C10 (listed today) → lifted by half the points;
+--   2 W on C13 (listed today), also 1 in BLK4 (source 'faded', weight 1, fade 0.5 a day: about 0 after 20 days) →
+--   its value comes from 'half', so its lift is half the points, not the heavier source's full points.
 -- Block BLK3 (source 'tenth', weight 0.1, 100 slots): 1 H2 on C10 → #2 under H: dropped, but its place value (1250)
 --   is already below the place base, so the floor leaves it there (never raises it).
 -- Unranked: U1 on C1, U5 on C5, UNR (on UNL, 1 day old) and UOLD (on UNL, 25 days old).
@@ -108,7 +114,7 @@ SELECT k, ('b1260000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['UNL','C1','C2','C3','C4','C5','C6','C7','C9','C10','S1','S2','DEB','BLK','BLK2','M2','M3',
                   'A0','A2D','A2T','AOLD','AFUT','A6','AD',
                   'P1','A1','MD','A2','MD2','D9','B1','E1','P2','CD','OLD1','FUT1','A3','H','U1','U5','UNR','UOLD',
-                  'BLK3','H2'])
+                  'BLK3','H2','C11','C12','C13','A6B','F1','F2','MG','G1','W','BLK4'])
      WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
@@ -210,20 +216,23 @@ SELECT id, 'DAO'::"spaceTypes", 'addr-' || k FROM ids WHERE k IN ('S1','S2','DEB
 INSERT INTO spaces (id, type, address)
 SELECT id, 'Personal'::"spaceTypes", 'addr-' || k FROM ids WHERE k IN ('M2','M3');
 
-SELECT pg_temp.claim(k) FROM unnest(ARRAY['UNL','C1','C2','C3','C4','C5','C6','C7','C9','C10']) k;
+SELECT pg_temp.claim(k) FROM unnest(ARRAY['UNL','C1','C2','C3','C4','C5','C6','C7','C9','C10','C11','C12','C13']) k;
 SELECT pg_temp.debate('P1', 'C7'), pg_temp.debate('A1', 'C1'), pg_temp.debate('MD', 'C1'), pg_temp.claims('MD', 'C9'),
        pg_temp.debate('A2', 'C1'), pg_temp.debate('MD2', 'C5'), pg_temp.claims('MD2', 'UNL'),
        pg_temp.debate('D9', 'UNL'), pg_temp.debate('B1', 'C2'), pg_temp.debate('E1', 'C6'), pg_temp.debate('P2', 'C7'),
        pg_temp.debate('OLD1', 'C3'), pg_temp.debate('FUT1', 'C4'), pg_temp.debate('A3', 'C1'), pg_temp.debate('H', 'C10'),
        pg_temp.debate('U1', 'C1'), pg_temp.debate('U5', 'C5'), pg_temp.debate('UNR', 'UNL', 1),
-       pg_temp.debate('UOLD', 'UNL', 25), pg_temp.debate('H2', 'C10');
+       pg_temp.debate('UOLD', 'UNL', 25), pg_temp.debate('H2', 'C10'), pg_temp.debate('F1', 'C11'),
+       pg_temp.debate('F2', 'C11'), pg_temp.debate('MG', 'C12'), pg_temp.claims('MG', 'UNL'), pg_temp.debate('G1', 'C12'),
+       pg_temp.debate('W', 'C13');
 SELECT pg_temp.ent('CD', pg_temp.noon(20)), pg_temp.typed('CD', 'CLAIM'), pg_temp.typed('CD', 'DEBATE');
 
 SELECT pg_temp.agenda('A0', 'S1', 0);
-SELECT pg_temp.lists('A0', k, 'S1') FROM unnest(ARRAY['C1','C5','C7','C9','C10','CD']) k;
+SELECT pg_temp.lists('A0', k, 'S1') FROM unnest(ARRAY['C1','C5','C7','C9','C10','CD','C12','C13']) k;
 SELECT pg_temp.agenda('A2D', 'S1', 3), pg_temp.lists('A2D', 'C2', 'S1');
 SELECT pg_temp.agenda('A2T', 'S2', 0), pg_temp.lists('A2T', 'C2', 'S2');
 SELECT pg_temp.agenda('A6', 'S1', 2), pg_temp.lists('A6', 'C6', 'S1');
+SELECT pg_temp.agenda('A6B', 'S1', 6), pg_temp.lists('A6B', 'C11', 'S1');
 SELECT pg_temp.agenda('AOLD', 'S1', 7), pg_temp.lists('AOLD', 'C3', 'S1');
 SELECT pg_temp.agenda('AFUT', 'S1', -1), pg_temp.lists('AFUT', 'C4', 'S1');
 SELECT pg_temp.agenda('AD', 'S1', 0),
@@ -236,11 +245,14 @@ SELECT pg_temp.scored('BLK', 'P1', 2), pg_temp.scored('BLK', 'A1', 3), pg_temp.s
        pg_temp.scored('BLK', 'B1', 10), pg_temp.scored('BLK', 'E1', 20), pg_temp.scored('BLK', 'P2', 30),
        pg_temp.scored('BLK', 'CD', 40), pg_temp.scored('BLK', 'OLD1', 50), pg_temp.scored('BLK', 'FUT1', 60),
        pg_temp.scored('BLK', 'A3', 95), pg_temp.scored('BLK2', 'H', 1),
-       pg_temp.scored('BLK3', 'H2', 1);
+       pg_temp.scored('BLK3', 'H2', 1), pg_temp.scored('BLK', 'F1', 96), pg_temp.scored('BLK', 'F2', 97),
+       pg_temp.scored('BLK', 'MG', 98), pg_temp.scored('BLK', 'G1', 99), pg_temp.scored('BLK2', 'W', 2),
+       pg_temp.scored('BLK4', 'W', 1);
 INSERT INTO trending.ranking_place_sources (name, space_id, block_id, weight, window_days, slots, day_factor)
 VALUES ('all_time', pg_temp.i('DEB'), pg_temp.i('BLK'), 1, NULL, 100, 1),
        ('half', pg_temp.i('DEB'), pg_temp.i('BLK2'), 0.5, NULL, 100, 1),
-       ('tenth', pg_temp.i('DEB'), pg_temp.i('BLK3'), 0.1, NULL, 100, 1);
+       ('tenth', pg_temp.i('DEB'), pg_temp.i('BLK3'), 0.1, NULL, 100, 1),
+       ('faded', pg_temp.i('DEB'), pg_temp.i('BLK4'), 1, NULL, 100, 0.5);
 UPDATE entity_ranking_config SET ranking_pushdown_since = pg_temp.midnight(1) WHERE id;
 
 -- ---------------------------------------------------------------------------
@@ -307,6 +319,11 @@ SELECT assert(pg_temp.score('A2') < pg_temp.score('E1') AND pg_temp.score('A1') 
 SELECT assert(pg_temp.near(pg_temp.trend('E1'), pg_temp.v('E1') + pg_temp.steps(pg_temp.lift_steps(), 1, 2))
               AND (pg_temp.boost('E1')).listed_on = pg_temp.today() - 2,
               '2: the lift fades with the listing''s Date (0.65 a day)');
+SELECT assert((pg_temp.boost('F1')).listed_on = pg_temp.today() - 6
+              AND pg_temp.near(pg_temp.trend('F1'), pg_temp.v('F1') + pg_temp.steps(pg_temp.lift_steps(), 1, 6))
+              AND (pg_temp.boost('F2')).rank_on_claim = 2
+              AND pg_temp.near(pg_temp.trend('F2'), pg_temp.v('F2') - pg_temp.steps(pg_temp.drop_steps(), 1, 6)),
+              '2: a listing 6 days old still counts, and the drop fades with the Date as the lift does');
 SELECT assert(pg_temp.boost('OLD1') IS NULL AND pg_temp.trend('OLD1') = pg_temp.v('OLD1'),
               '2: a listing 7 days old does nothing');
 SELECT assert(pg_temp.boost('FUT1') IS NULL AND pg_temp.trend('FUT1') = pg_temp.v('FUT1'),
@@ -322,15 +339,25 @@ SELECT assert((pg_temp.boost('MD')).claim_id = pg_temp.i('C1') AND (pg_temp.boos
               '2: a multi-claim debate is never lifted, and drops under a claim with a lifted #1 (not C9, which has none)');
 SELECT assert(pg_temp.boost('MD2') IS NULL AND pg_temp.trend('MD2') = pg_temp.v('MD2'),
               '2: a multi-claim debate on a claim with no lifted #1 gets nothing');
+SELECT assert(pg_temp.v('MG') > pg_temp.v('G1')
+              AND (pg_temp.boost('G1')).rank_on_claim = 1 AND (pg_temp.boost('G1')).lift > 0
+              AND (pg_temp.boost('MG')).rank_on_claim = 2 AND (pg_temp.boost('MG')).lift = 0
+              AND pg_temp.trend('MG') = pg_temp.v('MG') - pg_temp.steps(pg_temp.drop_steps(), 1, 0),
+              '2: a multi-claim debate above the lifted #1 still takes the drop, stored as rank 2 (rank 1 is the lifted one)');
 SELECT assert(pg_temp.trend('H') = pg_temp.v('H') + pg_temp.steps(pg_temp.lift_steps(), 0.5, 0)
               AND (pg_temp.boost('H')).lift = 30 * 100 * 0.5,
               '2: a step is one place in the debate''s own source: weight 0.5 halves the points');
+SELECT assert(EXISTS (SELECT 1 FROM trending.ranking_places WHERE entity_id = pg_temp.i('W') AND source = 'faded')
+              AND pg_temp.v('W') = 0.5 * (2500 + 100 * 99)
+              AND (pg_temp.boost('W')).lift = 30 * 100 * 0.5
+              AND pg_temp.trend('W') = pg_temp.v('W') + pg_temp.steps(pg_temp.lift_steps(), 0.5, 0),
+              '2: in two sources, the step is the one whose weighted value counts, not the heavier source''s');
 SELECT assert((pg_temp.boost('CD')).claim_id = pg_temp.i('CD') AND (pg_temp.boost('CD')).rank_on_claim = 1
               AND pg_temp.trend('CD') = pg_temp.v('CD') + pg_temp.steps(pg_temp.lift_steps(), 1, 0),
               '2: a listed claim typed Debate counts as a debate on itself');
-SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 10
+SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 15
               AND NOT EXISTS (SELECT 1 FROM trending.agenda_boosts WHERE lift <= 0 AND place_drop <= 0),
-              '2: ten rows (A1, A2, A3, MD, B1, E1, P2, CD, H, H2), each with a lift or a drop');
+              '2: fifteen rows (A1, A2, A3, MD, B1, E1, P2, CD, H, H2, F1, F2, MG, G1, W), each with a lift or a drop');
 -- A vote's own re-score of one debate reads the stored row: the lift is never handed to two debates.
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('A1'), pg_temp.i('A2')]);
 SELECT assert(pg_temp.trend('A1') = pg_temp.v('A1') + pg_temp.steps(pg_temp.lift_steps(), 1, 0)
