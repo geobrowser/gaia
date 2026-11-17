@@ -26,7 +26,7 @@
 #   GeoDbParkWaitSustained    mean geodb_requests_park_wait_us above 100ms for 10m, per class
 #   GeoDbWorkerQueueGrowing   geodb_worker_queue_depth above 0 and rising for 10m while geodb_workers_busy
 #                             sits at its 6h ceiling (the pool size is not exported)
-#   GeoDbWireRevisionRefused  geodb_wire_refused_total{reason="revision"} rose in the last 15m
+#   GeoDbWireRevisionRefused  geodb_wire_refused_total{reason="revison"} rose in the last 15m
 #   GeoDbClaimsShort          geodb_claims_short_total rose in the last 15m
 #   GeoDbAdmissionCeiling     geodb_claims_refused_by_cause_total{cause="ceiling"} rose in the last 15m
 #   GeoDbAdmissionClaimOverClamp  same, cause="claim_over_clamp" (info until a baseline exists)
@@ -336,7 +336,7 @@ spec:
         # increase() always has an earlier sample; each is silent while the series is absent.
         - alert: GeoDbWireRevisionRefused
           expr: |
-            sum(increase(geodb_wire_refused_total{namespace="gaia", job="geodb", reason="revision"}[15m])) > 0
+            sum(increase(geodb_wire_refused_total{namespace="gaia", job="geodb", reason="revison"}[15m])) > 0
           labels:
             severity: warning
             service: geodb
