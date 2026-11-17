@@ -26,7 +26,14 @@
 #   GeoDbParkWaitSustained    mean geodb_requests_park_wait_us above 100ms for 10m, per class
 #   GeoDbWorkerQueueGrowing   geodb_worker_queue_depth above 0 and rising for 10m while geodb_workers_busy
 #                             sits at its 6h ceiling (the pool size is not exported)
-#   Not here: a geodb_claims_short_total rule (SERVE-CLAIM-SHORT-COUNTER-METRIC is not on final).
+#   GeoDbWireRevisionRefused  geodb_wire_refused_total{reason="revision"} rose in the last 15m
+#   GeoDbClaimsShort          geodb_claims_short_total rose in the last 15m
+#   GeoDbAdmissionCeiling     geodb_claims_refused_by_cause_total{cause="ceiling"} rose in the last 15m
+#   GeoDbAdmissionClaimOverClamp  same, cause="claim_over_clamp" (info until a baseline exists)
+#   GeoDbDerivedImageNotUsed  geodb_derived_image_outcome names a refused image for 1m (info)
+#   GeoDbDerivedRefusedCap    geodb_derived_refused_cap_total rose in the last 15m
+#   GeoDbDerivedViewFailures  geodb_derived_view_failures_total rose in the last 15m
+#   GeoDbWorkOpenRowsHigh     geodb_work_open_rows above 80% of geodb_work_open_rows_max for 15m
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -214,8 +221,10 @@ spec:
 
         - alert: GeoDbClaimParkedSustained
           # Above 0.2 a second for 10m is 120 parks in the window; the claim wait ends at ten seconds.
+          # session="" selects the node's fold row; serve also prints one row per live session, which
+          # would count a live room twice.
           expr: |
-            sum by (class) (rate(geodb_requests_claim_parked_total{namespace="gaia", job="geodb"}[10m])) > 0.2
+            sum by (class) (rate(geodb_requests_claim_parked_total{namespace="gaia", job="geodb", session=""}[10m])) > 0.2
           for: 10m
           labels:
             severity: warning
@@ -282,10 +291,11 @@ spec:
         - alert: GeoDbParkWaitSustained
           # park_wait_us_sum / _count is the mean wait of the parks that ended in the window; the count
           # term keeps a window with no ended park from dividing by zero. 100000us is the 100 ms at which
-          # serve writes a slow-request log line.
+          # serve writes a slow-request log line. session="" selects the node's fold row (no session
+          # label); the per-session rows would count each live room twice.
           expr: |
-            sum by (class) (rate(geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb"}[5m]))
-              / sum by (class) (rate(geodb_requests_park_wait_us_count{namespace="gaia", job="geodb"}[5m]))
+            sum by (class) (rate(geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb", session=""}[5m]))
+              / sum by (class) (rate(geodb_requests_park_wait_us_count{namespace="gaia", job="geodb", session=""}[5m]))
             > 100000
           for: 10m
           labels:
@@ -320,3 +330,104 @@ spec:
               Jobs queue faster than the pool finishes them, so requests wait and park
               (GeoDbParkWaitSustained). Look for a slow or stuck job (geodb_request_duration_us by class,
               slow=1 request-log lines), then raise the reactor worker count if the load is real.
+
+        # Rules for counters serve gains over the live pin. These rows print at 0 from the first scrape, so
+        # increase() always has an earlier sample; each is silent while the series is absent.
+        - alert: GeoDbWireRevisionRefused
+          expr: |
+            sum(increase(geodb_wire_refused_total{namespace="gaia", job="geodb", reason="revision"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused a client for its wire revision in the last 15m
+            description: >-
+              A client outside the serve's accepted revision range (7..18) connected. This is a stray client (newer than the serve, or older than 7), not a rollback check: a rollback to a tag at 15 or 17 is inside the range and does not move the counter. Read the counter, not the log line, which is rate limited. Find the client by its "serve refused wire revision" line.
+
+        - alert: GeoDbClaimsShort
+          expr: |
+            sum(increase(geodb_claims_short_total{namespace="gaia", job="geodb", claim_class="query_eval"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db cut a request mid-flight for want of its claim in the last 15m
+            description: >-
+              The query region was too small at execution although admission passed the request. Steady state is zero. Compare geodb_claims_in_use{claim_class="query_eval"} with its _max and check geodb_requests_claim_parked_total.
+
+        - alert: GeoDbAdmissionCeiling
+          expr: |
+            sum(increase(geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="ceiling"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused a request at admission for a class ceiling in the last 15m
+            description: >-
+              A class hit its admission ceiling, so requests were refused. This is load, not a bug; check geodb_requests_refused_total by class and geodb_claims_in_use against its _max. Separate from geodb_claims_refused_total (the pool) and geodb_claims_short_total (mid-flight).
+
+        - alert: GeoDbAdmissionClaimOverClamp
+          expr: |
+            sum(increase(geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="claim_over_clamp"}[15m])) > 0
+          labels:
+            severity: info
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused a read whose priced need passed the service claim in the last 15m
+            description: >-
+              A read priced above the service's claim is refused by design, so one oversized query makes this nonzero legitimately. Info until a week of scrapes gives a baseline; tighten to warning after that.
+
+        - alert: GeoDbDerivedImageNotUsed
+          expr: |
+            max by (outcome) (geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome!~"loaded|off|absent"}) == 1
+          for: 1m
+          labels:
+            severity: info
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db found a derived image at start and refused it ({{ $labels.outcome }})
+            description: >-
+              The derived table was replayed from the log instead (a slow start, not data loss). The row is published once at start, so this stays up for the process life and clears on the next restart. absent (first start) and off (switch off) are excluded.
+
+        - alert: GeoDbDerivedRefusedCap
+          expr: |
+            sum(increase(geodb_derived_refused_cap_total{namespace="gaia", job="geodb"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused a derived write past the table cap in the last 15m
+            description: >-
+              GeoDbDerivedRowsHigh warns at 80%; this fires if it was missed. Raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+
+        - alert: GeoDbDerivedViewFailures
+          expr: |
+            sum(increase(geodb_derived_view_failures_total{namespace="gaia", job="geodb"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db derived view failures in the last 15m
+            description: >-
+              geodb_derived_view_failures_total rose. Read the serve log for the failing view and check geodb_derived_collection_rows{collection}.
+
+        - alert: GeoDbWorkOpenRowsHigh
+          expr: |
+            max(geodb_work_open_rows{namespace="gaia", job="geodb"})
+              / (max(geodb_work_open_rows_max{namespace="gaia", job="geodb"}) > 0) > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's work class holds more than 80% of work_open_rows_max
+            description: >-
+              Open (pending plus in-progress) units are near their cap, so new units will be refused. Check geodb_work_pending and geodb_work_in_progress for a stalled consumer, then raise the cap in serve.cfg (one serve restart).
