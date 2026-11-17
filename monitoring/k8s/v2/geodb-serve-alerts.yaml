@@ -19,6 +19,15 @@
 #   GeoDbClaimsRefused        geodb_claims_refused_total rose in the last 15m, per claim_class
 #   GeoDbClaimParkedSustained geodb_requests_claim_parked_total above 0.2/s for 10m, per class
 #
+#   The names serve gains over the live pin (geo-db final; every rule is silent while the series is absent):
+#   GeoDbSpacesNearCap        geodb_spaces_in_use above 90% of geodb_spaces_max for 15m
+#   GeoDbRoomsNearCap         geodb_rooms_taken at 90% of geodb_rooms_max for 10m
+#   GeoDbRoomsAtCap           geodb_rooms_taken at geodb_rooms_max for 5m (critical)
+#   GeoDbParkWaitSustained    mean geodb_requests_park_wait_us above 100ms for 10m, per class
+#   GeoDbWorkerQueueGrowing   geodb_worker_queue_depth above 0 and rising for 10m while geodb_workers_busy
+#                             sits at its 6h ceiling (the pool size is not exported)
+#   Not here: a geodb_claims_short_total rule (SERVE-CLAIM-SHORT-COUNTER-METRIC is not on final).
+#
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -218,3 +227,96 @@ spec:
               Requests wait for a claim in the region instead of taking one. A burst is normal; ten minutes
               of it means the region is too small for the load or claims are held too long. Compare
               geodb_claims_in_use{claim_class} with its _max and check geodb_claims_refused_total.
+
+        # Rules for the names serve gains over the live pin (geo-db final: spaces, rooms, park wait, worker
+        # pool). None of these series exist on the pinned image, so each expression selects nothing and
+        # stays silent until the pin lands; the unit tests cover the absent case.
+        - alert: GeoDbSpacesNearCap
+          expr: |
+            max(geodb_spaces_in_use{namespace="gaia", job="geodb"})
+              / max(geodb_spaces_max{namespace="gaia", job="geodb"}) > 0.9
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's Space table is more than 90% full
+            description: >-
+              A founding past geodb_spaces_max is refused ResourceExhausted, so the feeder dead-letters
+              space_cap and a new Space gets no geo-db copy. Raise spaces in the geodb-serve-config ConfigMap
+              (serve.cfg; one serve restart; RUNBOOK capacity section) before the table fills.
+
+        - alert: GeoDbRoomsNearCap
+          expr: |
+            max(geodb_rooms_taken{namespace="gaia", job="geodb"})
+              / max(geodb_rooms_max{namespace="gaia", job="geodb"}) >= 0.9
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db has 90% of its rooms taken
+            description: >-
+              Each open connection or session holds a room; at the cap a new connection is refused. Compare
+              geodb_sessions_open and look for a client that leaks connections (a feeder or api pod that
+              reconnects without closing), then raise the room count only if the load is real.
+
+        - alert: GeoDbRoomsAtCap
+          expr: |
+            max(geodb_rooms_taken{namespace="gaia", job="geodb"})
+              >= max(geodb_rooms_max{namespace="gaia", job="geodb"})
+          for: 5m
+          labels:
+            severity: critical
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db has no free room; new connections are refused
+            description: >-
+              geodb_rooms_taken has equalled geodb_rooms_max for 5m, so every new connection or handshake
+              is refused. Find the client holding the rooms (geodb_sessions_open, the feeder and api logs),
+              restart it, and if it is real load raise the room carving in serve.cfg (one serve restart).
+
+        - alert: GeoDbParkWaitSustained
+          # park_wait_us_sum / _count is the mean wait of the parks that ended in the window; the count
+          # term keeps a window with no ended park from dividing by zero. 100000us is the 100 ms at which
+          # serve writes a slow-request log line.
+          expr: |
+            sum by (class) (rate(geodb_requests_park_wait_us_sum{namespace="gaia", job="geodb"}[5m]))
+              / sum by (class) (rate(geodb_requests_park_wait_us_count{namespace="gaia", job="geodb"}[5m]))
+            > 100000
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db {{ $labels.class }} requests wait over 100 ms parked, on average
+            description: >-
+              Requests park until a claim or a worker is free. A mean above 100 ms for 10m means the claim
+              region or the worker pool is short for the load. Check geodb_requests_parked_now and
+              geodb_requests_park_wait_us_max by class, geodb_claims_in_use against its _max,
+              geodb_query_region_free_bytes and geodb_worker_queue_depth; slow requests log park_wait_us=.
+
+        - alert: GeoDbWorkerQueueGrowing
+          # The pool size is not a metric, so "pinned" is busy sitting at the highest it has been in 6h for
+          # the whole window; a queue that is above 0 the whole window and rising means the workers are all
+          # occupied and jobs are arriving faster than they finish.
+          expr: |
+            min_over_time(geodb_worker_queue_depth{namespace="gaia", job="geodb"}[10m]) > 0
+            and deriv(geodb_worker_queue_depth{namespace="gaia", job="geodb"}[10m]) > 0
+            and min_over_time(geodb_workers_busy{namespace="gaia", job="geodb"}[10m])
+                >= max_over_time(geodb_workers_busy{namespace="gaia", job="geodb"}[6h])
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's worker queue is growing with every worker busy
+            description: >-
+              Jobs queue faster than the pool finishes them, so requests wait and park
+              (GeoDbParkWaitSustained). Look for a slow or stuck job (geodb_request_duration_us by class,
+              slow=1 request-log lines), then raise the reactor worker count if the load is real.
