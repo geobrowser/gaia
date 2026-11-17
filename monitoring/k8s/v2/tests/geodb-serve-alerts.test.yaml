@@ -248,7 +248,7 @@ tests:
       - eval_time: 60m
         alertname: GeoDbWorkerQueueGrowing
         exp_alerts:
-          - exp_labels: {severity: warning, service: geodb, namespace: gaia, pod: a}
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, job: geodb, pod: a}
             exp_annotations:
               summary: geo-db's worker queue is growing with every worker busy
               description: >-
