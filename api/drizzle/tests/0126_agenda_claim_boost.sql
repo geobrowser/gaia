@@ -22,6 +22,12 @@
 
 \set ON_ERROR_STOP on
 
+-- No JIT here. The fixture tables are never analyzed, so the planner prices each re-score's entity_trending_terms_as
+-- plan at ~10^8, and a JIT-enabled server (CI's postgres:16) compiles and optimizes that plan on every pass: ~45
+-- times in this suite, which is nearly all of its CI time. JIT never changes a result. The runner's ROLLBACK undoes
+-- the SET, so later suites keep the server default; run by hand, it lasts for the psql session.
+SET jit = off;
+
 CREATE OR REPLACE FUNCTION assert(cond boolean, label text) RETURNS void
 LANGUAGE plpgsql AS $$
 BEGIN
