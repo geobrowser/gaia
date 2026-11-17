@@ -52,10 +52,16 @@ SELECT assert(pg_temp.plan('SELECT * FROM trending.entity_trending_terms(''{0000
                 NOT LIKE '%Function Scan on entity_trending_terms%',
               '0: entity_trending_terms still inlines');
 SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_boosts), '0: the boosts table ships empty');
-SELECT assert(NOT EXISTS (
-                SELECT 1 FROM pg_constraint WHERE conname = 'entity_ranking_config_agenda_boost_valid'
-                  AND pg_get_constraintdef(oid) NOT LIKE '%agenda_day_factor%'),
-              '0: (the config CHECK covers the day factor)');
+CREATE OR REPLACE FUNCTION pg_temp.rejected(sets text) RETURNS boolean LANGUAGE plpgsql AS $$
+BEGIN
+  EXECUTE 'UPDATE entity_ranking_config SET ' || sets || ' WHERE id';
+  RETURN false;
+EXCEPTION WHEN check_violation THEN
+  RETURN true;
+END $$;
+SELECT assert(pg_temp.rejected('agenda_day_factor = 0') AND pg_temp.rejected('agenda_day_factor = 1.5')
+              AND pg_temp.rejected('agenda_claim_steps = -1') AND pg_temp.rejected('agenda_follower_drop_steps = -1'),
+              '0: the config CHECK rejects a day factor outside (0, 1] and negative steps');
 
 TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ranking_scores,
          entity_type_weights, entity_type_exclusions, entity_type_ranking, entity_topic_ranking,
@@ -93,13 +99,16 @@ UPDATE entity_ranking_config
 --   60 FUT1  on C4 (listed tomorrow)                          → nothing
 --   95 A3    on C1                                            → #3: dropped, floored at the place base
 -- Block BLK2 (source 'half', weight 0.5, 100 slots): 1 H on C10 (listed today) → lifted by half the points.
+-- Block BLK3 (source 'tenth', weight 0.1, 100 slots): 1 H2 on C10 → #2 under H: dropped, but its place value (1250)
+--   is already below the place base, so the floor leaves it there (never raises it).
 -- Unranked: U1 on C1, U5 on C5, UNR (on UNL, 1 day old) and UOLD (on UNL, 25 days old).
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE ids AS
 SELECT k, ('b1260000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['UNL','C1','C2','C3','C4','C5','C6','C7','C9','C10','S1','S2','DEB','BLK','BLK2','M2','M3',
                   'A0','A2D','A2T','AOLD','AFUT','A6','AD',
-                  'P1','A1','MD','A2','MD2','D9','B1','E1','P2','CD','OLD1','FUT1','A3','H','U1','U5','UNR','UOLD'])
+                  'P1','A1','MD','A2','MD2','D9','B1','E1','P2','CD','OLD1','FUT1','A3','H','U1','U5','UNR','UOLD',
+                  'BLK3','H2'])
      WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
@@ -207,7 +216,7 @@ SELECT pg_temp.debate('P1', 'C7'), pg_temp.debate('A1', 'C1'), pg_temp.debate('M
        pg_temp.debate('D9', 'UNL'), pg_temp.debate('B1', 'C2'), pg_temp.debate('E1', 'C6'), pg_temp.debate('P2', 'C7'),
        pg_temp.debate('OLD1', 'C3'), pg_temp.debate('FUT1', 'C4'), pg_temp.debate('A3', 'C1'), pg_temp.debate('H', 'C10'),
        pg_temp.debate('U1', 'C1'), pg_temp.debate('U5', 'C5'), pg_temp.debate('UNR', 'UNL', 1),
-       pg_temp.debate('UOLD', 'UNL', 25);
+       pg_temp.debate('UOLD', 'UNL', 25), pg_temp.debate('H2', 'C10');
 SELECT pg_temp.ent('CD', pg_temp.noon(20)), pg_temp.typed('CD', 'CLAIM'), pg_temp.typed('CD', 'DEBATE');
 
 SELECT pg_temp.agenda('A0', 'S1', 0);
@@ -226,10 +235,12 @@ SELECT pg_temp.scored('BLK', 'P1', 2), pg_temp.scored('BLK', 'A1', 3), pg_temp.s
        pg_temp.scored('BLK', 'A2', 5), pg_temp.scored('BLK', 'MD2', 6), pg_temp.scored('BLK', 'D9', 7),
        pg_temp.scored('BLK', 'B1', 10), pg_temp.scored('BLK', 'E1', 20), pg_temp.scored('BLK', 'P2', 30),
        pg_temp.scored('BLK', 'CD', 40), pg_temp.scored('BLK', 'OLD1', 50), pg_temp.scored('BLK', 'FUT1', 60),
-       pg_temp.scored('BLK', 'A3', 95), pg_temp.scored('BLK2', 'H', 1);
+       pg_temp.scored('BLK', 'A3', 95), pg_temp.scored('BLK2', 'H', 1),
+       pg_temp.scored('BLK3', 'H2', 1);
 INSERT INTO trending.ranking_place_sources (name, space_id, block_id, weight, window_days, slots, day_factor)
 VALUES ('all_time', pg_temp.i('DEB'), pg_temp.i('BLK'), 1, NULL, 100, 1),
-       ('half', pg_temp.i('DEB'), pg_temp.i('BLK2'), 0.5, NULL, 100, 1);
+       ('half', pg_temp.i('DEB'), pg_temp.i('BLK2'), 0.5, NULL, 100, 1),
+       ('tenth', pg_temp.i('DEB'), pg_temp.i('BLK3'), 0.1, NULL, 100, 1);
 UPDATE entity_ranking_config SET ranking_pushdown_since = pg_temp.midnight(1) WHERE id;
 
 -- ---------------------------------------------------------------------------
@@ -283,6 +294,9 @@ SELECT assert(pg_temp.v('A3') - pg_temp.steps(pg_temp.drop_steps(), 1, 0) < 2500
               '2: a drop never takes a place value below the place base');
 SELECT assert(pg_temp.score('A3') > pg_temp.score('U1') AND pg_temp.score('A3') > pg_temp.score('UNR'),
               '2: so every dropped sibling stays above the unranked debates');
+SELECT assert((pg_temp.boost('H2')).rank_on_claim = 2 AND (pg_temp.boost('H2')).place_drop = 200 * 100 * 0.1
+              AND pg_temp.v('H2') < 2500 AND pg_temp.trend('H2') = pg_temp.v('H2'),
+              '2: a follower whose place value is already below the base keeps it (the floor never raises it)');
 UPDATE entity_ranking_config SET agenda_follower_drop_steps = 40 WHERE id;
 SELECT pg_temp.full_pass();
 SELECT assert(pg_temp.boost('U1') IS NULL AND pg_temp.trend('U1') = pg_temp.b()
@@ -314,9 +328,9 @@ SELECT assert(pg_temp.trend('H') = pg_temp.v('H') + pg_temp.steps(pg_temp.lift_s
 SELECT assert((pg_temp.boost('CD')).claim_id = pg_temp.i('CD') AND (pg_temp.boost('CD')).rank_on_claim = 1
               AND pg_temp.trend('CD') = pg_temp.v('CD') + pg_temp.steps(pg_temp.lift_steps(), 1, 0),
               '2: a listed claim typed Debate counts as a debate on itself');
-SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 9
+SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 10
               AND NOT EXISTS (SELECT 1 FROM trending.agenda_boosts WHERE lift <= 0 AND place_drop <= 0),
-              '2: nine rows (A1, A2, A3, MD, B1, E1, P2, CD, H), each with a lift or a drop');
+              '2: ten rows (A1, A2, A3, MD, B1, E1, P2, CD, H, H2), each with a lift or a drop');
 -- A vote's own re-score of one debate reads the stored row: the lift is never handed to two debates.
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('A1'), pg_temp.i('A2')]);
 SELECT assert(pg_temp.trend('A1') = pg_temp.v('A1') + pg_temp.steps(pg_temp.lift_steps(), 1, 0)

@@ -211,10 +211,12 @@ UPDATE entity_ranking_config SET agenda_claim_steps = 30, agenda_follower_drop_s
 SELECT trending.refresh_agenda_listings(true);
 SELECT b.*, s.ranking_score FROM trending.agenda_boosts b
 JOIN entity_ranking_scores s USING (entity_id) ORDER BY s.ranking_score DESC;
--- Best's top 20 with the boosts:
+-- Best's top 20 with the boosts. In mode 2 the head is ranked debates (trending ≥ 2600), so the candidates come from the
+-- partial index on trending_score <> 0 OR age_credit <> 0, not from every scored row (tens of millions):
 SELECT s.entity_id, s.ranking_score, s.trending_score
-FROM entity_ranking_scores s JOIN trending.rankable_debates(ARRAY(SELECT entity_id FROM entity_ranking_scores)) d
-  USING (entity_id)
+FROM entity_ranking_scores s
+JOIN trending.rankable_debates(ARRAY(SELECT entity_id FROM entity_ranking_scores
+                                     WHERE trending_score <> 0 OR age_credit <> 0)) d USING (entity_id)
 ORDER BY s.ranking_score DESC, s.entity_id DESC LIMIT 20;
 ROLLBACK;
 ```
