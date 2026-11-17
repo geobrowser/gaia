@@ -368,7 +368,10 @@ export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerat
 		        ranking_place_base::text AS ranking_place_base,
 		        ranking_place_step::text AS ranking_place_step,
 		        ranking_pushdown::text AS ranking_pushdown,
-		        ranking_pushdown_since::text AS ranking_pushdown_since
+		        ranking_pushdown_since::text AS ranking_pushdown_since,
+		        agenda_claim_steps::text AS agenda_claim_steps,
+		        agenda_follower_drop_steps::text AS agenda_follower_drop_steps,
+		        agenda_day_factor::text AS agenda_day_factor
 		 FROM public.entity_ranking_config WHERE id`,
 		[],
 		60_000,

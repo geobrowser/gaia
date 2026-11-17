@@ -78,6 +78,9 @@ export const ENTITY_RANKING_COLUMNS: readonly {pg: string; key: EntityRankingKey
 	{pg: "ranking_place_step", key: "rankingPlaceStep", int: false},
 	{pg: "ranking_pushdown", key: "rankingPushdown", int: false},
 	{pg: "ranking_pushdown_since", key: "rankingPushdownSince", int: true},
+	{pg: "agenda_claim_steps", key: "agendaClaimSteps", int: false},
+	{pg: "agenda_follower_drop_steps", key: "agendaFollowerDropSteps", int: false},
+	{pg: "agenda_day_factor", key: "agendaDayFactor", int: false},
 ]
 
 /** The row's values: integers as bigint, numerics as numbers. */

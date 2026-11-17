@@ -170,8 +170,72 @@ Weights, windows, slots and fades are rows of `trending.ranking_place_sources`; 
 `ranking_place_base`, `ranking_place_step` and `ranking_pushdown` in `entity_ranking_config`. Change them, then force
 the full pass.
 
-Note on the push-down: while on, a pushed-down debate loses its place and its age credit and takes −150. Against an
-unranked debate up to 30 days older it starts 57.6 ahead on recency (30 × 86400 / `tau_seconds` at 45000) and can
-carry a listing or topic boost (≤ 8), so it stays below while the rest of its organic lead is under 84.4 points. The
-organic caps add up to about 90 at the extreme, so watch `pushed_above_unranked` and raise `ranking_pushdown` if it is
-ever above 0.
+Note on the push-down: while on, a pushed-down debate loses its place and its age credit and takes −150. It can still
+carry a listing or topic boost (≤ 8), so it stays below an unranked debate while their organic gap is under
+150 − 8 = 142 points: the margin is **142 minus the live organic spread** (the gap between the highest and lowest
+organic score among debates, recency included). At tau 100,000 (live since November 2026) the spread was about 106 on
+17 Nov, leaving about 36 points, and the spread grows by about 0.86 a day (86400 / tau of recency), so there are about
+40 days of headroom from then. (The 84.4 this note used to give assumed tau 45,000.) Watch `pushed_above_unranked`
+and raise `ranking_pushdown` if it is ever above 0, or before the headroom runs out.
+
+## Agenda claim boosts (GEO-3781, migration 0126)
+
+While the mode is 2, agendas can lift the best-ranked debate on each claim they list, and drop the other ranked debates
+on that claim, so the head of Best leads with debates that are both ranked high and timely without showing one claim
+twice. It ships **off**.
+
+| setting (`entity_ranking_config`) | default | proposed | what it does |
+| -- | -- | -- | -- |
+| `agenda_claim_steps` | 0 | 30 | the best ranked debate on a claim listed in the last 7 days moves up this many places, with no ceiling |
+| `agenda_follower_drop_steps` | 0 | 40 | every other ranked debate on that claim drops this many places, never below the place base |
+| `agenda_day_factor` | 0.65 | 0.65 | both shrink by this factor for each New York day since the listing's Date |
+
+- A place here is `ranking_place_step` × the weight of the source that gave the debate its place value, so with the one
+  `all_time` source (weight 1) a step is 100 points.
+- Only ranked debates (with a place, not pushed down) that link exactly one claim are numbered; unranked debates never
+  get anything. Debates an agenda names directly (its Debates relation, or the "All spaces" list) and topics are not
+  read.
+- `trending.agenda_boosts` holds the current lift or drop per debate (only rows above 0). The hourly sweep rebuilds it
+  after the places, push-downs and listings, and re-scores every debate whose row changed in the same run.
+- Both Rust shadows (`AGENDA_RESCORE_RUST_COMPUTE`, `ENTITY_RANKING_SCORE_RUST_COMPUTE`) do not model this term:
+  keep them off while either step is above 0.
+
+### Preview (Patrick)
+
+The preview takes the sweep's advisory lock and row locks on the score tables, so run it **between hourly runs** (not
+while the CronJob is running), and roll it back:
+
+```sql
+BEGIN;
+UPDATE entity_ranking_config SET agenda_claim_steps = 30, agenda_follower_drop_steps = 40 WHERE id;
+SELECT trending.refresh_agenda_listings(true);
+SELECT b.*, s.ranking_score FROM trending.agenda_boosts b
+JOIN entity_ranking_scores s USING (entity_id) ORDER BY s.ranking_score DESC;
+-- Best's top 20 with the boosts:
+SELECT s.entity_id, s.ranking_score, s.trending_score
+FROM entity_ranking_scores s JOIN trending.rankable_debates(ARRAY(SELECT entity_id FROM entity_ranking_scores)) d
+  USING (entity_id)
+ORDER BY s.ranking_score DESC, s.entity_id DESC LIMIT 20;
+ROLLBACK;
+```
+
+Post that top 20 next to the live API's (see "Checking Best's top 10", with `first: 20`) on GEO-3781 for Preston's
+sign-off.
+
+### Turn on (Patrick)
+
+```sql
+UPDATE entity_ranking_config SET agenda_claim_steps = 30, agenda_follower_drop_steps = 40 WHERE id;
+```
+
+The next hourly run applies it; force the full pass to apply it now. Check within 1 hour that the live API's top 20
+matches the preview.
+
+### Turn off (Patrick)
+
+```sql
+UPDATE entity_ranking_config SET agenda_claim_steps = 0, agenda_follower_drop_steps = 0 WHERE id;
+```
+
+The next hourly run empties `trending.agenda_boosts` and re-scores those debates back to the ranking alone; force the
+full pass to do it now. A rollback of the whole ranking to mode 1 also turns this off.
