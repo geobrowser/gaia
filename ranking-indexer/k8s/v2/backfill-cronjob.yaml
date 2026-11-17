@@ -82,7 +82,7 @@ spec:
             - name: geodb-setup
               # Pinned, never :latest. Always exits 0: with no node id or no Service it writes no binding and the
               # mirror stays off.
-              image: registry.digitalocean.com/geo/geodb:57e34f06df
+              image: registry.digitalocean.com/geo/geodb:d36be69b61
               imagePullPolicy: IfNotPresent
               command:
                 - sh
