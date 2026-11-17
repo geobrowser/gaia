@@ -431,3 +431,28 @@ tests:
               summary: geo-db's work class holds more than 80% of work_open_rows_max
               description: >-
                 Open (pending plus in-progress) units are near their cap, so new units will be refused. Check geodb_work_pending and geodb_work_in_progress for a stalled consumer, then raise the cap in serve.cfg (one serve restart).
+
+  - name: store fenced fires at 1, silent at 0
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fenced{namespace="gaia", job="geodb"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - {eval_time: 9m, alertname: GeoDbStoreFenced, exp_alerts: []}
+      - {eval_time: 10m, alertname: GeoDbStoreFenced, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbStoreFenced
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's store has fenced; every write is refused
+              description: >-
+                geodb_store_fenced is 1. Serve printed one stderr line, "store fenced: <cause>; every write is refused StoreFenced until the store reopens", so read the cause there. Writes stay refused until the store reopens (a serve restart); reads are unaffected.
+
+  - name: store fenced silent when the series is absent
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_open{namespace="gaia", job="geodb"}'
+        values: '1x30'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbStoreFenced, exp_alerts: []}
