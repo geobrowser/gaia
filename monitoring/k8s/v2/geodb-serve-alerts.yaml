@@ -27,6 +27,7 @@
 #   GeoDbWorkerQueueGrowing   geodb_worker_queue_depth above 0 and rising for 10m while geodb_workers_busy
 #                             sits at its 6h ceiling (the pool size is not exported)
 #   GeoDbWireRevisionRefused  geodb_wire_refused_total{reason="revision"} rose in the last 15m
+#   GeoDbWireRefusedOther     geodb_wire_refused_total, every reason but "revision", moved in the last 10m
 #   GeoDbClaimsShort          geodb_claims_short_total rose in the last 15m
 #   GeoDbAdmissionCeiling     geodb_claims_refused_by_cause_total{cause="ceiling"} rose in the last 15m
 #   GeoDbAdmissionClaimOverClamp  same, cause="claim_over_clamp" (info until a baseline exists)
@@ -345,6 +346,18 @@ spec:
             summary: geo-db refused a client for its wire revision in the last 15m
             description: >-
               A client outside the serve's accepted revision range (7..18) connected. This is a stray client (newer than the serve, or older than 7), not a rollback check: a rollback to a tag at 15 or 17 is inside the range and does not move the counter. Read the counter, not the log line, which is rate limited. Find the client by its "serve refused wire revision" line.
+
+        - alert: GeoDbWireRefusedOther
+          expr: |
+            sum(rate(geodb_wire_refused_total{namespace="gaia", job="geodb", reason!="revision"}[10m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused handshakes or frames for a reason other than wire revision in the last 10m
+            description: >-
+              The other geodb_wire_refused_total rows count malformed or refused handshakes and frames (magic, header_crc, opcode, auth_*, handshake_timeout and the rest). Group the counter by reason to see which row moved, and read that row in the geo-db note SERVE-WIRE-REFUSED-OTHER-HANDSHAKE-REFUSALS-COUNTED-DIAG. A bump in the right order can move a few; a steady rate is a broken or hostile client.
 
         - alert: GeoDbClaimsShort
           expr: |
