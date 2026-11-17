@@ -420,6 +420,15 @@ SELECT assert((SELECT count(*) FROM trending.agenda_boosts) = 17
                               EXCEPT SELECT entity_id, claim_id, rank_on_claim, listed_on, lift, place_drop
                               FROM trending.agenda_boosts),
               '2: (listings removed again: the same rows as before)');
+-- MD (place 2) also on C11 (listed 6 days ago, F1 #1 at place 96): it drops under both C1 and C11 and is kept under
+-- C1 (today's larger drop), so C11's numbering is F1, F2 with no gap where MD would have been.
+SELECT pg_temp.claims('MD', 'C11');
+SELECT pg_temp.full_pass();
+SELECT assert((pg_temp.boost('MD')).claim_id = pg_temp.i('C1') AND (pg_temp.boost('F1')).rank_on_claim = 1
+              AND (pg_temp.boost('F2')).rank_on_claim = 2 AND pg_temp.ranks_ok(),
+              '2: a multi-claim debate kept under one claim leaves no gap in another claim''s numbering');
+DELETE FROM relations WHERE from_entity_id = pg_temp.i('MD') AND to_entity_id = pg_temp.i('C11');
+SELECT pg_temp.full_pass();
 -- A vote's own re-score of one debate reads the stored row: the lift is never handed to two debates.
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('A1'), pg_temp.i('A2')]);
 SELECT assert(pg_temp.trend('A1') = pg_temp.v('A1') + pg_temp.steps(pg_temp.lift_steps(), 1, 0)

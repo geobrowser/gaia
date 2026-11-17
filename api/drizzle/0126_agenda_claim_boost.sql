@@ -144,31 +144,37 @@ LANGUAGE sql STABLE AS $$
     WHERE o.claims = 1 AND o.listed_on IS NOT NULL
     ORDER BY o.claim_id, o.place_value DESC, o.entity_id DESC
   ),
-  -- One numbering per claim with a lead: the lead is #1 and lifted, every other ranked debate on it (multi-claim ones
-  -- included, whatever their place) is #2.. and dropped. A claim with no lead gets no rows.
-  rows AS (
-    SELECT o.entity_id, o.claim_id, o.listed_on,
-           row_number() OVER (PARTITION BY o.claim_id
-                              ORDER BY o.entity_id = ld.lead_id DESC, o.place_value DESC, o.entity_id DESC)::integer
-             AS rank_on_claim,
-           o.weight
+  -- Per claim with a lead: the lead is lifted, every other ranked debate on it (multi-claim ones included, whatever
+  -- their place) is dropped. A claim with no lead gets no rows.
+  boosts AS (
+    SELECT o.entity_id, o.claim_id, o.listed_on, o.place_value, o.entity_id = ld.lead_id AS is_lead,
+           CASE WHEN o.entity_id = ld.lead_id THEN cfg.agenda_claim_steps ELSE 0 END
+             * cfg.ranking_place_step * o.weight * power(cfg.agenda_day_factor, cfg.today - o.listed_on) AS lift,
+           CASE WHEN o.entity_id = ld.lead_id THEN 0 ELSE cfg.agenda_follower_drop_steps END
+             * cfg.ranking_place_step * o.weight * power(cfg.agenda_day_factor, cfg.today - o.listed_on) AS place_drop
     FROM on_claim o
     JOIN leads ld ON ld.claim_id = o.claim_id
+    CROSS JOIN cfg
   ),
-  boosts AS (
-    SELECT r.entity_id, r.claim_id, r.rank_on_claim, r.listed_on,
-           CASE WHEN r.rank_on_claim = 1 THEN cfg.agenda_claim_steps ELSE 0 END
-             * cfg.ranking_place_step * r.weight * power(cfg.agenda_day_factor, cfg.today - r.listed_on) AS lift,
-           CASE WHEN r.rank_on_claim = 1 THEN 0 ELSE cfg.agenda_follower_drop_steps END
-             * cfg.ranking_place_step * r.weight * power(cfg.agenda_day_factor, cfg.today - r.listed_on) AS place_drop
-    FROM rows r CROSS JOIN cfg
-  )
   -- One row per debate: a lift beats a drop (only single-claim debates are lifted, so this only orders a
   -- multi-claim debate's drops), then the larger drop, then the newer listing and the lower claim id.
-  SELECT DISTINCT ON (b.entity_id) b.entity_id, b.claim_id, b.rank_on_claim, b.listed_on, b.lift, b.place_drop
-  FROM boosts b
-  WHERE b.lift > 0 OR b.place_drop > 0
-  ORDER BY b.entity_id, b.lift DESC, b.place_drop DESC, b.listed_on DESC, b.claim_id
+  picked AS (
+    SELECT DISTINCT ON (b.entity_id) b.*
+    FROM boosts b
+    ORDER BY b.entity_id, b.lift DESC, b.place_drop DESC, b.listed_on DESC, b.claim_id
+  ),
+  -- Numbered once per claim over the rows it keeps (so a multi-claim debate kept under another claim leaves no gap):
+  -- the lead is #1, the rest #2.. in place order. Numbered before the zero rows go, so #1 is the lead even when the
+  -- lift is 0.
+  numbered AS (
+    SELECT p.*, row_number() OVER (PARTITION BY p.claim_id
+                                   ORDER BY p.is_lead DESC, p.place_value DESC, p.entity_id DESC)::integer
+                  AS rank_on_claim
+    FROM picked p
+  )
+  SELECT n.entity_id, n.claim_id, n.rank_on_claim, n.listed_on, n.lift, n.place_drop
+  FROM numbered n
+  WHERE n.lift > 0 OR n.place_drop > 0
 $$;
 --> statement-breakpoint
 

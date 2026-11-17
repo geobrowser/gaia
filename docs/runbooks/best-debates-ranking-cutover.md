@@ -192,8 +192,8 @@ twice. It ships **off**.
 
 - A place here is `ranking_place_step` × the weight of the source that gave the debate its place value, so with the one
   `all_time` source (weight 1) a step is 100 points.
-- Only ranked debates (with a place, not pushed down) that link exactly one claim are numbered; unranked debates never
-  get anything. Debates an agenda names directly (its Debates relation, or the "All spaces" list) and topics are not
+- Only ranked debates (with a place, not pushed down) count, and only one that links exactly one claim can be the
+  lifted #1; a ranked debate on several claims is only ever dropped. Unranked debates never get anything. Debates an agenda names directly (its Debates relation, or the "All spaces" list) and topics are not
   read.
 - `trending.agenda_boosts` holds the current lift or drop per debate (only rows above 0). The hourly sweep rebuilds it
   after the places, push-downs and listings, and re-scores every debate whose row changed in the same run.
