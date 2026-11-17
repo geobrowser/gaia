@@ -30,6 +30,25 @@ use sdk::core::ids::{
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
 
+/// Relation types copied into a document's `relations` field.
+///
+/// Anything absent here is absent from `relations` entirely, so a filter over it returns
+/// nothing for every entity (GEO-2876). Widening this only affects documents written
+/// afterwards: a reindex copies index to index, so existing documents need a backfill
+/// from Postgres or a Kafka replay.
+pub const INDEXED_RELATION_TYPE_IDS: [&str; 4] = [
+    TYPE_RELATION_TYPE_ID,
+    AVATAR_RELATION_TYPE_ID,
+    COVER_RELATION_TYPE_ID,
+    TAGS_RELATION_TYPE_ID,
+];
+
+/// Whether a relation type is in [`INDEXED_RELATION_TYPE_IDS`].
+pub fn is_indexed_relation(relation_type: &Uuid) -> bool {
+    let rt = relation_type.to_string();
+    INDEXED_RELATION_TYPE_IDS.contains(&rt.as_str())
+}
+
 /// Processed result from the entity processor.
 #[derive(Debug)]
 pub enum ProcessedEvent {
@@ -235,20 +254,6 @@ impl Processor {
     /// The emptied-document tracker, if retirement is on.
     pub fn retire_tracker(&self) -> Option<&RetireTracker> {
         self.retire.as_ref()
-    }
-
-    /// Check if a relation type is one we index (type, avatar, cover, or tags).
-    ///
-    /// Anything absent here is absent from the `relations` field entirely, so a filter
-    /// over it returns nothing for every entity however the query is written — which is
-    /// what blocked a tag filter (GEO-2876). Widening this only affects documents written
-    /// afterwards; existing ones gain the relation from a reindex, never from new writes.
-    fn is_indexed_relation(&self, relation_type: &Uuid) -> bool {
-        let rt = relation_type.to_string();
-        rt == TYPE_RELATION_TYPE_ID
-            || rt == AVATAR_RELATION_TYPE_ID
-            || rt == COVER_RELATION_TYPE_ID
-            || rt == TAGS_RELATION_TYPE_ID
     }
 
     /// Returns true for approximately 1-in-N events of the given category
@@ -1628,7 +1633,7 @@ impl Processor {
                 if let (Some(relation_id), Some(relation_type), Some(to_entity_id)) =
                     (event.relation_id, event.relation_type, event.to_entity_id)
                 {
-                    if self.is_indexed_relation(&relation_type) {
+                    if is_indexed_relation(&relation_type) {
                         debug!(
                             entity_id = %event.entity_id,
                             relation_id = %relation_id,
@@ -1732,7 +1737,10 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
+    use sdk::core::ids::{
+        AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TAGS_RELATION_TYPE_ID,
+        TYPE_RELATION_TYPE_ID,
+    };
     use uuid::Uuid;
 
     #[test]
@@ -2006,26 +2014,28 @@ mod tests {
 
     #[test]
     fn test_is_indexed_relation() {
-        let processor = Processor::new();
-
         // Random relation type should not be indexed
         let random_relation_type = Uuid::new_v4();
-        assert!(!processor.is_indexed_relation(&random_relation_type));
+        assert!(!is_indexed_relation(&random_relation_type));
 
         // TYPE relation should be indexed
         let type_relation_id =
             Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
-        assert!(processor.is_indexed_relation(&type_relation_id));
+        assert!(is_indexed_relation(&type_relation_id));
 
         // AVATAR relation should be indexed
         let avatar_relation_id = Uuid::parse_str(AVATAR_RELATION_TYPE_ID)
             .expect("AVATAR_RELATION_TYPE_ID should be valid");
-        assert!(processor.is_indexed_relation(&avatar_relation_id));
+        assert!(is_indexed_relation(&avatar_relation_id));
 
         // COVER relation should be indexed
         let cover_relation_id = Uuid::parse_str(COVER_RELATION_TYPE_ID)
             .expect("COVER_RELATION_TYPE_ID should be valid");
-        assert!(processor.is_indexed_relation(&cover_relation_id));
+        assert!(is_indexed_relation(&cover_relation_id));
+
+        let tags_relation_id =
+            Uuid::parse_str(TAGS_RELATION_TYPE_ID).expect("TAGS_RELATION_TYPE_ID should be valid");
+        assert!(is_indexed_relation(&tags_relation_id));
     }
 
     #[test]
