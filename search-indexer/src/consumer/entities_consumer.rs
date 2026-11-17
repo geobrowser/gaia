@@ -21,10 +21,7 @@ use crate::orchestrator::EntityProcessingBatch;
 
 use grc_20::decode_edit;
 use hermes_schema::pb::knowledge::HermesEdit;
-use sdk::core::ids::{
-    AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, DESCRIPTION_PROPERTY_ID,
-    IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID, TYPE_RELATION_TYPE_ID,
-};
+use sdk::core::ids::{DESCRIPTION_PROPERTY_ID, IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID};
 
 /// Pending message information for batching.
 struct PendingMessage {
@@ -740,10 +737,8 @@ impl EntitiesConsumer {
 
     /// Process a CreateRelation operation.
     ///
-    /// Handles three indexed relation types:
-    /// - TYPE_RELATION_TYPE_ID: type relations (entity has type of to_entity)
-    /// - AVATAR_RELATION_TYPE_ID: avatar relations (entity's avatar is the image at to_entity)
-    /// - COVER_RELATION_TYPE_ID: cover relations (entity's cover is the image at to_entity)
+    /// Forwards every relation type. The processor maps all of them, since any outgoing
+    /// relation keeps a document alive, and decides which to index (GEO-3779).
     fn process_create_relation(
         &self,
         relation: &grc_20::CreateRelation,
@@ -751,21 +746,6 @@ impl EntitiesConsumer {
     ) -> Option<EntityEvent> {
         let relation_id = Self::id_to_uuid(&relation.id);
         let relation_type = Self::id_to_uuid(&relation.relation_type);
-        let relation_type_str = relation_type.to_string();
-
-        let is_type = relation_type_str == TYPE_RELATION_TYPE_ID;
-        let is_avatar = relation_type_str == AVATAR_RELATION_TYPE_ID;
-        let is_cover = relation_type_str == COVER_RELATION_TYPE_ID;
-
-        if !is_type && !is_avatar && !is_cover {
-            debug!(
-                relation_id = %relation_id,
-                relation_type = %relation_type,
-                space_id = %space_id,
-                "Skipped relation (not an indexed relation type)"
-            );
-            return None;
-        }
 
         let entity_id = Self::id_to_uuid(&relation.from);
         let to_entity_id = Self::id_to_uuid(&relation.to);
@@ -776,7 +756,7 @@ impl EntitiesConsumer {
             entity_id = %entity_id,
             to_entity_id = %to_entity_id,
             space_id = %space_id,
-            "Processing indexed relation"
+            "Processing relation"
         );
 
         Some(EntityEvent::create_relation(
@@ -825,6 +805,7 @@ mod tests {
     use super::*;
     use crate::consumer::EntityEventType;
     use grc_20::{CreateEntity, PropertyValue, UnsetLanguage, UnsetValue};
+    use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, TAGS_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 
     /// Create a consumer for testing without requiring the ENVIRONMENT env var.
     /// Bypasses `get_topic_prefix()` by using `with_batch_config()` directly.
@@ -1194,7 +1175,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_create_relation_non_indexed() {
+    async fn test_process_create_relation_tags() {
+        let consumer = test_consumer();
+        let space_id = Uuid::new_v4();
+        let relation_id = Uuid::new_v4();
+        let entity_id = Uuid::new_v4();
+        let tag_entity_id = Uuid::new_v4();
+        let tags_relation_type = Uuid::parse_str(TAGS_RELATION_TYPE_ID).unwrap();
+
+        let relation = grc_20::CreateRelation {
+            id: *relation_id.as_bytes(),
+            relation_type: *tags_relation_type.as_bytes(),
+            from: *entity_id.as_bytes(),
+            to: *tag_entity_id.as_bytes(),
+            from_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_is_value_ref: false,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        };
+
+        let result = consumer.process_create_relation(&relation, space_id);
+
+        let event = result.expect("Tags relation should produce an event");
+        assert_eq!(event.event_type, EntityEventType::CreateRelation);
+        assert_eq!(event.entity_id, entity_id);
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.relation_id, Some(relation_id));
+        assert_eq!(event.relation_type, Some(tags_relation_type));
+        assert_eq!(event.to_entity_id, Some(tag_entity_id));
+    }
+
+    #[tokio::test]
+    async fn test_process_create_relation_non_indexed_is_forwarded() {
         let consumer = test_consumer();
         let space_id = Uuid::new_v4();
 
@@ -1214,7 +1231,9 @@ mod tests {
             context: None,
         };
 
+        // Forwarded so the processor's relation map learns its owner; the processor
+        // skips indexing it.
         let result = consumer.process_create_relation(&relation, space_id);
-        assert!(result.is_none());
+        assert!(result.is_some());
     }
 }
