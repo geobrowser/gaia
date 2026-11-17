@@ -62,6 +62,9 @@ const PG: Record<string, string> = {
 	ranking_place_step: "100",
 	ranking_pushdown: "150",
 	ranking_pushdown_since: "0",
+	agenda_claim_steps: "0",
+	agenda_follower_drop_steps: "0",
+	agenda_day_factor: "0.65",
 }
 const row = (o: Record<string, string> = {}): EntityRankingConfigRow => ({...PG, ...o})
 
@@ -72,10 +75,10 @@ describe("entity_ranking_config record", () => {
 	})
 
 	it("mirrors every column once, each with its own pinned id", () => {
-		expect(ENTITY_RANKING_COLUMNS).toHaveLength(40)
-		expect(new Set(ENTITY_RANKING_COLUMNS.map((c) => c.pg)).size).toBe(40)
+		expect(ENTITY_RANKING_COLUMNS).toHaveLength(43)
+		expect(new Set(ENTITY_RANKING_COLUMNS.map((c) => c.pg)).size).toBe(43)
 		expect(ENTITY_RANKING_COLUMNS.map((c) => c.key).sort()).toEqual(Object.keys(COL).filter((k) => k !== "id").sort())
-		expect(new Set(Object.values(COL)).size).toBe(41)
+		expect(new Set(Object.values(COL)).size).toBe(44)
 		// The eight integer columns of the table (api/drizzle: intrinsic_*_target, watch_window_days, trending_*_days,
 		// trending_position_slots, ranking_places_mode, ranking_pushdown_since).
 		expect(ENTITY_RANKING_COLUMNS.filter((c) => c.int).map((c) => c.pg)).toEqual([

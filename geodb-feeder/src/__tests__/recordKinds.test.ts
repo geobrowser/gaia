@@ -131,6 +131,9 @@ describe("record columns", () => {
 				rankingPlaceStep: "175cfab0e5554449b928efc12b720184",
 				rankingPushdown: "d7fbcef7d34d4c3bbcc1afd31b5a2848",
 				rankingPushdownSince: "541e7823a0774ac9ae6a25c1345d97c4",
+				agendaClaimSteps: "0fb9b1510f7a4a62bb5493e81d357c2c",
+				agendaFollowerDropSteps: "798d579d35794f2aa88e967346daa468",
+				agendaDayFactor: "c34de4cc6bef42ebb7c856cc4e5edc80",
 			},
 			forYouConfig: {
 				id: "054f9998f5204c85a2eeadc923fc614c",

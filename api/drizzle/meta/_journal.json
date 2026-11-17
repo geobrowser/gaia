@@ -883,6 +883,13 @@
       "when": 1794615442000,
       "tag": "0125_rank_vote_relation_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1794701842000,
+      "tag": "0126_agenda_claim_boost",
+      "breakpoints": true
     }
   ]
 }

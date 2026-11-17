@@ -1581,6 +1581,15 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	rankingPushdown: decimal("ranking_pushdown").notNull(),
 	/** Epoch seconds: only Debates members' downvotes cast at or after this count toward a push-down; 0 counts none (0124). */
 	rankingPushdownSince: bigint("ranking_pushdown_since", {mode: "number"}).notNull(),
+	/**
+	 * Places the best ranked debate on a claim listed in the last 7 days moves up, while the ranking is on (0126,
+	 * GEO-3781). One place is ranking_place_step × the weight of the debate's source. 0 (the default) is off.
+	 */
+	agendaClaimSteps: decimal("agenda_claim_steps").notNull(),
+	/** Places every other ranked debate on that claim drops, floored at the place base (0126). 0 is off. */
+	agendaFollowerDropSteps: decimal("agenda_follower_drop_steps").notNull(),
+	/** The lift and drop are multiplied by this for each New York day since the listing's Date (0126). */
+	agendaDayFactor: decimal("agenda_day_factor").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
