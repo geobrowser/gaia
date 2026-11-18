@@ -5,7 +5,7 @@
 -- entity_ranking_config and the sources rows.
 --
 --   0. Ships off: both steps default to 0; the re-created functions still read the switch and the boosts table; the
---      terms still inline.
+--      wrapper still inlines (the core has not since 0127).
 --   1. Zero config: with both steps at 0 (any day factor) and mode 2, no rows are stored and every score is the
 --      0124 one (place value only). With steps above 0 in modes 0 and 1, still no rows and no score moves.
 --   2. On: the best ranked debate on a listed claim gets the lift; its ranked siblings lose the drop, floored at the
@@ -56,8 +56,8 @@ BEGIN
   RETURN out;
 END $$;
 SELECT assert(pg_temp.plan('SELECT * FROM trending.entity_trending_terms(''{00000000-0000-4000-8000-000000000001}''::uuid[])')
-                NOT LIKE '%Function Scan on entity_trending_terms%',
-              '0: entity_trending_terms still inlines');
+                !~ 'Function Scan on entity_trending_terms\s',
+              '0: entity_trending_terms still inlines (the core is a Function Scan since 0127, for jit = off)');
 SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_boosts), '0: the boosts table ships empty');
 CREATE OR REPLACE FUNCTION pg_temp.rejected(sets text) RETURNS boolean LANGUAGE plpgsql AS $$
 BEGIN

@@ -1,0 +1,24 @@
+-- GEO-3781 follow-up: no JIT for trending.entity_trending_terms_as.
+--
+-- WHY. Postgres prices one debate's terms at ~1.5M (it expects 4.5M rows) and the estimate is wrong, because the
+-- actual rows are a few. That price is over jit_above_cost (100,000), so every statement that runs the terms
+-- JIT-compiles them first, and the compile time is nearly all of the run time. Measured on testnet on 18 Nov,
+-- each run in a transaction that was rolled back:
+--   * refresh_entity_ranking_scores for one debate (every rank-vote re-score): 2,498 and 2,696 ms with JIT;
+--     14 and 13 ms with this setting.
+--   * trending.refresh_agenda_listings(true), the hourly full pass: 5,862 ms; 1,290 ms with this setting.
+--     Both passes scored the same 289 entities.
+--   * entity_trending_terms over the 100 ranked debates: 2,066 ms; 12 ms with this setting. Same 100 rows.
+-- JIT never changes a result.
+--
+-- ON THE FUNCTION, NOT THE ROLE. Only the terms change. Every other query keeps the server default, and the
+-- setting is tracked here.
+--
+-- NOT INLINED ANY MORE. Postgres never inlines a SQL function that has a SET clause, so
+-- entity_trending_terms(ids) now calls entity_trending_terms_as as a function scan. Before this, 0124 inlined it
+-- into its callers. The measurements above are with that change, and every caller got faster.
+--
+-- KEEP IT ON A REDEFINITION. CREATE OR REPLACE FUNCTION drops a SET that is not in the new definition. A later
+-- migration that redefines entity_trending_terms_as must say `SET jit = off` itself, or the 2.5 s re-scores come
+-- back. drizzle/tests/0127_trending_terms_jit_off.sql fails if the setting is missing.
+ALTER FUNCTION trending.entity_trending_terms_as(uuid[], boolean) SET jit = off;
