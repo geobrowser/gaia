@@ -364,7 +364,7 @@ tests:
   - name: other wire refusals fire on a rise in any non-revision reason and stay silent for revision or flat
     interval: 1m
     input_series:
-      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="header_crc"}'
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="opcode"}'
         values: '0x10 1+1x10 11x40'
       - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="revision"}'
         values: '0+5x60'
@@ -377,7 +377,7 @@ tests:
             exp_annotations:
               summary: geo-db refused handshakes or frames for a reason other than wire revision in the last 10m
               description: >-
-                The other geodb_wire_refused_total rows count malformed or refused handshakes and frames (magic, header_crc, opcode, auth_*, handshake_timeout and the rest). Group the counter by reason to see which row moved, and read that row in the geo-db note SERVE-WIRE-REFUSED-OTHER-HANDSHAKE-REFUSALS-COUNTED-DIAG. A bump in the right order can move a few; a steady rate is a broken or hostile client.
+                The other geodb_wire_refused_total rows count malformed or refused handshakes and frames (opcode, auth_*, grammar, binding and the rest). Group the counter by reason to see which row moved, and read that row in the geo-db note SERVE-WIRE-REFUSED-OTHER-HANDSHAKE-REFUSALS-COUNTED-DIAG. In a pin roll in the documented order every one of these stays 0; a rise names a client or its config disagreeing with the serve. handshake_timeout, magic and header_crc are left out here because a bare connect or a non-geodb peer on the wire port moves them without a fault; GeoDbWireRefusedProbeSustained covers those.
       - {eval_time: 50m, alertname: GeoDbWireRefusedOther, exp_alerts: []}
 
   - name: revision refusals alone do not fire the other-reasons rule
@@ -389,6 +389,118 @@ tests:
         values: '0x60'
     alert_rule_test:
       - {eval_time: 30m, alertname: GeoDbWireRefusedOther, exp_alerts: []}
+
+  - name: roll-expected refusal reasons do not fire the other-reasons rule but a sustained rate fires the probe rule
+    interval: 1m
+    input_series:
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="handshake_timeout"}'
+        values: '0+20x120'
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="magic"}'
+        values: '0+2x120'
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="header_crc"}'
+        values: '0+2x120'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: GeoDbWireRefusedOther, exp_alerts: []}
+      - {eval_time: 20m, alertname: GeoDbWireRefusedProbeSustained, exp_alerts: []}
+      - eval_time: 60m
+        alertname: GeoDbWireRefusedProbeSustained
+        exp_alerts:
+          - exp_labels: {severity: info, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db has refused more than one bare or non-geodb connection every 5s for 30m
+              description: >-
+                handshake_timeout (a connect closed by the idle bound before a session opened), magic and header_crc (a non-geodb peer on the wire port) move without a fault, so a few during a pin roll are expected. A sustained rate is a scanner, a probe loop or a broken health check dialing the wire port. Group the counter by reason to see which row, then find the dialer (a TCP probe on the wire port, a client pointed at the wrong port).
+
+  - name: a few roll-time bare connects stay below the probe rate
+    interval: 1m
+    input_series:
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="handshake_timeout"}'
+        values: '0 0 3 3 6 6 6 9x100'
+      - series: 'geodb_wire_refused_total{namespace="gaia", job="geodb", reason="magic"}'
+        values: '0x4 1x100'
+    alert_rule_test:
+      - {eval_time: 90m, alertname: GeoDbWireRefusedProbeSustained, exp_alerts: []}
+      - {eval_time: 90m, alertname: GeoDbWireRefusedOther, exp_alerts: []}
+
+  - name: serve restart dip in sessions recovers inside 30m and stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="18"}'
+        values: '40x10 0x15 40x60'
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="19"}'
+        values: '0x85'
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="21"}'
+        values: '0x85'
+    alert_rule_test:
+      - {eval_time: 24m, alertname: GeoDbSessionsAllGone, exp_alerts: []}
+      - {eval_time: 60m, alertname: GeoDbSessionsAllGone, exp_alerts: []}
+
+  - name: sessions all gone for 30m fires
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="18"}'
+        values: '40x10 0x80'
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="21"}'
+        values: '0x90'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbSessionsAllGone, exp_alerts: []}
+      - eval_time: 50m
+        alertname: GeoDbSessionsAllGone
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db has had no open client session for 30m
+              description: >-
+                Every geodb_sessions_by_wire_payload row sums to 0. A serve restart empties the gauge and the clients reconnect on their own, so a short dip after the serve step of a pin roll is expected and is shorter than the 30m this waits. A longer gap means no client reconnected: check the clients' restarts and stderr, geodb_wire_refused_total by reason and geodb_handshakes_by_wire_payload_total.
+
+  - name: sessions at revision 18 are silent through the roll day and fire after 24h
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="18"}'
+        values: '40x1000 20x1000'
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="21"}'
+        values: '0x2000'
+    alert_rule_test:
+      - {eval_time: 23h, alertname: GeoDbSessionsAtOldestRevision, exp_alerts: []}
+      - eval_time: 25h
+        alertname: GeoDbSessionsAtOldestRevision
+        exp_alerts:
+          - exp_labels: {severity: info, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: a geo-db client has held or opened a session at wire_payload 18 for 24h
+              description: >-
+                Revision 18 is the oldest of the support window (18 to 21) and the revision of the pin before the roll. Sessions at 18 are expected right after the serve step and fall to 0 as each client is rolled, so this waits 24h from the serve restart. After that, a client still at 18 is one the roll missed (a service never re-applied, a CronJob template, a client rolled back), and payload_min_supported may not be raised past 18 while it lives. Read the gauge with the handshake counter at revision 18, then find the client by its geodb image tag (kubectl get sts,deploy,cronjob -A, the geodb-setup tag). Delete or change this rule when payload_min_supported moves.
+
+  - name: revision 18 sessions that reach 0 during the roll stay silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="18"}'
+        values: '40x600 0x2000'
+      - series: 'geodb_handshakes_by_wire_payload_total{namespace="gaia", job="geodb", revision="18"}'
+        values: '40x2600'
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="21"}'
+        values: '0x600 40x2000'
+    alert_rule_test:
+      - {eval_time: 20h, alertname: GeoDbSessionsAtOldestRevision, exp_alerts: []}
+      - {eval_time: 40h, alertname: GeoDbSessionsAtOldestRevision, exp_alerts: []}
+
+  - name: a client reconnecting at revision 18 after the sessions are gone fires
+    interval: 1m
+    input_series:
+      - series: 'geodb_sessions_by_wire_payload{namespace="gaia", job="geodb", revision="18"}'
+        values: '0x3000'
+      - series: 'geodb_handshakes_by_wire_payload_total{namespace="gaia", job="geodb", revision="18"}'
+        values: '0+1x3000'
+    alert_rule_test:
+      - {eval_time: 23h, alertname: GeoDbSessionsAtOldestRevision, exp_alerts: []}
+      - eval_time: 26h
+        alertname: GeoDbSessionsAtOldestRevision
+        exp_alerts:
+          - exp_labels: {severity: info, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: a geo-db client has held or opened a session at wire_payload 18 for 24h
+              description: >-
+                Revision 18 is the oldest of the support window (18 to 21) and the revision of the pin before the roll. Sessions at 18 are expected right after the serve step and fall to 0 as each client is rolled, so this waits 24h from the serve restart. After that, a client still at 18 is one the roll missed (a service never re-applied, a CronJob template, a client rolled back), and payload_min_supported may not be raised past 18 while it lives. Read the gauge with the handshake counter at revision 18, then find the client by its geodb image tag (kubectl get sts,deploy,cronjob -A, the geodb-setup tag). Delete or change this rule when payload_min_supported moves.
 
   - name: claims short fires on a rise in query_eval and stays silent flat
     interval: 1m

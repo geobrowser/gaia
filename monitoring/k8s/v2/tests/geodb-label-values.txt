@@ -7,6 +7,8 @@
 # src/storage/derived/store.zig ImageOutcome, src/engine/budget/region.zig ClaimClass,
 # docs/api/13-serve-metrics-reference.md). Refresh by re-reading those when the golden list is refreshed.
 geodb_wire_refused_total{reason} = revision magic header_crc opcode flags not_permitted not_authenticated session_revision frame_too_large handshake_payload handshake_revision grammar binding anonymous handshake_reply auth_shape auth_strength auth_rejected handshake_timeout
+geodb_sessions_by_wire_payload{revision} = 18 19 20 21
+geodb_handshakes_by_wire_payload_total{revision} = 18 19 20 21
 geodb_claims_refused_by_cause_total{cause} = claim_over_clamp ceiling
 geodb_claims_short_total{claim_class} = query_eval
 geodb_derived_image_outcome{outcome} = off absent loaded bad_header layout config log_moved epoch body
