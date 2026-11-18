@@ -404,6 +404,47 @@ describe("translateOps", () => {
 			expect(translateOps([upd({position: "b1"})], lone.ctx, both).intents[0]).toBe(m.text)
 		})
 
+		it("a second move in one edit folds into the first: one set_position to the final position (move-move)", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const m = moveOf(sid, "c2")
+			const first = moveOf(sid, "b1")
+			const r = translateOps([upd({position: "b1"}), upd({position: "c2"})], c.ctx, both)
+			// the replacement id is the first move's; only the position is the final one
+			expect(r.intents).toEqual([m.text.replace(m.replacement, first.replacement), claimOn(first.replacement, "toSpace", hex(40))])
+			expect(r.stats).toMatchObject({"relation-position-moved": 1, "relation-position-moved-folded": 1})
+			expect(c.records.get(sid)?.current).toBe(first.replacement)
+		})
+
+		it("three moves in one edit fold into one (move-move-move), and an unset position folds too", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const first = moveOf(sid, "b1")
+			const r = translateOps([upd({position: "b1"}), upd({position: "c2"}), upd({position: "d3"})], c.ctx, both)
+			expect(r.intents.filter((i) => i.includes("set_position"))).toEqual([
+				moveOf(sid, "d3").text.replace(moveOf(sid, "d3").replacement, first.replacement),
+			])
+			expect(r.stats["relation-position-moved-folded"]).toBe(2)
+			const u = withRecords()
+			translateOps([create], u.ctx, both)
+			const cleared = translateOps([upd({position: "b1"}), upd({unset: ["position"]})], u.ctx, both)
+			expect(cleared.intents[0]).toBe(
+				`.{ .set_position = .{ .entity = "${from}", .property = "${typ}", .id = "${sid}", .replacement = "${first.replacement}" } }`,
+			)
+		})
+
+		it("move-move-delete: one move to the final position, then the delete names its replacement", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const first = moveOf(sid, "b1")
+			const r = translateOps([upd({position: "b1"}), upd({position: "c2"}), {type: "deleteRelation", id: id(50)}], c.ctx, both)
+			expect(r.intents.filter((i) => i.includes("set_position"))).toEqual([
+				moveOf(sid, "c2").text.replace(moveOf(sid, "c2").replacement, first.replacement),
+			])
+			expect(r.intents.at(-1)).toBe(`.{ .set_active = .{ .statement = "${first.replacement}", .active = false } }`)
+			expect(r.stats["relation-move-closed-in-edit"]).toBeUndefined()
+		})
+
 		it("a relation with no record is dropped and counted, as is a bad position or the flag off", () => {
 			const known = withRecords()
 			known.statements.add(sid)
