@@ -1,5 +1,5 @@
 import {createHash} from "node:crypto"
-import {type GeoDb, classify} from "./geodb.js"
+import {type GeoDb, classify, poolRefusal} from "./geodb.js"
 import {log} from "./log.js"
 import type {Metrics} from "./metrics.js"
 import type {SpaceRecord, Store} from "./state.js"
@@ -89,7 +89,8 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * range that is done (applied, or dead-lettered because geo-db refused it on its merits).
  *
  * - Transient failures (geo-db down, out of a resource) retry forever with backoff; the feeder
- *   never skips an edit because geo-db was unavailable.
+ *   never skips an edit because geo-db was unavailable. The exception is a host-pool refusal (`requested N limit M`
+ *   with N > M, seen twice with the same figures): no restart frees it, so it is split like a refused range.
  * - A refused range is bisected until the refused intent is alone, which is written to errors.jsonl and skipped;
  *   `onDeadLetter` runs before that range's `progress`, so whatever it records survives a crash with the progress.
  */
@@ -122,7 +123,7 @@ export async function applyIntents(
 			return
 		}
 		deps.store.deadLetter({...meta, intent: slice[0], err: outcome.error})
-		deps.metrics.deadLetters.inc({kind: "intent"})
+		deps.metrics.deadLetters.inc({kind: outcome.pool ? "host_pool" : "intent"})
 		deps.metrics.chunks.inc({result: "dead_letter"})
 		log("error", "intent refused by geo-db, skipped", {...meta, error: outcome.error.slice(0, 300)})
 		deadLettered += 1
@@ -139,9 +140,10 @@ async function tryApply(
 	space: SpaceRecord & {geo: string},
 	slice: string[],
 	key: string | null,
-): Promise<"ok" | {error: string}> {
+): Promise<"ok" | {error: string; pool?: true}> {
 	const sleep = deps.sleep ?? defaultSleep
 	let delay = 1000
+	let lastPool: {requested: number; limit: number} | null = null
 	for (;;) {
 		if (deps.signal?.aborted) throw new Error("shutting down")
 		const t0 = Date.now()
@@ -164,6 +166,20 @@ async function tryApply(
 		const message = (r.err + r.out).slice(-600)
 		const kind = classify(r.rc === null ? `${message} killed` : message)
 		if (kind === "permanent") return {error: message}
+		// A refusal priced past the bound itself (`requested N limit M`, N > M) is not freed by a restart. The same
+		// figures twice on this slice make it terminal: report it as a refusal of the slice so `applyIntents` halves it
+		// (the documented workaround is splitting the edit), down to one intent, which is dead-lettered.
+		const pool = poolRefusal(message)
+		if (pool && lastPool && pool.requested === lastPool.requested && pool.limit === lastPool.limit) {
+			deps.metrics.chunks.inc({result: "pool_refused"})
+			log("warn", "host-pool refusal repeated with the same figures; splitting the slice", {
+				intents: slice.length,
+				requested: pool.requested,
+				limit: pool.limit,
+			})
+			return {error: message, pool: true}
+		}
+		lastPool = pool
 		deps.metrics.chunks.inc({result: "retry"})
 		log("warn", "apply failed, retrying", {kind, error: message.slice(0, 300), delayMs: delay})
 		// `exhausted` is serve out of a per-process resource. The feeder cannot restart serve (a different pod);

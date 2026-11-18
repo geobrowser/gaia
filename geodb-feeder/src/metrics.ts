@@ -71,8 +71,8 @@ export function createMetrics() {
 	const m = {
 		edits: counter("geodb_feeder_edits_total", "Kafka messages fully applied to geo-db, by outcome (applied, empty, dead_letter)."),
 		intents: counter("geodb_feeder_intents_total", "Intents applied to geo-db."),
-		chunks: counter("geodb_feeder_chunks_total", "geodb-client apply calls, by result (ok, retry, dead_letter)."),
-		deadLetters: counter("geodb_feeder_dead_letters_total", "Messages or intents written to errors.jsonl and skipped."),
+		chunks: counter("geodb_feeder_chunks_total", "geodb-client apply calls, by result (ok, retry, dead_letter, pool_refused: a host-pool refusal repeated, the slice is then split)."),
+		deadLetters: counter("geodb_feeder_dead_letters_total", "Messages or intents written to errors.jsonl and skipped, by kind (intent, host_pool: a single intent priced past the host pool)."),
 		opsDetail: counter("geodb_feeder_translate_total", "Translator counters (skips, drops, predates-window)."),
 		spaceMapPublish: counter("geodb_feeder_space_map_publish_total", "Space map ConfigMap publishes, by ConfigMap key (space-map.json, system-spaces.json) and result."),
 		offsetGaps: counter("geodb_feeder_offset_gaps_total", "Offsets skipped by the broker (retention or compaction)."),

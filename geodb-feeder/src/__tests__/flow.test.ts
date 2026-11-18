@@ -4,7 +4,7 @@ import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {applyIntents, chunkKey} from "../apply.js"
 import {createAppliedBlockWriter} from "../appliedBlock.js"
-import {classify} from "../geodb.js"
+import {classify, poolRefusal} from "../geodb.js"
 import {type Decode, handleMessage} from "../handle.js"
 import {createMetrics} from "../metrics.js"
 import {ensureSpace} from "../spaces.js"
@@ -78,6 +78,19 @@ describe("classify", () => {
 	})
 })
 
+describe("poolRefusal", () => {
+	it("reads requested > limit from the client text, and nothing else", () => {
+		const text = "refused: ResourceExhausted ResourceExhausted requested 6600 limit 6416\n"
+		expect(poolRefusal(text)).toEqual({requested: 6600, limit: 6416})
+		expect(poolRefusal(`${text.trim()} fits 12\n`)).toEqual({requested: 6600, limit: 6416})
+		// Room that other work fills (a restart or a checkpoint frees it), and figure-less refusals, are not terminal.
+		expect(poolRefusal("refused: ResourceExhausted ResourceExhausted requested 100 limit 6416")).toBeNull()
+		expect(poolRefusal("error: ResourceExhausted")).toBeNull()
+		expect(poolRefusal("refused: ResourceExhausted ResourceExhausted opening")).toBeNull()
+		expect(poolRefusal("refused: InvalidWirePayload requested 9 limit 1")).toBeNull()
+	})
+})
+
 describe("applyIntents", () => {
 	const space = {geo: GEO, nonce: "n", keyed: false}
 
@@ -110,6 +123,60 @@ describe("applyIntents", () => {
 		)
 		const r = await applyIntents(base(store, fake), {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(2), 10, 0, () => {})
 		expect(r.applied).toBe(2)
+	})
+
+	const POOL = "refused: ResourceExhausted ResourceExhausted requested 6600 limit 6416\n"
+
+	it("splits a slice refused by the host pool twice with the same figures, instead of retrying it forever", async () => {
+		const store = new Store(tmp())
+		const m = base(store, fakeDb(() => ok))
+		// Any slice of 3 or more intents is priced past the pool; smaller ones fit.
+		const fake = fakeDb((zon) => ((zon.match(/create_entity/g) ?? []).length >= 3 ? {rc: 1, out: "", err: POOL} : ok))
+		const done: number[] = []
+		const r = await applyIntents({...m, db: fake.db}, {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(8), 8, 0, (n) => done.push(n))
+		expect(r).toEqual({applied: 8, deadLettered: 0})
+		expect(done[done.length - 1]).toBe(8)
+		// The 8 is refused twice, each 4 twice, and the four 2s fit on the first call: 2 + 2 + 2 + 4 calls.
+		expect(fake.calls).toBe(2 + 2 + 2 + 4)
+	})
+
+	it("retries once before it believes the refusal: a single sighting then success is not split", async () => {
+		const store = new Store(tmp())
+		const fake = fakeDb((_, call) => (call === 0 ? {rc: 1, out: "", err: POOL} : ok))
+		const r = await applyIntents(base(store, fake), {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(4), 4, 0, () => {})
+		expect(r).toEqual({applied: 4, deadLettered: 0})
+		expect(fake.applied).toHaveLength(1)
+	})
+
+	it("changing figures mean the pool moved: the retry counts from the new sighting", async () => {
+		const store = new Store(tmp())
+		const figs = ["requested 6600 limit 6416", "requested 6700 limit 6416"]
+		const fake = fakeDb((_, call) => (call < 2 ? {rc: 1, out: "", err: `refused: ResourceExhausted ResourceExhausted ${figs[call]}`} : ok))
+		const r = await applyIntents(base(store, fake), {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(4), 4, 0, () => {})
+		expect(r).toEqual({applied: 4, deadLettered: 0})
+		expect(fake.applied).toHaveLength(1)
+	})
+
+	it("fails a single intent priced past the pool as permanent: dead letter, host_pool metric, the feeder moves on", async () => {
+		const dir = tmp()
+		const store = new Store(dir)
+		const m = base(store, fakeDb(() => ok))
+		const fake = fakeDb((zon) => (zon.includes('"e1"') ? {rc: 1, out: "", err: POOL} : ok))
+		const r = await applyIntents({...m, db: fake.db}, {...space, keyed: true}, {space: GAIA, partition: 0, offset: "9"}, intents(3), 3, 0, () => {})
+		expect(r).toEqual({applied: 2, deadLettered: 1})
+		const line = JSON.parse(readFileSync(`${dir}/errors.jsonl`, "utf8").trim())
+		expect(line).toMatchObject({offset: "9", intent: '.{ .create_entity = "e1" }'})
+		expect(m.metrics.deadLetters.render()).toContain('kind="host_pool"')
+	})
+
+	it("keeps retrying a figure-less or restart-freed exhaustion without splitting", async () => {
+		const store = new Store(tmp())
+		const texts = ["error: ResourceExhausted", "error: ResourceExhausted", "refused: ResourceExhausted ResourceExhausted requested 100 limit 6416", "refused: ResourceExhausted ResourceExhausted requested 100 limit 6416"]
+		const fake = fakeDb((_, call) => (call < 4 ? {rc: 1, out: "", err: texts[call] ?? ""} : ok))
+		const r = await applyIntents(base(store, fake), {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(4), 4, 0, () => {})
+		expect(r).toEqual({applied: 4, deadLettered: 0})
+		expect(fake.applied).toHaveLength(1)
+		expect(fake.applied[0]).toContain('"e3"')
 	})
 
 	it("bisects a refused chunk down to the one bad intent and dead-letters only that", async () => {

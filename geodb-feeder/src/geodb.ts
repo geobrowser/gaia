@@ -60,6 +60,22 @@ export function classify(message: string): Failure {
 	return "permanent"
 }
 
+/**
+ * The figures of a refusal that can never be freed by waiting: geodb-client prints an exhaustion as
+ * `refused: ResourceExhausted <Code> requested N limit M [fits K]`, and `requested > limit` means the Edit is
+ * priced past the bound itself (the host pool, `owner=identity_table`), so even an empty, freshly restarted serve
+ * refuses it. A restart-freed exhaustion is the bound filled by other work, which reads `requested <= limit` or
+ * carries no figures at all (`error: ResourceExhausted`, a node still opening). Null for those.
+ */
+export function poolRefusal(message: string): {requested: number; limit: number} | null {
+	if (classify(message) !== "exhausted") return null
+	const m = /\brequested (\d+) limit (\d+)/.exec(message)
+	if (!m) return null
+	const requested = Number(m[1])
+	const limit = Number(m[2])
+	return requested > limit ? {requested, limit} : null
+}
+
 export const spaceIds = (listing: string): string[] =>
 	listing
 		.split("\n")
