@@ -57,6 +57,10 @@ export function classify(message: string): Failure {
 		return "transient"
 	if (/StoreLocked|PredecessorVersionMismatch|WatermarkNotYetReached|OutcomeUnknown|refused: \w+ IoError/.test(message))
 		return "transient"
+	// The serve and this client disagree on a grammar row's revision (a wire_payload bump, geo-db ISS-706-381). The
+	// handshake refuses before any intent is sent, so it is no verdict on the edit: it lasts until the serve and the
+	// client tag are on the same side of the bump, and the apply is safe to repeat once they are.
+	if (/GrammarRevisionMismatch/.test(message)) return "transient"
 	return "permanent"
 }
 
