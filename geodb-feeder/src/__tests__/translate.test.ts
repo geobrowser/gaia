@@ -371,6 +371,39 @@ describe("translateOps", () => {
 			expect(cleared.intents[1]).not.toContain(".position")
 		})
 
+		it("a move after the same edit deleted the relation is dropped and counted (shape A)", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const r = translateOps([{type: "deleteRelation", id: id(50)}, upd({position: "b1"})], c.ctx, both)
+			expect(r.intents).toEqual([`.{ .set_active = .{ .statement = "${sid}", .active = false } }`])
+			expect(r.stats).toMatchObject({"relation-move-closed-in-edit": 1, "relation-position-update-dropped": 1})
+			expect(r.stats["relation-position-moved"]).toBeUndefined()
+		})
+
+		it("a move after the same edit deleted the relation's entity is dropped and counted (shape B)", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const known = c.ctx.knownEntity
+			c.ctx.knownEntity = (e) => e === from || known(e)
+			const r = translateOps([{type: "deleteEntity", id: id(1)}, upd({position: "b1"})], c.ctx, both)
+			expect(r.intents).toEqual([`.{ .delete_entity = "${from}" }`])
+			expect(r.stats).toMatchObject({"relation-move-closed-in-edit": 1, deleteEntity: 1})
+			expect(r.stats["relation-position-moved"]).toBeUndefined()
+		})
+
+		it("a move then a delete, and a lone move, still emit", () => {
+			const c = withRecords()
+			translateOps([create], c.ctx, both)
+			const m = moveOf(sid, "b1")
+			const r = translateOps([upd({position: "b1"}), {type: "deleteRelation", id: id(50)}], c.ctx, both)
+			expect(r.intents[0]).toBe(m.text)
+			expect(r.intents.at(-1)).toBe(`.{ .set_active = .{ .statement = "${m.replacement}", .active = false } }`)
+			expect(r.stats["relation-move-closed-in-edit"]).toBeUndefined()
+			const lone = withRecords()
+			translateOps([create], lone.ctx, both)
+			expect(translateOps([upd({position: "b1"})], lone.ctx, both).intents[0]).toBe(m.text)
+		})
+
 		it("a relation with no record is dropped and counted, as is a bad position or the flag off", () => {
 			const known = withRecords()
 			known.statements.add(sid)
