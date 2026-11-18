@@ -39,6 +39,9 @@
 #   GeoDbDerivedViewFailures  geodb_derived_view_failures_total rose in the last 15m
 #   GeoDbWorkOpenRowsHigh     geodb_work_open_rows above 80% of geodb_work_open_rows_max for 15m
 #   GeoDbStoreFenced          geodb_store_fenced equals 1 for 1m (critical)
+#   GeoDbHostPoolHeadroomLow  geodb_host_pool_priced_peak above 80% of geodb_host_pool_records_max for 15m
+#   GeoDbHostPoolRefused      geodb_host_pool_refused_total rose in the last 15m (an Edit priced past every
+#                             slot of the host pool: owner=identity_table row=none)
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -445,6 +448,40 @@ spec:
             summary: geo-db refused a derived write past the table cap in the last 15m
             description: >-
               GeoDbDerivedRowsHigh warns at 80%; this fires if it was missed. Raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+
+        - alert: GeoDbHostPoolHeadroomLow
+          # The peak is a high-water mark since serve's last open, so it clears only at a restart.
+          expr: |
+            max(geodb_host_pool_priced_peak{namespace="gaia", job="geodb"})
+              / max(geodb_host_pool_records_max{namespace="gaia", job="geodb"}) > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: An Edit priced more than 80% of geo-db's host pool since the last open
+            description: >-
+              A statement id hosted by many Spaces lengthens each host chain, so one Edit's price grows
+              with the Space count touching its statements. An Edit priced past geodb_host_pool_records_max
+              is refused ResourceExhausted (owner=identity_table row=none) for good, and no checkpoint makes
+              room. Split the feeder's largest Edits, or raise the pool's share of the store (serve.cfg
+              carving; one serve restart).
+
+        - alert: GeoDbHostPoolRefused
+          expr: |
+            sum(increase(geodb_host_pool_refused_total{namespace="gaia", job="geodb"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused an Edit for a price past its host pool in the last 15m
+            description: >-
+              The refusal is by design and terminal (owner=identity_table row=none): the Edit's host
+              records exceed the pool's slots, so a retry is refused the same way. Compare
+              geodb_host_pool_priced_peak with geodb_host_pool_records_max, then split the Edit at the
+              feeder or enlarge the pool (one serve restart).
 
         - alert: GeoDbDerivedViewFailures
           expr: |
