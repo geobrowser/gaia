@@ -260,6 +260,9 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 	}
 	// The index in `intents` of each relation's `add` made by this call: a move of such a relation rewrites that `add`.
 	const addedAt = new Map<string, number>()
+	// Closed earlier in this Edit: a later move of such a relation (or of one whose entity was deleted) is meaningless.
+	const closedRelations = new Set<string>()
+	const closedEntities = new Set<string>()
 	// Entities whose own statements this edit changed, in first-touch order, and those among them new to the Space.
 	const changed = new Set<string>()
 	const fresh = new Set<string>()
@@ -438,6 +441,10 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 							// Created in this call, so not yet in the base the Edit reads: write the position on its `add`.
 							intents[made] = (intents[made] as string).replace(/, \.position = "(?:[^"\\]|\\.)*"/, "").replace(/ \} \}$/, `${at} } }`)
 							bump("relation-position-moved-in-edit")
+						} else if (closedRelations.has(sid) || closedEntities.has(rec.from)) {
+							// The same Edit already deleted the relation or its entity: geo-db refuses the move (StatementNotFound).
+							bump("relation-position-update-dropped")
+							bump("relation-move-closed-in-edit")
 						} else {
 							const replacement = conformingId("relation-position", `${rec.current}${wanted ?? ""}`)
 							intents.push(
@@ -490,6 +497,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					bump("deleteRelation-predates-window")
 					break
 				}
+				closedRelations.add(sid)
 				// A moved relation is open under its replacement's id.
 				intents.push(`.{ .set_active = .{ .statement = "${ctx.relation?.(sid)?.current ?? sid}", .active = false } }`)
 				bump("deleteRelation")
@@ -502,6 +510,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					break
 				}
 				intents.push(`.{ .delete_entity = "${e}" }`)
+				closedEntities.add(e)
 				// The retraction removes the entity's cells, its times with them: it has none afterwards.
 				changed.delete(e)
 				fresh.delete(e)
