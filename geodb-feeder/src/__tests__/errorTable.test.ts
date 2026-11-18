@@ -77,6 +77,7 @@ const CODE_TRANSIENT = [
 	"IoError",
 	"OutcomeUnknown",
 	"DeadlineExceeded",
+	"GrammarRevisionMismatch",
 ]
 const CODE_EXHAUSTED = ["ResourceExhausted"]
 const CODE_DEFINITE = [
@@ -176,7 +177,6 @@ const CODE_DEFINITE = [
 	"ProgramRefused",
 	"ProgramOverCap",
 	"ProgramInputOverCap",
-	"GrammarRevisionMismatch",
 	"ProofRequired",
 	"ChannelNotConfidential",
 	"NodeSignatureInvalid",
