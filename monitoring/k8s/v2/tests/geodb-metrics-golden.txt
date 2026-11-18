@@ -5,6 +5,7 @@
 # geodb_store_fenced added by hand from geo-db 8b634bc456 (refresh by copying the file again).
 # geodb_workers_busy_max and geodb_worker_queue_depth_max added by hand from geo-db bca336ede4 (live pin c1d4fd2040).
 # geodb_host_pool_* added by hand from geo-db 602d1badb7 (on final; not yet in the live pin d939fd08b5).
+# geodb_sessions_by_wire_payload and geodb_handshakes_by_wire_payload_total added by hand from geo-db docs/api/13 (on final, in the roll image 4728254ce5; not in the live pin d939fd08b5).
 # Used only by lint-series.sh (label values for each series: geodb-label-values.txt). To refresh: copy the file again and update the commit above.
 geodb_claim_bytes_held{class,session}
 geodb_claim_bytes_held{class}
@@ -33,6 +34,7 @@ geodb_free_join_rows_held_peak
 geodb_free_join_tuple_comparisons_total
 geodb_grants_minted_total
 geodb_grants_reused_total
+geodb_handshakes_by_wire_payload_total{revision}
 geodb_handshakes_refused_total
 geodb_host_pool_priced_peak
 geodb_host_pool_records_max
@@ -68,6 +70,7 @@ geodb_requests_refused_total{class,session}
 geodb_requests_refused_total{class}
 geodb_rooms_max
 geodb_rooms_taken
+geodb_sessions_by_wire_payload{revision}
 geodb_sessions_open
 geodb_spaces_in_use
 geodb_spaces_max
