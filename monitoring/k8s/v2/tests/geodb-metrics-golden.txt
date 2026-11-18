@@ -3,6 +3,7 @@
 # Copied verbatim (comment header aside) from geo-db tests/server/metrics_names.txt at geo-db
 # commit 89c1bf8d90 (the file's last change; origin/final was 4bf0051912 when copied).
 # geodb_store_fenced added by hand from geo-db 8b634bc456 (refresh by copying the file again).
+# geodb_workers_busy_max and geodb_worker_queue_depth_max added by hand from geo-db bca336ede4 (live pin c1d4fd2040).
 # Used only by lint-series.sh (label values for each series: geodb-label-values.txt). To refresh: copy the file again and update the commit above.
 geodb_claim_bytes_held{class,session}
 geodb_claim_bytes_held{class}
@@ -225,4 +226,6 @@ geodb_work_redelivered_on_restart_total
 geodb_work_rows
 geodb_work_rows_max
 geodb_worker_queue_depth
+geodb_worker_queue_depth_max
 geodb_workers_busy
+geodb_workers_busy_max
