@@ -100,6 +100,48 @@ describe.each(ENDPOINTS)("POST %s", (endpoint) => {
 		expect(uploadFile).not.toHaveBeenCalled()
 	})
 
+	it("returns 413 without parsing the body when Content-Length is over the cap", async () => {
+		const {app, uploadEdit, uploadFile} = setupApp()
+
+		// Oversized declared Content-Length is refused up front, before formData()
+		// buffers anything into memory. Body contents are irrelevant to this path.
+		const res = await app.request(endpoint, {
+			method: "POST",
+			headers: {
+				"content-type": "multipart/form-data; boundary=x",
+				"content-length": String(26 * 1024 * 1024),
+			},
+			body: "ignored",
+		})
+
+		expect(res.status).toBe(413)
+		expect(await res.text()).toBe("File exceeds the 25 MiB limit")
+		expect(uploadEdit).not.toHaveBeenCalled()
+		expect(uploadFile).not.toHaveBeenCalled()
+	})
+
+	it("returns 413 for a file over the cap that omits/understates Content-Length", async () => {
+		const {app, uploadEdit, uploadFile} = setupApp()
+
+		// file.size is the authoritative check: a request whose framing-inclusive
+		// Content-Length slips under MAX_REQUEST_BYTES still gets rejected once the
+		// parsed file itself exceeds MAX_UPLOAD_BYTES (25 MiB).
+		const oversized = new File([new Uint8Array(25 * 1024 * 1024 + 1)], "big.bin", {
+			type: "application/octet-stream",
+		})
+		expect(oversized.size).toBe(25 * 1024 * 1024 + 1)
+
+		const res = await app.request(endpoint, {
+			method: "POST",
+			body: makeFormData(oversized),
+		})
+
+		expect(res.status).toBe(413)
+		expect(await res.text()).toBe("File exceeds the 25 MiB limit")
+		expect(uploadEdit).not.toHaveBeenCalled()
+		expect(uploadFile).not.toHaveBeenCalled()
+	})
+
 	it("delegates to the upload service when a non-empty file is provided", async () => {
 		const {app, uploadEdit, uploadFile} = setupApp()
 

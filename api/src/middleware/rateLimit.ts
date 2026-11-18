@@ -57,7 +57,14 @@ export type RateLimitClient = {
 export type RateLimitOptions = {
 	windowMs?: number
 	maxRequests?: number
+	// Namespaces the Valkey counter keys. Defaults to "ratelimit" (the global
+	// per-IP limiter). A route-scoped limiter passes its own prefix so its
+	// bucket is independent of the global one — the same IP is counted
+	// separately for, e.g., uploads.
+	keyPrefix?: string
 }
+
+const DEFAULT_KEY_PREFIX = "ratelimit"
 
 /**
  * Fixed-window per-IP rate limiter middleware, built against an
@@ -68,6 +75,7 @@ export type RateLimitOptions = {
 export function createRateLimitMiddleware(client: RateLimitClient, options: RateLimitOptions = {}) {
 	const windowMs = options.windowMs ?? DEFAULT_WINDOW_MS
 	const maxRequests = options.maxRequests ?? DEFAULT_MAX_REQUESTS
+	const keyPrefix = options.keyPrefix ?? DEFAULT_KEY_PREFIX
 
 	return async (c: Context, next: Next) => {
 		// High-frequency, low-value traffic — already excluded from tracing/
@@ -86,7 +94,7 @@ export function createRateLimitMiddleware(client: RateLimitClient, options: Rate
 			return
 		}
 
-		const key = `ratelimit:${clientIp}`
+		const key = `${keyPrefix}:${clientIp}`
 
 		let count: number
 		try {
@@ -156,6 +164,7 @@ export function createRateLimiter(valkeyUrl: string | undefined, options: RateLi
 	})
 
 	log.info("Rate limiting enabled", {
+		keyPrefix: options.keyPrefix ?? DEFAULT_KEY_PREFIX,
 		windowMs: options.windowMs ?? DEFAULT_WINDOW_MS,
 		maxRequests: options.maxRequests ?? DEFAULT_MAX_REQUESTS,
 	})
