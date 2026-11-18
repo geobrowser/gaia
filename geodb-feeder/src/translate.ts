@@ -260,6 +260,9 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 	}
 	// The index in `intents` of each relation's `add` made by this call: a move of such a relation rewrites that `add`.
 	const addedAt = new Map<string, number>()
+	// The index in `intents` of each relation's `set_position` made by this call: a second move of it rewrites that one,
+	// since the first's replacement exists only inside this Edit and the second would name it (StatementNotFound).
+	const movedAt = new Map<string, number>()
 	// Closed earlier in this Edit: a later move of such a relation (or of one whose entity was deleted) is meaningless.
 	const closedRelations = new Set<string>()
 	const closedEntities = new Set<string>()
@@ -445,8 +448,14 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 							// The same Edit already deleted the relation or its entity: geo-db refuses the move (StatementNotFound).
 							bump("relation-position-update-dropped")
 							bump("relation-move-closed-in-edit")
+						} else if (movedAt.has(sid)) {
+							// Moved earlier in this Edit: fold this move into that one, so it writes the final position.
+							const first = movedAt.get(sid) as number
+							intents[first] = (intents[first] as string).replace(/, \.position = "(?:[^"\\]|\\.)*"/, "").replace(/ \} \}$/, `${at} } }`)
+							bump("relation-position-moved-folded")
 						} else {
 							const replacement = conformingId("relation-position", `${rec.current}${wanted ?? ""}`)
+							movedAt.set(sid, intents.length)
 							intents.push(
 								`.{ .set_position = .{ .entity = "${rec.from}", .property = "${rec.prop}", .id = "${rec.current}", .replacement = "${replacement}"${at} } }`,
 							)
