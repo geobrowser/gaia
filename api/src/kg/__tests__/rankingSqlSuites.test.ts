@@ -116,6 +116,10 @@ async function runSuite(suite: string): Promise<void> {
 	const before = notices.length
 
 	await client.query("BEGIN")
+	// No JIT. The fixture tables are never analyzed, so the planner prices re-score plans at
+	// ~10^8 and a JIT-enabled server (CI's postgres:16) spends seconds compiling each one. JIT
+	// never changes a result. SET LOCAL ends with the ROLLBACK below.
+	await client.query("SET LOCAL jit = off")
 	try {
 		// One query for the whole file: node-postgres throws on the first error, and every
 		// suite raises `FAIL: <label>` from its own assert(), so the thrown message names
