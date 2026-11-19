@@ -474,20 +474,35 @@ async fn process_ipfs_uri(
     let started = tokio::time::Instant::now();
     let deadline = started + transient_retry.window;
     let mut round: u32 = 0;
+    // The last real failure, so an attempt cut by the deadline still reports
+    // what the gateway was doing (503, 401, ...) rather than a bare timeout.
+    let mut last_error: Option<IpfsError> = None;
     let result = loop {
         let attempt = if transient_retry.window.is_zero() {
             ipfs.get_bytes(&uri).await
         } else {
-            tokio::time::timeout_at(deadline, ipfs.get_bytes(&uri))
-                .await
-                .unwrap_or(Err(IpfsError::Timeout))
+            match tokio::time::timeout_at(deadline, ipfs.get_bytes(&uri)).await {
+                Ok(attempt) => attempt,
+                Err(_) => Err(last_error.take().unwrap_or(IpfsError::Timeout)),
+            }
         };
         match attempt {
             Err(error) if error.is_transient() && tokio::time::Instant::now() < deadline => {
                 // A warmer restart replays from the last persisted cursor and
                 // re-fetches URIs that already have a row. `put` would be a
                 // no-op (first write wins), so holding the block is pointless.
-                if round == 0 && cache.lock().await.get(&uri).await?.is_some() {
+                // A failed lookup counts as "not cached": returning the error
+                // here would complete the block with no row at all, which
+                // hermes-pipeline drops and reconcile_errored cannot see.
+                let cached = round == 0
+                    && match cache.lock().await.get(&uri).await {
+                        Ok(row) => row.is_some(),
+                        Err(e) => {
+                            warn!(uri = %uri, error = %e, "Cache lookup failed; retrying the fetch");
+                            false
+                        }
+                    };
+                if cached {
                     debug!(
                         uri = %uri,
                         block = block_number,
@@ -511,6 +526,7 @@ async fn process_ipfs_uri(
                     error = %error,
                     "Transient IPFS fetch failure; holding the block and retrying"
                 );
+                last_error = Some(error);
                 tokio::time::sleep(backoff).await;
             }
             other => break other,
@@ -1002,5 +1018,54 @@ mod tests {
         let item = cache.lock().await.get(URI).await.unwrap().unwrap();
         assert!(!item.is_errored);
         assert_eq!(item.block, "90");
+    }
+
+    /// 503 once, then hangs. The second, hung attempt is cut by the deadline
+    /// and the row is written errored. (The logged error is the 503; that is
+    /// log content and not asserted here.)
+    struct FailThenHang(std::sync::atomic::AtomicU32);
+
+    #[async_trait::async_trait]
+    impl IpfsFetcher for FailThenHang {
+        async fn get_bytes(&self, _uri: &str) -> ipfs::Result<Vec<u8>> {
+            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(http(503));
+            }
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transient_error_then_a_hang_ends_errored_at_the_deadline() {
+        let fetcher = Arc::new(FailThenHang(Default::default()));
+        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        let retry = fast_retry(Duration::from_millis(50));
+        process_ipfs_uri(
+            IpfsUri {
+                uri: URI.to_string(),
+                space_id: vec![0xaa; 16],
+                source: "edit".to_string(),
+            },
+            &cache,
+            &ipfs,
+            "100",
+            100,
+            &retry,
+        )
+        .await
+        .unwrap();
+        assert!(
+            cache
+                .lock()
+                .await
+                .get(URI)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_errored
+        );
+        assert!(fetcher.0.load(std::sync::atomic::Ordering::SeqCst) >= 2);
     }
 }
