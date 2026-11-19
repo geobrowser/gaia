@@ -108,7 +108,7 @@ these clusters is flaky, so retry a failed read two or three times before treati
 | live `deploy/geodb-feeder`, init container `geodb-setup` | `geodb:67b6974a5e` (the `geodb-client` binary the feeder runs comes from this image, not from the feeder image) |
 | live `geodb-card-replay` | `geodb-feeder:edc7e8a4` |
 | live `deploy/api` | `api:7b2500a9afec...` (full sha), init container `geodb:8cba4da996` |
-| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:d939fd08b5` (11-17, geo-db final's tip: peak window, session rows off; over d36be69b61, which carried the stall signals 01c7628a2f). `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). Neither is rolled. |
+| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:4728254ce5` (built 11-18, run 44411379411; rollback tag `d939fd08b5`, the previous pin). `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). Neither is rolled. |
 | newest `geodb-feeder` tag in the registry | `bdada8fb`. **No feeder image containing #1566, #1567, #1570, #1576, #1577, #1578, #1580 or #1581 has been built**, so none of them is live. |
 
 Merged since #1574 was written: #1565, #1566, #1567, #1570, #1571, #1572, #1573, #1575, #1576, #1577, #1578, #1579, #1580, #1581 (all
@@ -274,7 +274,7 @@ doctl registry repository list-tags geodb | awk '$1=="57e34f06df"'              
 2. The roll, serve alone, once the feeder from step 1 is Ready. Serve restarts once; its pod is the only thing the command touches:
 
 ```bash
-$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:d939fd08b5
+$K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:4728254ce5
 $K rollout status sts/geodb --timeout=900s
 ```
 
