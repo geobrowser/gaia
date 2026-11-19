@@ -5,6 +5,8 @@ import type {DerivedScanReader, DerivedScoresReader, ScoreRow} from "../derived"
 import {
 	__resetBestOrderShadowMetricsForTests,
 	createBestOrderShadow,
+	mismatchKind,
+	pgNumericScore,
 	readBestOrderShadowConfig,
 	renderBestOrderShadowMetrics,
 	samePage,
@@ -115,6 +117,16 @@ describe("config, samePage and metrics", () => {
 		expect(samePage(["a", "b"], ["b", "a"])).toBe(false)
 		expect(samePage(["a"], ["a", "b"])).toBe(false)
 	})
+	it("tells a reorder from a different set of ids", () => {
+		expect(mismatchKind(["a", "b"], ["b", "a"])).toBe("order")
+		expect(mismatchKind(["a", "b"], ["a", "c"])).toBe("ids")
+		expect(mismatchKind(["a", "b"], ["a"])).toBe("ids")
+	})
+	it("rounds a score to the 15 digits a numeric column keeps", () => {
+		expect(pgNumericScore(1 - 2 ** -53)).toBe(1)
+		expect(pgNumericScore(0.12345678901234568)).toBe(0.123456789012346)
+		expect(pgNumericScore(0)).toBe(0)
+	})
 	it("exports nothing until mounted, then every series at zero", () => {
 		expect(renderBestOrderShadowMetrics()).toBe("")
 		createBestOrderShadow({config, db: fakeDb(agreeing), reader: reader(), log})
@@ -130,11 +142,50 @@ describe("runOnce", () => {
 		expect(count("global_score", "match")).toBe(1)
 		expect(count("local_score", "match")).toBe(1)
 	})
+	it("ties two scores that Postgres numeric cannot tell apart, as the SQL ORDER BY does", async () => {
+		// float8 -> numeric keeps 15 significant digits: 1 - 2^-53 and 1 are one value in Postgres, so the id breaks the tie
+		// (A before B), while the f64 scan puts B (1.0) ahead of A (0.9999999999999999).
+		const nearOne = 1 - 2 ** -53
+		const scan = vi.fn(async (collection: number) => ({
+			rows:
+				collection === 2
+					? [
+							{keyHex: hex(B), score: 2, valueHex: ""},
+							{keyHex: hex(A), score: 1, valueHex: ""},
+						]
+					: [
+							{keyHex: hex(B) + hex(S), score: 1, valueHex: ""},
+							{keyHex: hex(A) + hex(S), score: nearOne, valueHex: ""},
+						],
+			more: false,
+		}))
+		await createBestOrderShadow({config, db: fakeDb(agreeing), reader: reader({scan}), log}).runOnce()
+		expect(count("local_score", "match")).toBe(1)
+		expect(count("local_score", "mismatch")).toBe(0)
+	})
+	it("still separates scores that differ in the 15 digits Postgres keeps", async () => {
+		const scan = vi.fn(async (collection: number) => ({
+			rows:
+				collection === 2
+					? [
+							{keyHex: hex(B), score: 2, valueHex: ""},
+							{keyHex: hex(A), score: 1, valueHex: ""},
+						]
+					: [
+							{keyHex: hex(B) + hex(S), score: 1, valueHex: ""},
+							{keyHex: hex(A) + hex(S), score: 1 - 1e-9, valueHex: ""},
+						],
+			more: false,
+		}))
+		await createBestOrderShadow({config, db: fakeDb(agreeing), reader: reader({scan}), log}).runOnce()
+		expect(count("local_score", "mismatch")).toBe(1)
+	})
 	it("counts a mismatch when only the order differs, and logs counts only", async () => {
 		const swapped = {...agreeing, best: [hex(A), hex(B)], local: [hex(B), hex(A)]}
 		await createBestOrderShadow({config, db: fakeDb(swapped), reader: reader(), log}).runOnce()
 		expect(count("best_order", "mismatch")).toBe(1)
 		expect(count("local_score", "mismatch")).toBe(1)
+		expect(Number(/read="local_score",kind="order"\} (\d+)/.exec(renderBestOrderShadowMetrics())?.[1])).toBe(1)
 		expect(count("global_score", "match")).toBe(1)
 		expect(JSON.stringify(log.warn.mock.calls)).not.toContain(hex(A))
 	})
