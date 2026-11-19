@@ -117,6 +117,7 @@ pub struct IpfsClient {
     client: ReqwestClient,
     max_attempts: u32,
     base_backoff: Duration,
+    total_budget: Duration,
 }
 
 impl IpfsClient {
@@ -125,11 +126,12 @@ impl IpfsClient {
     /// verification (see [`Verification`]) — either is treated as "this
     /// attempt didn't get the real content," not "this content is invalid."
     ///
-    /// Six attempts with a 1 s base back off for 1+2+4+8+16 = 31 s between
-    /// attempts, so an in-line retry rides out a gateway blip of about half a
-    /// minute. The old three attempts 250 ms apart let under a second of
-    /// gateway trouble become a permanently errored row (GEO-3803).
-    const DEFAULT_MAX_ATTEMPTS: u32 = 6;
+    /// Fifteen attempts with a 1 s base back-off capped at 15 s
+    /// (1+2+4+8+15x10 = 165 s of waiting), so retries fill `DEFAULT_TOTAL_BUDGET`
+    /// and ride out about three minutes of gateway trouble. The old three
+    /// attempts 250 ms apart let under a second of trouble become a permanently
+    /// errored row (GEO-3803).
+    const DEFAULT_MAX_ATTEMPTS: u32 = 15;
     const DEFAULT_BASE_BACKOFF: Duration = Duration::from_secs(1);
     /// Longest a request may go without receiving any bytes. Without it, a
     /// gateway that accepts the connection and then stalls holds the fetch,
@@ -143,7 +145,13 @@ impl IpfsClient {
     /// Upper bound on any single retry's backoff, regardless of attempt
     /// count or configured base — keeps a large `max_attempts` from ever
     /// producing an absurd (if not overflowing) wait.
-    const MAX_BACKOFF: Duration = Duration::from_secs(30);
+    const MAX_BACKOFF: Duration = Duration::from_secs(15);
+    /// Hard upper bound on one `get_bytes` call, attempts and back-off
+    /// included. hermes-ipfs-cache relies on it: a URI holds a fetch permit
+    /// for at most this long, which keeps a block's fetches inside
+    /// hermes-pipeline's `IPFS_WARMER_WAIT_SECS` (see `MAX_CONCURRENT_FETCHES`
+    /// there).
+    const DEFAULT_TOTAL_BUDGET: Duration = Duration::from_secs(180);
 
     pub fn new(url: &str) -> Self {
         IpfsClient {
@@ -151,7 +159,15 @@ impl IpfsClient {
             client: Self::http_client(Self::DEFAULT_REQUEST_TIMEOUT),
             max_attempts: Self::DEFAULT_MAX_ATTEMPTS,
             base_backoff: Self::DEFAULT_BASE_BACKOFF,
+            total_budget: Self::DEFAULT_TOTAL_BUDGET,
         }
+    }
+
+    /// Replace the hard per-call budget (default 180 s): `get_bytes` returns
+    /// its last error once this much time has gone, whatever attempts remain.
+    pub fn with_total_budget(mut self, total_budget: Duration) -> Self {
+        self.total_budget = total_budget;
+        self
     }
 
     fn http_client(request_timeout: Duration) -> ReqwestClient {
@@ -229,9 +245,16 @@ impl IpfsFetcher for IpfsClient {
         // (transport error vs. hash mismatch) rather than conflating the
         // two across a mixed sequence of retries.
         let mut last_error: Option<IpfsError> = None;
+        let deadline = tokio::time::Instant::now() + self.total_budget;
 
         for attempt in 1..=self.max_attempts {
-            match self.fetch_once(cid).await {
+            let fetched = match tokio::time::timeout_at(deadline, self.fetch_once(cid)).await {
+                Ok(fetched) => fetched,
+                // Budget spent mid-request: report what the earlier attempts
+                // saw (e.g. 503) rather than a bare timeout, if anything.
+                Err(_) => return Err(last_error.unwrap_or(IpfsError::Timeout)),
+            };
+            match fetched {
                 Ok(bytes) => match verify::verify(cid, &bytes) {
                     Verification::Verified | Verification::Unsupported => return Ok(bytes),
                     Verification::Mismatch => {
@@ -282,13 +305,18 @@ impl IpfsFetcher for IpfsClient {
                     .base_backoff
                     .saturating_mul(multiplier)
                     .min(Self::MAX_BACKOFF);
+                // No attempt fits after the back-off: stop now rather than
+                // sleep into the deadline and start a request it would cut.
+                if tokio::time::Instant::now() + backoff >= deadline {
+                    break;
+                }
                 tokio::time::sleep(backoff).await;
             }
         }
 
         // Every loop iteration sets last_error before falling through to
-        // here (the only early return is the Ok(bytes) success path above),
-        // so this is always Some by the time max_attempts is exhausted.
+        // here (the early returns are success, a final error and a spent
+        // budget), so this is always Some once the loop ends.
         Err(last_error
             .expect("get_bytes retry loop always records an error before exhausting attempts"))
     }
@@ -674,5 +702,104 @@ mod retry_tests {
             .unwrap_err();
         assert!(matches!(err, IpfsError::HttpStatus { status: 404, .. }));
         // `expect(1)` is verified when the server drops.
+    }
+
+    // ---- GEO-3803: hard total budget per call -------------------------------
+
+    #[tokio::test]
+    async fn persistent_transient_failures_stop_at_the_total_budget() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let client = IpfsClient::with_retry_config(
+            &format!("{}/", server.uri()),
+            10_000,
+            Duration::from_millis(20),
+        )
+        .with_total_budget(Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        let err = client.get_bytes(GOLDEN_SMALL_CID).await.unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "budget not enforced"
+        );
+        assert!(
+            matches!(err, IpfsError::HttpStatus { status: 503, .. }),
+            "{err:?}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().len() > 1,
+            "never retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_budget_cuts_a_hung_attempt_and_keeps_the_earlier_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(GOLDEN_SMALL_BYTES)
+                    .set_delay(Duration::from_secs(30)),
+            )
+            .mount(&server)
+            .await;
+        let client = test_client(&server).with_total_budget(Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        let err = client.get_bytes(GOLDEN_SMALL_CID).await.unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "budget not enforced"
+        );
+        assert!(
+            matches!(err, IpfsError::HttpStatus { status: 503, .. }),
+            "{err:?}"
+        );
+        assert!(err.is_transient());
+    }
+
+    #[tokio::test]
+    async fn a_transient_failure_within_the_budget_recovers() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(GOLDEN_SMALL_BYTES))
+            .mount(&server)
+            .await;
+        let client = test_client(&server).with_total_budget(Duration::from_secs(10));
+        assert_eq!(
+            client.get_bytes(GOLDEN_SMALL_CID).await.unwrap(),
+            GOLDEN_SMALL_BYTES
+        );
+    }
+
+    #[test]
+    fn default_retries_fill_but_never_exceed_the_budget() {
+        let c = IpfsClient::new("http://example.invalid/");
+        let waits: Duration = (1..c.max_attempts)
+            .map(|a| {
+                c.base_backoff
+                    .saturating_mul(2u32.checked_pow(a - 1).unwrap_or(u32::MAX))
+                    .min(IpfsClient::MAX_BACKOFF)
+            })
+            .sum();
+        assert_eq!(waits, Duration::from_secs(165));
+        assert!(waits < c.total_budget);
+        assert_eq!(c.total_budget, Duration::from_secs(180));
     }
 }
