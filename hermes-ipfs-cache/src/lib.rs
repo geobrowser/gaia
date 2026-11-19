@@ -60,8 +60,8 @@ const MAX_CONCURRENT_FETCHES: usize = 20;
 /// An errored row is a permanent verdict: `Cache::put` is first-write-wins and
 /// hermes-pipeline drops an edit whose row is errored. So a transient failure
 /// is retried in rounds (each round is the client's own in-line retries) until
-/// a hard deadline `window` after the warmer started the block (shared by all
-/// its URIs), holding this block's cursor so the pipeline waits rather than
+/// a hard deadline `window` after the block got its first fetch permit (shared
+/// by all its URIs), holding this block's cursor so the pipeline waits rather than
 /// moving on. Only a failure
 /// that outlasts the window is written as errored, where `reconcile_errored`
 /// can still find it.
@@ -310,7 +310,9 @@ impl Sink for IpfsCacheSink {
         // One retry deadline for the whole block (see `TransientRetry`): URIs
         // wait for permits in waves of MAX_CONCURRENT_FETCHES, so a per-URI
         // deadline would stack up wave after wave past hermes-pipeline's wait.
-        let block_deadline = tokio::time::Instant::now() + self.transient_retry.window;
+        // It starts when this block gets its first permit, so time spent
+        // queued behind EARLIER blocks does not eat this block's window.
+        let mut block_deadline: Option<tokio::time::Instant> = None;
 
         // Process each IPFS URI
         for ipfs_uri in uri_list.uris {
@@ -322,7 +324,9 @@ impl Sink for IpfsCacheSink {
             let block_str = block_number.to_string();
             let block_num = block_number;
             let transient_retry = self.transient_retry;
-            let retry_deadline = block_deadline;
+            let window = self.transient_retry.window;
+            let retry_deadline =
+                *block_deadline.get_or_insert_with(|| tokio::time::Instant::now() + window);
 
             let ipfs_hash = ipfs_uri
                 .uri
