@@ -39,7 +39,7 @@ use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{IpfsUri, IpfsUriList};
-use ipfs::{IpfsFetcher, IpfsSource};
+use ipfs::{IpfsError, IpfsFetcher, IpfsSource};
 use prost::Message;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
@@ -59,14 +59,16 @@ const MAX_CONCURRENT_FETCHES: usize = 20;
 ///
 /// An errored row is a permanent verdict: `Cache::put` is first-write-wins and
 /// hermes-pipeline drops an edit whose row is errored. So a transient failure
-/// is retried in rounds (each round is the client's own in-line retries) for
-/// `window`, holding this block's cursor so the pipeline waits rather than
-/// moving on. Only a failure that outlasts the window is written as errored,
-/// where `reconcile_errored` can still find it.
+/// is retried in rounds (each round is the client's own in-line retries) until
+/// a hard deadline `window` after the first attempt started, holding this
+/// block's cursor so the pipeline waits rather than moving on. Only a failure
+/// that outlasts the window is written as errored, where `reconcile_errored`
+/// can still find it.
 ///
-/// The window bounds when the LAST round may start; a round itself runs up to
-/// about 3.5 minutes (`ipfs::IpfsClient`), so the default of 5 minutes keeps a
-/// stuck fetch inside hermes-pipeline's 10-minute `IPFS_WARMER_WAIT_SECS`.
+/// Cost: hermes-pipeline handles blocks in order, so while one URI is in its
+/// window every later block waits too. The default of 3 minutes leaves wide
+/// margin under hermes-pipeline's 10-minute `IPFS_WARMER_WAIT_SECS`, past
+/// which the pipeline would drop the edit anyway.
 #[derive(Debug, Clone, Copy)]
 pub struct TransientRetry {
     pub window: Duration,
@@ -75,15 +77,22 @@ pub struct TransientRetry {
 }
 
 impl TransientRetry {
-    const DEFAULT_WINDOW_SECS: u64 = 300;
+    const DEFAULT_WINDOW_SECS: u64 = 180;
 
     /// Defaults, with the window overridable via `IPFS_TRANSIENT_RETRY_SECS`
     /// (0 restores the old write-errored-at-once behaviour).
     pub fn from_env() -> Self {
-        let window_secs = std::env::var("IPFS_TRANSIENT_RETRY_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(Self::DEFAULT_WINDOW_SECS);
+        let window_secs = match std::env::var("IPFS_TRANSIENT_RETRY_SECS") {
+            Ok(v) => v.trim().parse().unwrap_or_else(|_| {
+                warn!(
+                    value = %v,
+                    default = Self::DEFAULT_WINDOW_SECS,
+                    "IPFS_TRANSIENT_RETRY_SECS is not a whole number of seconds; using the default"
+                );
+                Self::DEFAULT_WINDOW_SECS
+            }),
+            Err(_) => Self::DEFAULT_WINDOW_SECS,
+        };
         Self {
             window: Duration::from_secs(window_secs),
             base_backoff: Duration::from_secs(15),
@@ -459,15 +468,37 @@ async fn process_ipfs_uri(
         "Processing edit"
     );
 
-    // Fetch the raw bytes from IPFS, re-fetching transient failures for up to
-    // `transient_retry.window` (see `TransientRetry`).
+    // Fetch the raw bytes from IPFS, re-fetching transient failures until a hard
+    // deadline `transient_retry.window` from now (see `TransientRetry`). With a
+    // zero window the single attempt is bounded only by the client.
     let started = tokio::time::Instant::now();
+    let deadline = started + transient_retry.window;
     let mut round: u32 = 0;
     let result = loop {
-        match ipfs.get_bytes(&uri).await {
-            Err(error) if error.is_transient() && started.elapsed() < transient_retry.window => {
+        let attempt = if transient_retry.window.is_zero() {
+            ipfs.get_bytes(&uri).await
+        } else {
+            tokio::time::timeout_at(deadline, ipfs.get_bytes(&uri))
+                .await
+                .unwrap_or(Err(IpfsError::Timeout))
+        };
+        match attempt {
+            Err(error) if error.is_transient() && tokio::time::Instant::now() < deadline => {
+                // A warmer restart replays from the last persisted cursor and
+                // re-fetches URIs that already have a row. `put` would be a
+                // no-op (first write wins), so holding the block is pointless.
+                if round == 0 && cache.lock().await.get(&uri).await?.is_some() {
+                    debug!(
+                        uri = %uri,
+                        block = block_number,
+                        "Transient fetch failure for an already-cached URI; skipping"
+                    );
+                    return Ok(());
+                }
                 round += 1;
-                let backoff = transient_retry.backoff(round);
+                let backoff = transient_retry
+                    .backoff(round)
+                    .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
                 warn!(
                     event = "ipfs_cache.fetch_transient_retry",
                     uri = %uri,
@@ -895,5 +926,81 @@ mod tests {
         let secs: Vec<u64> = (1..=5).map(|n| r.backoff(n).as_secs()).collect();
         assert_eq!(secs, vec![15, 30, 60, 60, 60]);
         assert_eq!(r.backoff(u32::MAX), Duration::from_secs(60));
+    }
+
+    /// Never answers, like a gateway that accepted the connection and hung.
+    struct HangingFetcher;
+
+    #[async_trait::async_trait]
+    impl IpfsFetcher for HangingFetcher {
+        async fn get_bytes(&self, _uri: &str) -> ipfs::Result<Vec<u8>> {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_window_is_a_hard_deadline_even_on_a_hung_fetch() {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        let ipfs: Arc<dyn IpfsFetcher> = Arc::new(HangingFetcher);
+        let started = std::time::Instant::now();
+        process_ipfs_uri(
+            IpfsUri {
+                uri: URI.to_string(),
+                space_id: vec![0xaa; 16],
+                source: "edit".to_string(),
+            },
+            &cache,
+            &ipfs,
+            "100",
+            100,
+            &fast_retry(Duration::from_millis(50)),
+        )
+        .await
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "deadline not enforced"
+        );
+        let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+        assert!(item.is_errored);
+    }
+
+    #[tokio::test]
+    async fn an_already_cached_uri_does_not_hold_the_block_on_a_transient_failure() {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        cache
+            .lock()
+            .await
+            .put(&CacheItem {
+                uri: URI.to_string(),
+                data: Some(vec![1, 2, 3]),
+                block: "90".to_string(),
+                space_id: hex::encode([0xaa; 16]),
+                is_errored: false,
+                name: None,
+            })
+            .await
+            .unwrap();
+        let fetcher = scripted((0..10_000).map(|_| http(503)).collect());
+        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
+        process_ipfs_uri(
+            IpfsUri {
+                uri: URI.to_string(),
+                space_id: vec![0xaa; 16],
+                source: "edit".to_string(),
+            },
+            &cache,
+            &ipfs,
+            "100",
+            100,
+            &fast_retry(Duration::from_secs(3600)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+        assert!(!item.is_errored);
+        assert_eq!(item.block, "90");
     }
 }
