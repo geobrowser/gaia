@@ -57,8 +57,9 @@ pub enum IpfsError {
 
 impl IpfsError {
     /// Whether this failure says nothing about the content itself: the gateway
-    /// timed out, refused, rate-limited (429) or failed (5xx), or the connection
-    /// broke. Retrying later can succeed, so callers must not record a transient
+    /// timed out, refused, rate-limited (429), rejected our credentials
+    /// (401/403: a key problem, not a content verdict) or failed (5xx), or the
+    /// connection broke. Retrying later can succeed, so callers must not record a transient
     /// failure as a permanent verdict on the CID.
     ///
     /// Not transient: other 4xx statuses, content that never hashed to its CID
@@ -69,7 +70,7 @@ impl IpfsError {
             IpfsError::Reqwest(e) => !e.is_builder(),
             IpfsError::Io(_) | IpfsError::Timeout | IpfsError::NetworkError(_) => true,
             IpfsError::HttpStatus { status, .. } => {
-                *status == 408 || *status == 429 || *status >= 500
+                matches!(*status, 401 | 403 | 408 | 429) || *status >= 500
             }
             IpfsError::NotFound(_) | IpfsError::VerificationFailed { .. } => false,
         }
@@ -130,10 +131,14 @@ impl IpfsClient {
     /// gateway trouble become a permanently errored row (GEO-3803).
     const DEFAULT_MAX_ATTEMPTS: u32 = 6;
     const DEFAULT_BASE_BACKOFF: Duration = Duration::from_secs(1);
-    /// Whole-request deadline (connect, headers and body). Without one, a
+    /// Longest a request may go without receiving any bytes. Without it, a
     /// gateway that accepts the connection and then stalls holds the fetch,
     /// and the warmer permit with it, indefinitely.
-    const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    const READ_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Whole-request deadline (connect, headers and body). Generous, so a large
+    /// edit downloading slowly but steadily still completes; `READ_TIMEOUT`
+    /// catches the stalled case.
+    const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
     /// Upper bound on any single retry's backoff, regardless of attempt
     /// count or configured base — keeps a large `max_attempts` from ever
@@ -152,6 +157,7 @@ impl IpfsClient {
     fn http_client(request_timeout: Duration) -> ReqwestClient {
         ReqwestClient::builder()
             .timeout(request_timeout)
+            .read_timeout(Self::READ_TIMEOUT.min(request_timeout))
             .connect_timeout(Self::CONNECT_TIMEOUT.min(request_timeout))
             .build()
             // Same failure mode as `ReqwestClient::new()`, which panics if the
@@ -159,7 +165,8 @@ impl IpfsClient {
             .expect("failed to build the IPFS HTTP client")
     }
 
-    /// Replace the whole-request timeout (default 30 s). Mainly for tests.
+    /// Replace the whole-request timeout (default 120 s; the 30 s stall timeout
+    /// is capped at it). Mainly for tests.
     pub fn with_request_timeout(mut self, request_timeout: Duration) -> Self {
         self.client = Self::http_client(request_timeout);
         self
@@ -241,6 +248,18 @@ impl IpfsFetcher for IpfsClient {
                         });
                     }
                 },
+                Err(err) if !err.is_transient() => {
+                    // A final answer (e.g. 404): retrying in-line only holds
+                    // the caller. CID mismatches above are still retried, as a
+                    // truncated 200 is a transport fault in disguise.
+                    warn!(
+                        cid = %cid,
+                        attempt,
+                        error = %err,
+                        "IPFS fetch failed with a final error, not retrying"
+                    );
+                    return Err(err);
+                }
                 Err(err) => {
                     warn!(
                         cid = %cid,
@@ -594,6 +613,8 @@ mod retry_tests {
             (504, true),
             (429, true),
             (408, true),
+            (401, true),
+            (403, true),
             (404, false),
             (400, false),
             (410, false),
@@ -637,5 +658,21 @@ mod retry_tests {
         .is_transient());
         assert!(!IpfsError::NotFound("Qm".into()).is_transient());
         assert!(IpfsError::Timeout.is_transient());
+    }
+
+    #[tokio::test]
+    async fn a_final_status_is_not_retried_in_line() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let err = test_client(&server)
+            .get_bytes(GOLDEN_SMALL_CID)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IpfsError::HttpStatus { status: 404, .. }));
+        // `expect(1)` is verified when the server drops.
     }
 }
