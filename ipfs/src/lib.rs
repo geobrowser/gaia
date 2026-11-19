@@ -58,11 +58,13 @@ pub enum IpfsError {
 impl IpfsError {
     /// Whether this failure says nothing about the content itself: the gateway
     /// timed out, refused, rate-limited (429), rejected our credentials
-    /// (401/403: a key problem, not a content verdict) or failed (5xx), or the
-    /// connection broke. Retrying later can succeed, so callers must not record a transient
+    /// (401/403: a key problem, not a content verdict), could not find the CID
+    /// yet (404: freshly uploaded content may not have reached this gateway) or
+    /// failed (5xx), or the connection broke. Retrying later can succeed, so callers must not record a transient
     /// failure as a permanent verdict on the CID.
     ///
-    /// Not transient: other 4xx statuses, content that never hashed to its CID
+    /// Not transient: other 4xx statuses (400 malformed CID, 410 gone, ...),
+    /// content that never hashed to its CID
     /// ([`IpfsError::VerificationFailed`]), and [`IpfsError::NotFound`] (the mock
     /// client's "no such CID").
     pub fn is_transient(&self) -> bool {
@@ -70,7 +72,7 @@ impl IpfsError {
             IpfsError::Reqwest(e) => !e.is_builder(),
             IpfsError::Io(_) | IpfsError::Timeout | IpfsError::NetworkError(_) => true,
             IpfsError::HttpStatus { status, .. } => {
-                matches!(*status, 401 | 403 | 408 | 429) || *status >= 500
+                matches!(*status, 401 | 403 | 404 | 408 | 429) || *status >= 500
             }
             IpfsError::NotFound(_) | IpfsError::VerificationFailed { .. } => false,
         }
@@ -272,7 +274,7 @@ impl IpfsFetcher for IpfsClient {
                     }
                 },
                 Err(err) if !err.is_transient() => {
-                    // A final answer (e.g. 404): retrying in-line only holds
+                    // A final answer (e.g. 400, 410): retrying in-line only holds
                     // the caller. CID mismatches above are still retried, as a
                     // truncated 200 is a transport fault in disguise.
                     warn!(
@@ -643,7 +645,7 @@ mod retry_tests {
             (408, true),
             (401, true),
             (403, true),
-            (404, false),
+            (404, true),
             (400, false),
             (410, false),
         ] {
@@ -692,7 +694,7 @@ mod retry_tests {
     async fn a_final_status_is_not_retried_in_line() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(404))
+            .respond_with(ResponseTemplate::new(400))
             .expect(1)
             .mount(&server)
             .await;
@@ -700,7 +702,7 @@ mod retry_tests {
             .get_bytes(GOLDEN_SMALL_CID)
             .await
             .unwrap_err();
-        assert!(matches!(err, IpfsError::HttpStatus { status: 404, .. }));
+        assert!(matches!(err, IpfsError::HttpStatus { status: 400, .. }));
         // `expect(1)` is verified when the server drops.
     }
 
@@ -801,5 +803,26 @@ mod retry_tests {
         assert_eq!(waits, Duration::from_secs(165));
         assert!(waits < c.total_budget);
         assert_eq!(c.total_budget, Duration::from_secs(180));
+    }
+
+    /// Fresh content that has not reached the gateway yet: 404 at first, then
+    /// served. It must be retried within the budget, not cached as errored.
+    #[tokio::test]
+    async fn a_404_for_fresh_content_is_retried_until_it_appears() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(GOLDEN_SMALL_BYTES))
+            .mount(&server)
+            .await;
+        let client = test_client(&server).with_total_budget(Duration::from_secs(10));
+        assert_eq!(
+            client.get_bytes(GOLDEN_SMALL_CID).await.unwrap(),
+            GOLDEN_SMALL_BYTES
+        );
     }
 }

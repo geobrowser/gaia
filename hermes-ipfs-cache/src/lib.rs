@@ -425,7 +425,7 @@ async fn process_ipfs_uri(
     }
 
     // Fetch the raw bytes from IPFS. The client retries transient failures
-    // (timeouts, 429, 5xx, 401/403) for up to its 180 s budget; what comes back
+    // (timeouts, 404, 429, 5xx, 401/403) for up to its 180 s budget; what comes back
     // here is final for this pass.
     let result = ipfs.get_bytes(&uri).await;
 
