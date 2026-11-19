@@ -202,6 +202,22 @@ if (rateLimiter) {
 	app.use("*", rateLimiter)
 }
 
+// Dedicated, much tighter per-IP limiter for the anonymous IPFS upload routes.
+// Its own key prefix keeps it independent of the global read limiter above, so
+// a single IP can be throttled on writes without touching the read API's high
+// ceiling. Applied inside the IPFS router (see its mount below). Defaults to
+// 60 uploads/min/IP; overridable without a code change.
+const uploadRateLimiter =
+	createRateLimiter(process.env.VALKEY_URL, {
+		keyPrefix: "ratelimit:ipfs-upload",
+		windowMs: process.env.IPFS_UPLOAD_RATE_LIMIT_WINDOW_MS
+			? Number(process.env.IPFS_UPLOAD_RATE_LIMIT_WINDOW_MS)
+			: 60_000,
+		maxRequests: process.env.IPFS_UPLOAD_RATE_LIMIT_MAX_REQUESTS
+			? Number(process.env.IPFS_UPLOAD_RATE_LIMIT_MAX_REQUESTS)
+			: 60,
+	}) ?? undefined
+
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
 
@@ -718,7 +734,7 @@ if (internalRoutes === "enabled") {
 }
 
 // Mount IPFS upload router
-app.route("/ipfs", createIpfsRouter(uploadEdit, uploadFile, runtime))
+app.route("/ipfs", createIpfsRouter(uploadEdit, uploadFile, runtime, uploadRateLimiter))
 log.info("IPFS routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))

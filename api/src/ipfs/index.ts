@@ -13,6 +13,7 @@
  */
 
 import {Effect, Either} from "effect"
+import type {MiddlewareHandler} from "hono"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import type {Environment} from "../services/environment"
@@ -27,6 +28,18 @@ type AppEnv = {
 const EMPTY_FILE_LOG_MESSAGE = "Empty file provided"
 const EMPTY_FILE_ERROR_MESSAGE = "File cannot be empty"
 const INVALID_MULTIPART_ERROR_MESSAGE = "Invalid multipart body"
+
+// Upload is anonymous by design (the publish flow is wallet/client-side with no
+// server session), so a single oversized or high-volume caller is the realistic
+// abuse vector against Filebase-backed storage, not auth bypass. Cap the file
+// size here; the per-IP upload rate limit is wired separately in main.ts.
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // 25 MiB
+// Content-Length includes multipart framing (boundaries, part headers), so it
+// runs a little over the file's own bytes. Allow a small margin before the
+// pre-parse reject so a file right at the cap isn't refused by framing alone;
+// the authoritative check is file.size, below.
+const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 64 * 1024
+const TOO_LARGE_ERROR_MESSAGE = `File exceeds the ${MAX_UPLOAD_BYTES / (1024 * 1024)} MiB limit`
 
 // OpenAPI response descriptions — kept as constants so the three routes stay
 // in lockstep without copy-paste drift.
@@ -45,6 +58,15 @@ function createUploadHandler(opts: {spanName: string; upload: UploadFn; runtime:
 
 	return async (c: import("hono").Context<AppEnv>) => {
 		const requestId = c.get("requestId") ?? "unknown"
+
+		// Reject an over-cap body before buffering it into memory. A declared
+		// Content-Length past the limit is refused up front so a large upload
+		// never gets parsed; file.size (below) is the authoritative check for
+		// requests that lie about or omit Content-Length.
+		const declaredLength = Number(c.req.header("content-length"))
+		if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
+			return new Response(TOO_LARGE_ERROR_MESSAGE, {status: 413})
+		}
 
 		// Reject non-multipart bodies (bare POST, wrong content-type, malformed
 		// boundary, etc.) with 400 instead of letting the parse exception bubble
@@ -74,6 +96,15 @@ function createUploadHandler(opts: {spanName: string; upload: UploadFn; runtime:
 					_tag: "ValidationError" as const,
 					status: 400,
 					message: EMPTY_FILE_ERROR_MESSAGE,
+				})
+			}
+
+			if (file.size > MAX_UPLOAD_BYTES) {
+				yield* Effect.logWarning("File exceeds size limit", {fileSize: file.size})
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 413,
+					message: TOO_LARGE_ERROR_MESSAGE,
 				})
 			}
 
@@ -156,9 +187,25 @@ const uploadFailedSchema = {
  * @param uploadEdit - Effect-based uploader for binary edits (Pinata-backed in production)
  * @param uploadFile - Effect-based uploader for arbitrary files (Pinata-backed in production)
  * @param runtime    - Effect runtime that supplies Environment + telemetry
+ * @param uploadRateLimiter - optional per-IP limiter applied to every upload
+ *        route. These are anonymous writes to shared storage, so they get a
+ *        bucket far tighter than the global read-API limit; omitted (e.g. in
+ *        tests, or when VALKEY_URL is unset) the routes are simply unthrottled
+ *        beyond the global limiter.
  */
-export function createIpfsRouter(uploadEdit: UploadFn, uploadFile: UploadFn, runtime: AppRuntime) {
+export function createIpfsRouter(
+	uploadEdit: UploadFn,
+	uploadFile: UploadFn,
+	runtime: AppRuntime,
+	uploadRateLimiter?: MiddlewareHandler,
+) {
 	const router = new Hono<AppEnv>()
+
+	// Runs before any route handler below, so every upload path (and only
+	// upload paths — this router holds nothing else) is rate limited.
+	if (uploadRateLimiter) {
+		router.use("*", uploadRateLimiter)
+	}
 
 	router.post(
 		"/upload-edit",
