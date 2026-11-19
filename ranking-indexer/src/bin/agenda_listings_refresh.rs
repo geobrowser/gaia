@@ -27,6 +27,7 @@ use ranking_indexer::agenda_rescore_compute as rescore;
 use ranking_indexer::entity_ranking_score_compute as scores;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 
 /// `AGENDA_LISTINGS_RUST_COMPUTE` (default off): after the refresh, compute the listings table again
@@ -578,27 +579,43 @@ async fn run() -> Result<(), IndexerError> {
     }
     if scored.is_some() && rust_compute_enabled() {
         match shadow(&pool).await {
-            Ok((0, n)) => info!(rows = n, "agenda listings rust compute matches the SQL"),
-            Ok((bad, n)) => warn!(
-                mismatched = bad,
-                rows = n,
-                "agenda listings rust compute differs from the SQL"
-            ),
-            Err(e) => warn!(error = %e, "agenda listings rust compute skipped"),
+            Ok((0, n)) => {
+                rust_compute_shadow(ComputeFlag::AgendaListings, ShadowOutcome::Match);
+                info!(rows = n, "agenda listings rust compute matches the SQL")
+            }
+            Ok((bad, n)) => {
+                rust_compute_shadow(ComputeFlag::AgendaListings, ShadowOutcome::Mismatch);
+                warn!(
+                    mismatched = bad,
+                    rows = n,
+                    "agenda listings rust compute differs from the SQL"
+                )
+            }
+            Err(e) => {
+                rust_compute_shadow(ComputeFlag::AgendaListings, ShadowOutcome::Failed);
+                warn!(error = %e, "agenda listings rust compute skipped")
+            }
         }
     }
     if let (Some(before), Some(scored)) = (&rescore_state, scored) {
         match rescore_shadow(&pool, before, scored).await {
             Ok((n, sql, 0)) if n as i64 == i64::from(sql) => {
+                rust_compute_shadow(ComputeFlag::AgendaRescore, ShadowOutcome::Match);
                 info!(ids = n, "agenda rescore rust compute matches the SQL")
             }
-            Ok((n, sql, bad)) => warn!(
-                rust_ids = n,
-                sql_scored = sql,
-                terms_differ = bad,
-                "agenda rescore rust compute differs from the SQL"
-            ),
-            Err(e) => warn!(error = %e, "agenda rescore rust compute skipped"),
+            Ok((n, sql, bad)) => {
+                rust_compute_shadow(ComputeFlag::AgendaRescore, ShadowOutcome::Mismatch);
+                warn!(
+                    rust_ids = n,
+                    sql_scored = sql,
+                    terms_differ = bad,
+                    "agenda rescore rust compute differs from the SQL"
+                )
+            }
+            Err(e) => {
+                rust_compute_shadow(ComputeFlag::AgendaRescore, ShadowOutcome::Failed);
+                warn!(error = %e, "agenda rescore rust compute skipped")
+            }
         }
     }
     if let Some(mirror) = &mirror {
@@ -668,6 +685,7 @@ async fn shadow_scores(pool: &sqlx::PgPool) {
                 comment_cap: c.11,
             },
             Err(e) => {
+                rust_compute_shadow(ComputeFlag::EntityRankingScore, ShadowOutcome::Failed);
                 warn!(error = %e, "entity ranking score shadow skipped: config read failed");
                 return;
             }
@@ -679,6 +697,10 @@ async fn shadow_scores(pool: &sqlx::PgPool) {
     {
         Ok(rows) => {
             let bad = scores::mismatches(&cfg, &rows);
+            rust_compute_shadow(
+                ComputeFlag::EntityRankingScore,
+                ShadowOutcome::from_mismatches(bad.len()),
+            );
             if bad.is_empty() {
                 info!(
                     checked = rows.len(),
@@ -693,6 +715,9 @@ async fn shadow_scores(pool: &sqlx::PgPool) {
                 );
             }
         }
-        Err(e) => warn!(error = %e, "entity ranking score shadow skipped: read failed"),
+        Err(e) => {
+            rust_compute_shadow(ComputeFlag::EntityRankingScore, ShadowOutcome::Failed);
+            warn!(error = %e, "entity ranking score shadow skipped: read failed")
+        }
     }
 }

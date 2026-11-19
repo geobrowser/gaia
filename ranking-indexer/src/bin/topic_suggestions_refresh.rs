@@ -20,6 +20,7 @@ use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_suggestions_compute as compute;
 use ranking_indexer::topic_suggestions_mirror::{self, Suggestion};
@@ -144,13 +145,22 @@ async fn main() -> Result<(), IndexerError> {
     }
     if refreshed.is_some() && rust_compute_enabled() {
         match shadow(&pool).await {
-            Ok((0, n)) => info!(rows = n, "topic suggestions rust compute matches the SQL"),
-            Ok((bad, n)) => warn!(
-                mismatched = bad,
-                rows = n,
-                "topic suggestions rust compute differs from the SQL"
-            ),
-            Err(e) => warn!(error = %e, "topic suggestions rust compute skipped"),
+            Ok((0, n)) => {
+                rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Match);
+                info!(rows = n, "topic suggestions rust compute matches the SQL")
+            }
+            Ok((bad, n)) => {
+                rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Mismatch);
+                warn!(
+                    mismatched = bad,
+                    rows = n,
+                    "topic suggestions rust compute differs from the SQL"
+                )
+            }
+            Err(e) => {
+                rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Failed);
+                warn!(error = %e, "topic suggestions rust compute skipped")
+            }
         }
     }
     if let Some(mirror) = &mirror {

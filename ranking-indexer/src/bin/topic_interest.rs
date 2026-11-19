@@ -19,6 +19,7 @@ use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_cooccurrence_compute as cooc;
 use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
@@ -158,13 +159,25 @@ async fn run() -> Result<(), IndexerError> {
             }
             if refit.is_some() && cooc_rust_enabled() {
                 match cooc_shadow(&pool).await {
-                    Ok((0, n)) => info!(rows = n, "co-occurrence rust compute matches the SQL"),
-                    Ok((bad, n)) => warn!(
-                        mismatched = bad,
-                        rows = n,
-                        "co-occurrence rust compute differs from the SQL"
-                    ),
-                    Err(e) => warn!(error = %e, "co-occurrence rust compute skipped"),
+                    Ok((0, n)) => {
+                        rust_compute_shadow(ComputeFlag::TopicCooccurrence, ShadowOutcome::Match);
+                        info!(rows = n, "co-occurrence rust compute matches the SQL")
+                    }
+                    Ok((bad, n)) => {
+                        rust_compute_shadow(
+                            ComputeFlag::TopicCooccurrence,
+                            ShadowOutcome::Mismatch,
+                        );
+                        warn!(
+                            mismatched = bad,
+                            rows = n,
+                            "co-occurrence rust compute differs from the SQL"
+                        )
+                    }
+                    Err(e) => {
+                        rust_compute_shadow(ComputeFlag::TopicCooccurrence, ShadowOutcome::Failed);
+                        warn!(error = %e, "co-occurrence rust compute skipped")
+                    }
                 }
             }
             if let Some(mirror) = &mirror {

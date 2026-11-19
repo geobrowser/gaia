@@ -314,6 +314,10 @@ pub async fn before(conn: &mut PgConnection) -> Option<Snapshot> {
     let mut sp = match sqlx::Acquire::begin(&mut *conn).await {
         Ok(sp) => sp,
         Err(e) => {
+            crate::metrics::rust_compute_shadow(
+                crate::metrics::ComputeFlag::DebateWatch,
+                crate::metrics::ShadowOutcome::Failed,
+            );
             tracing::warn!(error = %e, "debate watch rust compute skipped: no savepoint");
             return None;
         }
@@ -325,6 +329,10 @@ pub async fn before(conn: &mut PgConnection) -> Option<Snapshot> {
         }
         Err(e) => {
             let _ = sp.rollback().await;
+            crate::metrics::rust_compute_shadow(
+                crate::metrics::ComputeFlag::DebateWatch,
+                crate::metrics::ShadowOutcome::Failed,
+            );
             tracing::warn!(error = %e, "debate watch rust compute skipped: read failed");
             None
         }
@@ -368,12 +376,21 @@ pub async fn after(conn: &mut PgConnection, snap: Snapshot, rescored: i32) {
     .await;
     match stored {
         Err(e) => {
+            crate::metrics::rust_compute_shadow(
+                crate::metrics::ComputeFlag::DebateWatch,
+                crate::metrics::ShadowOutcome::Failed,
+            );
             tracing::warn!(error = %e, "debate watch rust compute skipped: stored scores unreadable")
         }
         Ok(rows) => {
             let stored: HashMap<Uuid, f64> = rows.into_iter().collect();
             let (compared, differ, missing) = compare_stored(&rust, &stored);
-            if rescored as usize == scorable.len() && differ == 0 && missing == 0 {
+            let agrees = rescored as usize == scorable.len() && differ == 0 && missing == 0;
+            crate::metrics::rust_compute_shadow(
+                crate::metrics::ComputeFlag::DebateWatch,
+                crate::metrics::ShadowOutcome::from_agreement(agrees),
+            );
+            if agrees {
                 tracing::info!(
                     selected = ids.len(),
                     rescored,

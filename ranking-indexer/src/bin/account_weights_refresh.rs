@@ -25,6 +25,7 @@ use ranking_indexer::account_weights_compute::{self, Params, VoterAgg};
 use ranking_indexer::account_weights_mirror::{self, AccountWeight};
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use uuid::Uuid;
 
@@ -110,6 +111,10 @@ async fn main() -> Result<(), IndexerError> {
                         Ok(rust) => {
                             let mismatched =
                                 account_weights_compute::count_mismatches(&rust, &table);
+                            rust_compute_shadow(
+                                ComputeFlag::AccountWeights,
+                                ShadowOutcome::from_mismatches(mismatched),
+                            );
                             info!(
                                 rust = rust.len(),
                                 table = table.len(),
@@ -123,6 +128,7 @@ async fn main() -> Result<(), IndexerError> {
                             }
                         }
                         Err(e) => {
+                            rust_compute_shadow(ComputeFlag::AccountWeights, ShadowOutcome::Failed);
                             tracing::warn!(error = %e, "account weights rust compute skipped");
                             table
                         }
@@ -162,12 +168,19 @@ async fn main() -> Result<(), IndexerError> {
                 let weights = rows.into_iter().collect();
                 let mismatched =
                     ranking_indexer::account_vote_weight::count_mismatches(&weights, &asked);
+                rust_compute_shadow(
+                    ComputeFlag::AccountVoteWeight,
+                    ShadowOutcome::from_mismatches(mismatched),
+                );
                 info!(
                     asked = asked.len(),
                     mismatched, "account vote weight rust twin checked"
                 );
             }
-            _ => tracing::warn!("account vote weight rust twin skipped: read failed"),
+            _ => {
+                rust_compute_shadow(ComputeFlag::AccountVoteWeight, ShadowOutcome::Failed);
+                tracing::warn!("account vote weight rust twin skipped: read failed")
+            }
         }
     }
     match scored {

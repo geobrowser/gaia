@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use ranking_indexer::topic_ranking_compute::{
     created_epoch, FeedKey, FeedRow, Graph, Rel, TopicConfig, Value, Vote,
@@ -363,15 +364,22 @@ async fn main() -> Result<(), IndexerError> {
             let mut sp = tx.begin().await?;
             match debate_shadow(&mut sp).await {
                 Ok((ids, 0)) if ids as i64 == i64::from(topic_debates) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Match);
                     info!(ids, "topic debate rust compute matches the SQL")
                 }
-                Ok((ids, differ)) => warn!(
-                    rust_ids = ids,
-                    sql_scored = topic_debates,
-                    scores_differ = differ,
-                    "topic debate rust compute differs from the SQL"
-                ),
-                Err(e) => warn!(error = %e, "topic debate rust compute skipped"),
+                Ok((ids, differ)) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Mismatch);
+                    warn!(
+                        rust_ids = ids,
+                        sql_scored = topic_debates,
+                        scores_differ = differ,
+                        "topic debate rust compute differs from the SQL"
+                    )
+                }
+                Err(e) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Failed);
+                    warn!(error = %e, "topic debate rust compute skipped")
+                }
             }
             let _ = sp.rollback().await;
         }
@@ -383,6 +391,7 @@ async fn main() -> Result<(), IndexerError> {
             match read {
                 Ok(b) => Some(b),
                 Err(e) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Failed);
                     warn!(error = %e, "topic ranking rust compute skipped: before-state read failed");
                     None
                 }
@@ -397,15 +406,22 @@ async fn main() -> Result<(), IndexerError> {
             let mut sp = tx.begin().await?;
             match reconcile_shadow(&mut sp, before).await {
                 Ok((n, 0)) if n as i64 == i64::from(changed) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Match);
                     info!(changed = n, "topic ranking rust compute matches the SQL")
                 }
-                Ok((n, differ)) => warn!(
-                    rust_changed = n,
-                    sql_changed = changed,
-                    rows_differ = differ,
-                    "topic ranking rust compute differs from the SQL"
-                ),
-                Err(e) => warn!(error = %e, "topic ranking rust compute skipped"),
+                Ok((n, differ)) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Mismatch);
+                    warn!(
+                        rust_changed = n,
+                        sql_changed = changed,
+                        rows_differ = differ,
+                        "topic ranking rust compute differs from the SQL"
+                    )
+                }
+                Err(e) => {
+                    rust_compute_shadow(ComputeFlag::TopicRanking, ShadowOutcome::Failed);
+                    warn!(error = %e, "topic ranking rust compute skipped")
+                }
             }
             let _ = sp.rollback().await;
         }

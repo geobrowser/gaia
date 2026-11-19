@@ -48,6 +48,7 @@ use ranking_indexer::account_exclusions_mirror::{self, AccountExclusion};
 use ranking_indexer::clickhouse::{self, KNOWN_ADDRESS, KNOWN_HASH};
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 
 const VIEW_QUERY: &str =
@@ -324,7 +325,10 @@ async fn main() -> Result<(), IndexerError> {
         sqlx::query_as("SELECT user_id::text, reason, source FROM public.account_exclusions")
             .fetch_all(&pool)
             .await
-            .map_err(|e| warn!(error = %e, "exclusions rust twin skipped: prior read failed"))
+            .map_err(|e| {
+                rust_compute_shadow(ComputeFlag::AccountExclusions, ShadowOutcome::Failed);
+                warn!(error = %e, "exclusions rust twin skipped: prior read failed")
+            })
             .ok()
     } else {
         None
@@ -417,6 +421,7 @@ async fn shadow(
             .fetch_all(pool)
             .await;
     let Ok(after) = after else {
+        rust_compute_shadow(ComputeFlag::AccountExclusions, ShadowOutcome::Failed);
         warn!("exclusions rust twin skipped: table read failed");
         return;
     };
@@ -430,16 +435,24 @@ async fn shadow(
         .collect();
     match c::replace(&existing, Some(&rows), SOURCE) {
         Ok((w, table)) if w == i64::from(written) && table == sql => {
+            rust_compute_shadow(ComputeFlag::AccountExclusions, ShadowOutcome::Match);
             info!("exclusions rust twin agrees with the SQL replace")
         }
-        Ok((w, table)) => warn!(
-            rust_written = w,
-            sql_written = written,
-            rust_rows = table.len(),
-            sql_rows = sql.len(),
-            "exclusions rust twin differs from the SQL replace"
-        ),
-        Err(r) => warn!(refusal = ?r, "exclusions rust twin refused where the SQL did not"),
+        Ok((w, table)) => {
+            rust_compute_shadow(ComputeFlag::AccountExclusions, ShadowOutcome::Mismatch);
+            warn!(
+                rust_written = w,
+                sql_written = written,
+                rust_rows = table.len(),
+                sql_rows = sql.len(),
+                "exclusions rust twin differs from the SQL replace"
+            )
+        }
+        Err(r) => {
+            // The SQL replace succeeded, so a twin refusal is a disagreement.
+            rust_compute_shadow(ComputeFlag::AccountExclusions, ShadowOutcome::Mismatch);
+            warn!(refusal = ?r, "exclusions rust twin refused where the SQL did not")
+        }
     }
 }
 

@@ -35,6 +35,7 @@ use ranking_indexer::feed_signals_compute as compute;
 use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
 use ranking_indexer::feed_user_seen_mirror::{self, Seen};
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use ranking_indexer::ranking_config;
 
@@ -106,6 +107,7 @@ async fn shadow(
             .fetch_all(pool)
             .await;
     let (Ok((revise, backfill, uret, iret)), Ok(spaces)) = (cfg, spaces) else {
+        rust_compute_shadow(ComputeFlag::FeedSignals, ShadowOutcome::Failed);
         warn!("feed signals rust twin skipped: config or spaces read failed");
         return;
     };
@@ -147,6 +149,10 @@ async fn shadow(
         items,
         users,
         report,
+    );
+    rust_compute_shadow(
+        ComputeFlag::FeedSignals,
+        ShadowOutcome::from_mismatches(diffs.len()),
     );
     if diffs.is_empty() {
         info!("feed signals rust twin agrees with the SQL run");

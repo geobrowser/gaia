@@ -29,6 +29,139 @@ pub const USER_INTEREST_SHADOW_ROWS: &str = "ranking_indexer_user_interest_shado
 pub const USER_INTEREST_SHADOW_MISMATCHES: &str =
     "ranking_indexer_user_interest_shadow_mismatches_total";
 
+/// Compares made by the `*_RUST_COMPUTE` shadows, by `flag` and `outcome`. The shadows run in the
+/// CronJob binaries, which install no recorder, so the series are no-ops there until one is
+/// installed and scraped; the shadow's log line is the reading in the meantime.
+pub const RUST_COMPUTE_SHADOW: &str = "ranking_indexer_rust_compute_shadow_total";
+
+/// One `*_RUST_COMPUTE` flag: a Rust twin of a SQL job that runs after it and only compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComputeFlag {
+    DebateWatch,
+    FeedSignals,
+    EntityRankingScore,
+    AccountExclusions,
+    AccountVoteWeight,
+    AccountWeights,
+    AgendaListings,
+    AgendaRescore,
+    Anchor,
+    PrimerStats,
+    ClaimOverlap,
+    TopicSuggestions,
+    TopicCooccurrence,
+    TopicRanking,
+}
+
+impl ComputeFlag {
+    pub const ALL: [ComputeFlag; 14] = [
+        ComputeFlag::DebateWatch,
+        ComputeFlag::FeedSignals,
+        ComputeFlag::EntityRankingScore,
+        ComputeFlag::AccountExclusions,
+        ComputeFlag::AccountVoteWeight,
+        ComputeFlag::AccountWeights,
+        ComputeFlag::AgendaListings,
+        ComputeFlag::AgendaRescore,
+        ComputeFlag::Anchor,
+        ComputeFlag::PrimerStats,
+        ComputeFlag::ClaimOverlap,
+        ComputeFlag::TopicSuggestions,
+        ComputeFlag::TopicCooccurrence,
+        ComputeFlag::TopicRanking,
+    ];
+
+    /// The `flag` label value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ComputeFlag::DebateWatch => "debate_watch",
+            ComputeFlag::FeedSignals => "feed_signals",
+            ComputeFlag::EntityRankingScore => "entity_ranking_score",
+            ComputeFlag::AccountExclusions => "account_exclusions",
+            ComputeFlag::AccountVoteWeight => "account_vote_weight",
+            ComputeFlag::AccountWeights => "account_weights",
+            ComputeFlag::AgendaListings => "agenda_listings",
+            ComputeFlag::AgendaRescore => "agenda_rescore",
+            ComputeFlag::Anchor => "anchor",
+            ComputeFlag::PrimerStats => "primer_stats",
+            ComputeFlag::ClaimOverlap => "claim_overlap",
+            ComputeFlag::TopicSuggestions => "topic_suggestions",
+            ComputeFlag::TopicCooccurrence => "topic_cooccurrence",
+            ComputeFlag::TopicRanking => "topic_ranking",
+        }
+    }
+
+    /// The environment variable that turns the shadow on.
+    pub fn env_var(self) -> &'static str {
+        match self {
+            ComputeFlag::DebateWatch => "DEBATE_WATCH_RUST_COMPUTE",
+            ComputeFlag::FeedSignals => "FEED_SIGNALS_RUST_COMPUTE",
+            ComputeFlag::EntityRankingScore => "ENTITY_RANKING_SCORE_RUST_COMPUTE",
+            ComputeFlag::AccountExclusions => "ACCOUNT_EXCLUSIONS_RUST_COMPUTE",
+            ComputeFlag::AccountVoteWeight => "ACCOUNT_VOTE_WEIGHT_RUST_COMPUTE",
+            ComputeFlag::AccountWeights => "ACCOUNT_WEIGHTS_RUST_COMPUTE",
+            ComputeFlag::AgendaListings => "AGENDA_LISTINGS_RUST_COMPUTE",
+            ComputeFlag::AgendaRescore => "AGENDA_RESCORE_RUST_COMPUTE",
+            ComputeFlag::Anchor => "ANCHOR_RUST_COMPUTE",
+            ComputeFlag::PrimerStats => "PRIMER_STATS_RUST_COMPUTE",
+            ComputeFlag::ClaimOverlap => "CLAIM_OVERLAP_RUST_COMPUTE",
+            ComputeFlag::TopicSuggestions => "TOPIC_SUGGESTIONS_RUST_COMPUTE",
+            ComputeFlag::TopicCooccurrence => "TOPIC_COOCCURRENCE_RUST_COMPUTE",
+            ComputeFlag::TopicRanking => "TOPIC_RANKING_RUST_COMPUTE",
+        }
+    }
+}
+
+/// What one shadow compare found. `Failed`: an input read or the twin errored, so nothing was
+/// compared. `Unsupported`: there was nothing to compare (for example no sample row yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowOutcome {
+    Match,
+    Mismatch,
+    Failed,
+    Unsupported,
+}
+
+impl ShadowOutcome {
+    pub const ALL: [ShadowOutcome; 4] = [
+        ShadowOutcome::Match,
+        ShadowOutcome::Mismatch,
+        ShadowOutcome::Failed,
+        ShadowOutcome::Unsupported,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShadowOutcome::Match => "match",
+            ShadowOutcome::Mismatch => "mismatch",
+            ShadowOutcome::Failed => "failed",
+            ShadowOutcome::Unsupported => "unsupported",
+        }
+    }
+
+    pub fn from_mismatches(n: usize) -> Self {
+        if n == 0 {
+            ShadowOutcome::Match
+        } else {
+            ShadowOutcome::Mismatch
+        }
+    }
+
+    pub fn from_agreement(agrees: bool) -> Self {
+        if agrees {
+            ShadowOutcome::Match
+        } else {
+            ShadowOutcome::Mismatch
+        }
+    }
+}
+
+/// Counts one shadow compare. Like every call here, a no-op in a process with no recorder.
+pub fn rust_compute_shadow(flag: ComputeFlag, outcome: ShadowOutcome) {
+    metrics::counter!(RUST_COMPUTE_SHADOW, "flag" => flag.as_str(), "outcome" => outcome.as_str())
+        .increment(1);
+}
+
 /// Which subscribed topic a message came from, as a label value.
 #[derive(Debug, Clone, Copy)]
 pub enum Topic {
@@ -194,6 +327,17 @@ pub fn register() {
     metrics::gauge!(PENDING_RECOMPUTE_DEAD).set(0.0);
     metrics::counter!(USER_INTEREST_SHADOW_ROWS).absolute(0);
     metrics::counter!(USER_INTEREST_SHADOW_MISMATCHES).absolute(0);
+    metrics::describe_counter!(
+        RUST_COMPUTE_SHADOW,
+        "Compares a *_RUST_COMPUTE shadow made against the SQL, by flag and outcome \
+         (match, mismatch, failed, unsupported). Shadow only: the SQL stays the answer"
+    );
+    for flag in ComputeFlag::ALL {
+        for outcome in ShadowOutcome::ALL {
+            metrics::counter!(RUST_COMPUTE_SHADOW, "flag" => flag.as_str(), "outcome" => outcome.as_str())
+                .absolute(0);
+        }
+    }
 
     for topic in [Topic::Edits, Topic::Membership] {
         metrics::counter!(MESSAGES_PROCESSED, "topic" => topic.as_str()).absolute(0);
@@ -286,6 +430,88 @@ mod tests {
             "ranking_indexer_transient_retries_total{topic=\"edits\"} 1",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn every_rust_compute_flag_has_four_outcome_series_at_zero() {
+        let rendered = render_with(register);
+        assert_eq!(ComputeFlag::ALL.len(), 14);
+        for flag in ComputeFlag::ALL {
+            for outcome in ["match", "mismatch", "failed", "unsupported"] {
+                let line = format!(
+                    "ranking_indexer_rust_compute_shadow_total{{flag=\"{}\",outcome=\"{outcome}\"}} 0",
+                    flag.as_str()
+                );
+                assert!(rendered.contains(&line), "missing `{line}` in:\n{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_shadow_outcome_moves_only_its_own_series() {
+        let rendered = render_with(|| {
+            register();
+            rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Match);
+            rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Match);
+            rust_compute_shadow(ComputeFlag::TopicSuggestions, ShadowOutcome::Mismatch);
+            rust_compute_shadow(ComputeFlag::ClaimOverlap, ShadowOutcome::Unsupported);
+            rust_compute_shadow(ComputeFlag::Anchor, ShadowOutcome::Failed);
+        });
+        for line in [
+            "ranking_indexer_rust_compute_shadow_total{flag=\"topic_suggestions\",outcome=\"match\"} 2",
+            "ranking_indexer_rust_compute_shadow_total{flag=\"topic_suggestions\",outcome=\"mismatch\"} 1",
+            "ranking_indexer_rust_compute_shadow_total{flag=\"claim_overlap\",outcome=\"unsupported\"} 1",
+            "ranking_indexer_rust_compute_shadow_total{flag=\"anchor\",outcome=\"failed\"} 1",
+            "ranking_indexer_rust_compute_shadow_total{flag=\"anchor\",outcome=\"match\"} 0",
+        ] {
+            assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn mismatch_counts_classify_as_match_or_mismatch() {
+        assert_eq!(ShadowOutcome::from_mismatches(0), ShadowOutcome::Match);
+        assert_eq!(ShadowOutcome::from_mismatches(3), ShadowOutcome::Mismatch);
+        assert_eq!(ShadowOutcome::from_agreement(true), ShadowOutcome::Match);
+        assert_eq!(
+            ShadowOutcome::from_agreement(false),
+            ShadowOutcome::Mismatch
+        );
+    }
+
+    /// Every `*_RUST_COMPUTE` env var read anywhere under `src/` must be a [`ComputeFlag`], so a
+    /// new twin cannot ship without a counter.
+    #[test]
+    fn every_rust_compute_env_var_in_the_source_has_a_flag() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let known: Vec<&str> = ComputeFlag::ALL.iter().map(|f| f.env_var()).collect();
+        for f in files {
+            let text = std::fs::read_to_string(&f).unwrap();
+            for line in text.lines().filter(|l| l.contains("env::var(\"")) {
+                let Some(start) = line.find("var(\"") else {
+                    continue;
+                };
+                let rest = &line[start + 5..];
+                let name = &rest[..rest.find('"').unwrap()];
+                if name.ends_with("_RUST_COMPUTE") {
+                    assert!(known.contains(&name), "{name} in {f:?} has no ComputeFlag");
+                }
+            }
         }
     }
 }

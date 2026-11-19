@@ -26,6 +26,7 @@ use ranking_indexer::anchor_select;
 use ranking_indexer::claim_overlap;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::metrics::PgWriteSite;
+use ranking_indexer::metrics::{rust_compute_shadow, ComputeFlag, ShadowOutcome};
 use ranking_indexer::pg_bin_writes;
 use ranking_indexer::primer_claims_mirror::{
     self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
@@ -309,11 +310,25 @@ async fn main() -> Result<(), IndexerError> {
     if let Some((scored, _)) = refreshed {
         if primer_stats_rust_enabled() {
             match stats_shadow(&pool).await {
-                Ok((rust, table, mismatched)) => info!(
-                    rust,
-                    table, mismatched, "primer claim stats rust compute checked against the table"
-                ),
-                Err(e) => warn!(error = %e, "primer claim stats rust compute skipped"),
+                Ok((rust, table, mismatched)) => {
+                    // An empty stats table leaves nothing to replay.
+                    let outcome = if table == 0 {
+                        ShadowOutcome::Unsupported
+                    } else {
+                        ShadowOutcome::from_mismatches(mismatched)
+                    };
+                    rust_compute_shadow(ComputeFlag::PrimerStats, outcome);
+                    info!(
+                        rust,
+                        table,
+                        mismatched,
+                        "primer claim stats rust compute checked against the table"
+                    )
+                }
+                Err(e) => {
+                    rust_compute_shadow(ComputeFlag::PrimerStats, ShadowOutcome::Failed);
+                    warn!(error = %e, "primer claim stats rust compute skipped")
+                }
             }
         }
         let (contested, eligible): (i64, i64) = sqlx::query_as(
@@ -332,11 +347,17 @@ async fn main() -> Result<(), IndexerError> {
 
         if let (Some(set_id), true) = (new_set, anchor_rust_enabled()) {
             match anchor_shadow(&pool, set_id).await {
-                Ok(same) => info!(
-                    set_id,
-                    same, "anchor set rust compute checked against the SQL"
-                ),
-                Err(e) => warn!(error = %e, "anchor set rust compute skipped"),
+                Ok(same) => {
+                    rust_compute_shadow(ComputeFlag::Anchor, ShadowOutcome::from_agreement(same));
+                    info!(
+                        set_id,
+                        same, "anchor set rust compute checked against the SQL"
+                    )
+                }
+                Err(e) => {
+                    rust_compute_shadow(ComputeFlag::Anchor, ShadowOutcome::Failed);
+                    warn!(error = %e, "anchor set rust compute skipped")
+                }
             }
         }
         if let Some(set_id) = new_set {
@@ -383,8 +404,19 @@ async fn main() -> Result<(), IndexerError> {
         );
         if overlap_rust_enabled() {
             match overlap_shadow(&pool).await {
-                Ok(same) => info!(?same, "claim overlap rust compute checked against the SQL"),
-                Err(e) => warn!(error = %e, "claim overlap rust compute skipped"),
+                Ok(same) => {
+                    // None: no sample row to replay.
+                    let outcome = match same {
+                        Some(same) => ShadowOutcome::from_agreement(same),
+                        None => ShadowOutcome::Unsupported,
+                    };
+                    rust_compute_shadow(ComputeFlag::ClaimOverlap, outcome);
+                    info!(?same, "claim overlap rust compute checked against the SQL")
+                }
+                Err(e) => {
+                    rust_compute_shadow(ComputeFlag::ClaimOverlap, ShadowOutcome::Failed);
+                    warn!(error = %e, "claim overlap rust compute skipped")
+                }
             }
         }
     }
