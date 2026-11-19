@@ -47,13 +47,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
-use prost::Message;
 use std::sync::OnceLock;
 
 use hermes_kafka::create_producer;
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
-use hermes_relay::{Actions, HermesModule, Sink, StreamSource, actions};
+use hermes_relay::{HermesModule, Sink, StreamSource, actions};
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
 use hermes_pipeline::cursor::{self, CursorStore, MockCursorStore, PostgresCursorStore};
@@ -169,10 +168,10 @@ impl Pipeline {
         meta: BlockMetadata,
     ) -> Result<(), PipelineError> {
         // Decode the Actions message from the block output
-        let mut actions_msg = Actions::decode(output_value)?;
-        // GEO-3803: rewrite legacy Governance V1 hashes (TOPIC_DECLARED, ...) to
-        // their V2 constants once, here, so every pipeline below matches one hash.
-        let legacy = actions::normalize_actions(&mut actions_msg.actions);
+        // GEO-3803: decoding rewrites legacy Governance V1 hashes
+        // (TOPIC_DECLARED, ...) to their V2 constants once, here, so every
+        // pipeline below matches one hash.
+        let (actions_msg, legacy) = actions::decode_normalized(output_value)?;
         if legacy > 0 {
             debug!(
                 block_number = meta.block_number,

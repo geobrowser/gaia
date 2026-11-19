@@ -156,6 +156,17 @@ pub fn normalize_actions(actions: &mut [crate::Action]) -> usize {
     rewritten
 }
 
+/// Decode one block's `map_actions` output and normalise it
+/// ([`normalize_actions`]). Every consumer of raw actions decodes through this,
+/// so no decode site can skip the normalisation. Returns the actions and how
+/// many legacy hashes were rewritten.
+pub fn decode_normalized(bytes: &[u8]) -> Result<(crate::Actions, usize), prost::DecodeError> {
+    use prost::Message;
+    let mut actions = crate::Actions::decode(bytes)?;
+    let rewritten = normalize_actions(&mut actions.actions);
+    Ok((actions, rewritten))
+}
+
 #[cfg(test)]
 mod tests {
     use alloy::primitives::keccak256;
@@ -389,6 +400,22 @@ mod tests {
                 (&b.from_id, &b.to_id, &b.topic, &b.data)
             );
         }
+    }
+
+    #[test]
+    fn decode_normalized_rewrites_legacy_hashes_in_encoded_output() {
+        use prost::Message;
+        let block = crate::Actions {
+            actions: vec![
+                action(&super::LEGACY_TOPIC_DECLARED, 1, 1),
+                action(&super::EDITS_PUBLISHED, 1, 1),
+            ],
+        };
+        let (decoded, rewritten) = super::decode_normalized(&block.encode_to_vec()).unwrap();
+        assert_eq!(rewritten, 1);
+        assert_eq!(decoded.actions[0].action, super::TOPIC_SET.to_vec());
+        assert_eq!(decoded.actions[1], block.actions[1]);
+        assert!(super::decode_normalized(&[0xff, 0xff, 0xff]).is_err());
     }
 
     #[test]

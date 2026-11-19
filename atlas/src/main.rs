@@ -44,8 +44,7 @@ use atlas::persistence::{
 };
 use atlas::stall::{self, StreamProgress};
 use hermes_instrumentation::{debug, info, info_span, warn, Instrument};
-use hermes_relay::{actions as relay_actions, Actions, HermesModule, Sink, StreamSource};
-use prost::Message;
+use hermes_relay::{actions as relay_actions, HermesModule, Sink, StreamSource};
 
 /// Mutable pipeline state behind a single Mutex.
 ///
@@ -401,10 +400,10 @@ impl Sink for AtlasSink {
             return Ok(());
         }
 
-        let mut actions = Actions::decode(output)?;
-        // GEO-3803: legacy Governance V1 hashes (e.g. SUBSPACE_TOPIC_DECLARED)
-        // become their V2 constants, so the subtopic edges below see one hash.
-        relay_actions::normalize_actions(&mut actions.actions);
+        // GEO-3803: decoding rewrites legacy Governance V1 hashes (e.g.
+        // SUBSPACE_TOPIC_DECLARED) to their V2 constants, so the subtopic edges
+        // below see one hash.
+        let (actions, _legacy) = relay_actions::decode_normalized(output)?;
 
         // Process all events in the block, then compute and emit once.
         //
