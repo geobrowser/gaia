@@ -170,6 +170,14 @@ spec:
             # counted and swallowed, never fails the outbox insert. "off" turns it back off.
             - name: GEODB_OUTBOX_MIRROR
               value: "1"
+            # Keep units whose geo-db enter failed (a serve roll, a refusal) in a bounded in-memory
+            # backlog and retry them oldest first, instead of dropping them (gaia#1491). Default bound
+            # 3000 units (GEODB_OUTBOX_MIRROR_BACKLOG_MAX unset). Mirror retry only: Postgres reads and
+            # writes are unchanged. Watch the series geodb_outbox_mirror_backlog (gauge; it should return
+            # to 0 after a roll) and geodb_outbox_mirror_backlog_dropped_total / _expired_total, which the
+            # alerts in monitoring/k8s/v2/geodb-serve-alerts.yaml read. Absent or "off" turns it back off.
+            - name: GEODB_OUTBOX_MIRROR_BACKLOG
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_OUTBOX_KEY_PATH
