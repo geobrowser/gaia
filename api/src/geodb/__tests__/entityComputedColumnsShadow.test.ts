@@ -5,8 +5,10 @@ import {
 	__resetEntityColumnsShadowMetricsForTests,
 	compareColumns,
 	createEntityColumnsShadow,
+	mismatchReason,
 	readEntityColumnsShadowConfig,
 	renderEntityColumnsShadowMetrics,
+	renderEntityColumnsShadowReasonMetrics,
 } from "../entityComputedColumnsShadow"
 import {type SCORE_COLUMNS, scoreColumns} from "../rankedReads/entityColumns"
 
@@ -192,5 +194,60 @@ describe("runOnce", () => {
 		const shadow = createEntityColumnsShadow({config, db: fakeDb({}), reader: {}, log, random: () => A})
 		await shadow.runOnce()
 		expect(total("match")).toBe(0)
+	})
+})
+
+describe("mismatchReason", () => {
+	const row = served()
+	const text = pgText(row)
+	it("calls a numeric difference below 1e-6 relative near", () => {
+		const pg = {...text, ranking_score: String(row.ranking * (1 + 1e-8))}
+		expect(mismatchReason("ranking_score", pg, row)).toBe("near")
+	})
+	it("blames the engagement counts when any of the five differs", () => {
+		const pg = {...text, upvotes: "9", quality_score: "0.1", ranking_score: "1"}
+		for (const c of ["upvotes", "quality_score", "ranking_score"] as const)
+			expect(mismatchReason(c, pg, row)).toBe("counts_differ")
+	})
+	it("calls an intrinsic or ranking difference with equal counts card drift", () => {
+		const pg = {...text, intrinsic_score: "0.4", ranking_score: "1"}
+		expect(mismatchReason("intrinsic_score", pg, row)).toBe("card_drift")
+		expect(mismatchReason("ranking_score", pg, row)).toBe("card_drift")
+	})
+	it("leaves any other column with equal counts unexplained", () => {
+		expect(mismatchReason("trending_source", {...text, trending_source: "listing"}, row)).toBe("unexplained")
+		expect(mismatchReason("trending_score", {...text, trending_score: "7"}, row)).toBe("unexplained")
+	})
+})
+
+describe("mismatch reason counters", () => {
+	const config = {enabled: true, intervalMs: 1000, sample: 5}
+	const reasonTotal = (reason: string, column: string) =>
+		Number(
+			new RegExp(`column="${column}",reason="${reason}"\\} (\\d+)`).exec(
+				renderEntityColumnsShadowReasonMetrics(),
+			)?.[1],
+		)
+	it("exports nothing until mounted, then every series at zero", () => {
+		expect(renderEntityColumnsShadowReasonMetrics()).toBe("")
+		createEntityColumnsShadow({config, db: fakeDb({}), reader: {}, log})
+		expect(reasonTotal("card_drift", "intrinsic_score")).toBe(0)
+	})
+	it("counts the reason of each mismatching column and nothing for a match", async () => {
+		const row = served()
+		const pg = {...pgText(row), intrinsic_score: "0.4", ranking_score: "1"}
+		await createEntityColumnsShadow({
+			config,
+			db: fakeDb(pg),
+			reader: {scores: vi.fn(async () => [row])},
+			log,
+			random: () => A,
+		}).runOnce()
+		expect(reasonTotal("card_drift", "intrinsic_score")).toBe(1)
+		expect(reasonTotal("card_drift", "ranking_score")).toBe(1)
+		expect(reasonTotal("counts_differ", "ranking_score")).toBe(0)
+		expect(reasonTotal("card_drift", "upvotes")).toBe(0)
+		// The existing family is untouched.
+		expect(total("mismatch", "intrinsic_score")).toBe(1)
 	})
 })
