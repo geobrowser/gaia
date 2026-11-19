@@ -47,10 +47,33 @@ pub enum IpfsError {
     NotFound(String),
     #[error("network error: {0}")]
     NetworkError(String),
+    #[error("HTTP {status}: {body}")]
+    HttpStatus { status: u16, body: String },
     #[error("timeout")]
     Timeout,
     #[error("content did not hash to the requested CID after {attempts} attempt(s): {cid}")]
     VerificationFailed { cid: String, attempts: u32 },
+}
+
+impl IpfsError {
+    /// Whether this failure says nothing about the content itself: the gateway
+    /// timed out, refused, rate-limited (429) or failed (5xx), or the connection
+    /// broke. Retrying later can succeed, so callers must not record a transient
+    /// failure as a permanent verdict on the CID.
+    ///
+    /// Not transient: other 4xx statuses, content that never hashed to its CID
+    /// ([`IpfsError::VerificationFailed`]), and [`IpfsError::NotFound`] (the mock
+    /// client's "no such CID").
+    pub fn is_transient(&self) -> bool {
+        match self {
+            IpfsError::Reqwest(e) => !e.is_builder(),
+            IpfsError::Io(_) | IpfsError::Timeout | IpfsError::NetworkError(_) => true,
+            IpfsError::HttpStatus { status, .. } => {
+                *status == 408 || *status == 429 || *status >= 500
+            }
+            IpfsError::NotFound(_) | IpfsError::VerificationFailed { .. } => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, IpfsError>;
@@ -100,8 +123,18 @@ impl IpfsClient {
     /// transport failures (timeouts, non-2xx) and content that fails CID
     /// verification (see [`Verification`]) — either is treated as "this
     /// attempt didn't get the real content," not "this content is invalid."
-    const DEFAULT_MAX_ATTEMPTS: u32 = 3;
-    const DEFAULT_BASE_BACKOFF: Duration = Duration::from_millis(250);
+    ///
+    /// Six attempts with a 1 s base back off for 1+2+4+8+16 = 31 s between
+    /// attempts, so an in-line retry rides out a gateway blip of about half a
+    /// minute. The old three attempts 250 ms apart let under a second of
+    /// gateway trouble become a permanently errored row (GEO-3803).
+    const DEFAULT_MAX_ATTEMPTS: u32 = 6;
+    const DEFAULT_BASE_BACKOFF: Duration = Duration::from_secs(1);
+    /// Whole-request deadline (connect, headers and body). Without one, a
+    /// gateway that accepts the connection and then stalls holds the fetch,
+    /// and the warmer permit with it, indefinitely.
+    const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
     /// Upper bound on any single retry's backoff, regardless of attempt
     /// count or configured base — keeps a large `max_attempts` from ever
     /// producing an absurd (if not overflowing) wait.
@@ -110,10 +143,26 @@ impl IpfsClient {
     pub fn new(url: &str) -> Self {
         IpfsClient {
             url: url.to_string(),
-            client: ReqwestClient::new(),
+            client: Self::http_client(Self::DEFAULT_REQUEST_TIMEOUT),
             max_attempts: Self::DEFAULT_MAX_ATTEMPTS,
             base_backoff: Self::DEFAULT_BASE_BACKOFF,
         }
+    }
+
+    fn http_client(request_timeout: Duration) -> ReqwestClient {
+        ReqwestClient::builder()
+            .timeout(request_timeout)
+            .connect_timeout(Self::CONNECT_TIMEOUT.min(request_timeout))
+            .build()
+            // Same failure mode as `ReqwestClient::new()`, which panics if the
+            // TLS backend cannot initialise.
+            .expect("failed to build the IPFS HTTP client")
+    }
+
+    /// Replace the whole-request timeout (default 30 s). Mainly for tests.
+    pub fn with_request_timeout(mut self, request_timeout: Duration) -> Self {
+        self.client = Self::http_client(request_timeout);
+        self
     }
 
     /// Same as [`Self::new`] but with a configurable attempt count and base
@@ -122,9 +171,9 @@ impl IpfsClient {
     pub fn with_retry_config(url: &str, max_attempts: u32, base_backoff: Duration) -> Self {
         IpfsClient {
             url: url.to_string(),
-            client: ReqwestClient::new(),
             max_attempts: max_attempts.max(1),
             base_backoff,
+            ..Self::new(url)
         }
     }
 
@@ -143,11 +192,10 @@ impl IpfsClient {
         if !res.status().is_success() {
             let status = res.status();
             let body = res.text().await.unwrap_or_default();
-            return Err(IpfsError::NetworkError(format!(
-                "HTTP {}: {}",
-                status,
-                body.trim()
-            )));
+            return Err(IpfsError::HttpStatus {
+                status: status.as_u16(),
+                body: body.trim().to_string(),
+            });
         }
 
         let bytes = res.bytes().await?;
@@ -443,7 +491,10 @@ mod retry_tests {
         let client = test_client(&server);
         let result = client.get_bytes(GOLDEN_SMALL_CID).await;
 
-        assert!(matches!(result, Err(IpfsError::NetworkError(_))));
+        assert!(matches!(
+            result,
+            Err(IpfsError::HttpStatus { status: 500, .. })
+        ));
         assert_eq!(
             calls.load(Ordering::SeqCst),
             3,
@@ -503,5 +554,88 @@ mod retry_tests {
 
         assert_eq!(bytes, b"unverifiable but should pass through");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    // ---- GEO-3803: request timeout and transient classification --------
+
+    #[tokio::test]
+    async fn a_stalled_gateway_times_out_as_a_transient_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(GOLDEN_SMALL_BYTES)
+                    .set_delay(Duration::from_secs(5)),
+            )
+            .mount(&server)
+            .await;
+        let client = test_client(&server).with_request_timeout(Duration::from_millis(100));
+
+        let started = std::time::Instant::now();
+        let err = client.get_bytes(GOLDEN_SMALL_CID).await.unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "timeout not applied"
+        );
+        assert!(
+            matches!(&err, IpfsError::Reqwest(e) if e.is_timeout()),
+            "{err:?}"
+        );
+        assert!(err.is_transient());
+    }
+
+    #[tokio::test]
+    async fn status_codes_classify_as_transient_or_final() {
+        for (status, transient) in [
+            (500, true),
+            (502, true),
+            (503, true),
+            (504, true),
+            (429, true),
+            (408, true),
+            (404, false),
+            (400, false),
+            (410, false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let err = test_client(&server)
+                .get_bytes(GOLDEN_SMALL_CID)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, IpfsError::HttpStatus { status: s, .. } if s == status),
+                "{status}: {err:?}"
+            );
+            assert_eq!(err.is_transient(), transient, "HTTP {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_is_transient() {
+        // Bind then drop a listener so the port is very likely closed.
+        let addr = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let client =
+            IpfsClient::with_retry_config(&format!("http://{addr}/"), 1, Duration::from_millis(1));
+        let err = client.get_bytes(GOLDEN_SMALL_CID).await.unwrap_err();
+        assert!(err.is_transient(), "{err:?}");
+    }
+
+    #[test]
+    fn content_and_lookup_failures_are_final() {
+        assert!(!IpfsError::VerificationFailed {
+            cid: "Qm".into(),
+            attempts: 3
+        }
+        .is_transient());
+        assert!(!IpfsError::NotFound("Qm".into()).is_transient());
+        assert!(IpfsError::Timeout.is_transient());
     }
 }
