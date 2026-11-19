@@ -53,7 +53,7 @@ use std::sync::OnceLock;
 use hermes_kafka::create_producer;
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
-use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
+use hermes_relay::{Actions, HermesModule, Sink, StreamSource, actions};
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
 use hermes_pipeline::cursor::{self, CursorStore, MockCursorStore, PostgresCursorStore};
@@ -169,7 +169,16 @@ impl Pipeline {
         meta: BlockMetadata,
     ) -> Result<(), PipelineError> {
         // Decode the Actions message from the block output
-        let actions_msg = Actions::decode(output_value)?;
+        let mut actions_msg = Actions::decode(output_value)?;
+        // GEO-3803: rewrite legacy Governance V1 hashes (TOPIC_DECLARED, ...) to
+        // their V2 constants once, here, so every pipeline below matches one hash.
+        let legacy = actions::normalize_actions(&mut actions_msg.actions);
+        if legacy > 0 {
+            debug!(
+                block_number = meta.block_number,
+                legacy, "Normalised legacy V1 actions"
+            );
+        }
         let actions = &actions_msg.actions;
 
         // =========================================================================

@@ -366,7 +366,13 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
     //   Subspace topic actions (subspace_topic_set/unset): [subspace_id: 16 | topic_id: 16]
     //     → topic_id in [16..32]
 
-    match args.action {
+    // GEO-3803: a ping can carry a legacy V1 action hash (the web app's DAO
+    // topic proposals ping GOVERNANCE.TOPIC_DECLARED); match on its V2 constant.
+    let action = actions::canonical(&args.action)
+        .copied()
+        .unwrap_or(args.action);
+
+    match action {
         x if x == actions::TOPIC_SET => {
             let target = args.topic[0..16].to_vec();
             if target.iter().all(|b| *b == 0) {
@@ -397,7 +403,7 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
                 warn!("All-zero target ID in ping subspace edge action, storing as Unknown");
                 return None;
             }
-            match args.action {
+            match action {
                 x if x == actions::SUBSPACE_VERIFIED => Some(
                     proposal_action::Action::SubspaceVerified(SubspaceEdgeAction {
                         target_space_id: target,
@@ -1931,5 +1937,95 @@ mod tests {
         // The decoder reads proposal_version off the wire but HermesProposalVoted
         // does not carry it, so there is nothing further to assert here — a
         // non-empty result already proves the three-field payload decoded.
+    }
+
+    /// GEO-3803: the web app's DAO topic and subtopic proposals ping the legacy
+    /// V1 hashes. They must decode exactly like their V2 equivalents.
+    fn decode_single_ping_proposal(
+        action_hash: &[u8; 32],
+        topic: [u8; 32],
+    ) -> Option<proposal_action::Action> {
+        let proposal_id = [0xA9; 16];
+        let space_id = vec![0x02; 16];
+        let ping_calldata = encode_ping_calldata(action_hash, &topic, &[]);
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1,
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+        let test_actions = vec![
+            Action {
+                from_id: vec![0x01; 16],
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id,
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+        assert_eq!(result.proposals_created.len(), 1);
+        result.proposals_created[0].actions[0].action.clone()
+    }
+
+    #[test]
+    fn legacy_ping_topic_declared_decodes_as_set_topic() {
+        let topic_id = [0xAB; 16];
+        let legacy = decode_single_ping_proposal(
+            &actions::LEGACY_TOPIC_DECLARED,
+            make_edge_topic(&topic_id),
+        );
+        let v2 = decode_single_ping_proposal(&actions::TOPIC_SET, make_edge_topic(&topic_id));
+        assert_eq!(legacy, v2);
+        assert!(matches!(
+            legacy,
+            Some(proposal_action::Action::SetTopic(ref a)) if a.target_topic_id == topic_id.to_vec()
+        ));
+    }
+
+    #[test]
+    fn legacy_ping_topic_removed_decodes_as_unset_topic() {
+        let topic_id = [0xAC; 16];
+        let legacy =
+            decode_single_ping_proposal(&actions::LEGACY_TOPIC_REMOVED, make_edge_topic(&topic_id));
+        assert_eq!(
+            legacy,
+            decode_single_ping_proposal(&actions::TOPIC_UNSET, make_edge_topic(&topic_id))
+        );
+        assert!(matches!(
+            legacy,
+            Some(proposal_action::Action::UnsetTopic(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_ping_subspace_topic_declared_and_removed_decode_as_v2() {
+        let topic_id = [0xFE; 16];
+        let declared = decode_single_ping_proposal(
+            &actions::LEGACY_SUBSPACE_TOPIC_DECLARED,
+            make_topic_topic(&topic_id),
+        );
+        assert_eq!(
+            declared,
+            decode_single_ping_proposal(&actions::SUBSPACE_TOPIC_SET, make_topic_topic(&topic_id))
+        );
+        assert!(matches!(
+            declared,
+            Some(proposal_action::Action::SubspaceTopicDeclared(ref a)) if a.target_topic_id == topic_id.to_vec()
+        ));
+        let removed = decode_single_ping_proposal(
+            &actions::LEGACY_SUBSPACE_TOPIC_REMOVED,
+            make_topic_topic(&topic_id),
+        );
+        assert!(matches!(
+            removed,
+            Some(proposal_action::Action::SubspaceTopicRemoved(_))
+        ));
     }
 }
