@@ -245,6 +245,34 @@ export function compareDefault(pg: PgScores, served: ScoreRow): "match" | "misma
 		: "mismatch"
 }
 
+const DEFAULT_FIELD_NAMES = ["quality", "intrinsic", "type_weight", "ranking"] as const
+
+/**
+ * Why a default row `compareDefault` calls `mismatch` mismatches: which of the four scores differ (joined with `+`, or
+ * `many` past three) and the ranking-score gap in buckets, as `mismatchReason` does for the overlay rows. No ids. Pure.
+ */
+export function defaultMismatchReason(pg: PgScores, served: ScoreRow): {fields: string; delta: MismatchDelta} {
+	const same = (a: number, b: number) => Math.abs(a - b) <= TOLERANCE * Math.max(1, Math.abs(a))
+	const diff = [
+		!same(pg.quality, served.quality),
+		!same(pg.intrinsic, served.intrinsic),
+		!same(pg.typeWeight, served.typeWeight),
+		!same(pg.ranking, served.ranking),
+	]
+	const names = DEFAULT_FIELD_NAMES.filter((_, i) => diff[i])
+	const gap = Math.abs(pg.ranking - served.ranking)
+	const delta: MismatchDelta = !diff[3]
+		? "none"
+		: gap < 0.01
+			? "lt_0.01"
+			: gap < 1
+				? "lt_1"
+				: gap < 100
+					? "lt_100"
+					: "ge_100"
+	return {fields: names.length === 0 ? "none" : names.length > 3 ? "many" : names.join("+"), delta}
+}
+
 const hex = (uuid: string) => uuid.replace(/-/g, "").toLowerCase()
 const isId = (v: unknown): v is string =>
 	typeof v === "string" && /^[0-9a-f]{8}-?([0-9a-f]{4}-?){3}[0-9a-f]{12}$/i.test(v)
@@ -256,6 +284,7 @@ const results = new Map<Result, number>()
 const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
 const mismatchReasons = new Map<string, number>()
 const defaults = new Map<DefaultResult, number>()
+const defaultMismatchReasons = new Map<string, number>()
 const bumpDefault = (r: DefaultResult): void => void defaults.set(r, (defaults.get(r) ?? 0) + 1)
 
 /** Empty until the shadow is mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
@@ -278,6 +307,12 @@ export function renderRankingScoresShadowMetrics(): string {
 	)
 	for (const r of DEFAULT_RESULTS)
 		lines.push(`gaia_api_ranking_scores_default_shadow_total{result="${r}"} ${defaults.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_ranking_scores_default_shadow_mismatch_total Default rows counted mismatch, by the scores that differ (quality, intrinsic, type_weight, ranking; joined with +, many past three) and the ranking-score gap bucket. Counts, not distinct rows: the sample repeats entities.",
+		"# TYPE gaia_api_ranking_scores_default_shadow_mismatch_total counter",
+	)
+	for (const [key, n] of [...defaultMismatchReasons].sort())
+		lines.push(`gaia_api_ranking_scores_default_shadow_mismatch_total{${key}} ${n}`)
 	return lines.join("\n")
 }
 
@@ -286,6 +321,7 @@ export function __resetRankingScoresShadowMetricsForTests(): void {
 	results.clear()
 	mismatchReasons.clear()
 	defaults.clear()
+	defaultMismatchReasons.clear()
 }
 
 const COLUMNS = sql.raw(
@@ -519,7 +555,13 @@ export function createRankingScoresShadow(deps: {
 				const row = served[i]
 				const expected = pg.get(id)
 				if (row === undefined || expected === undefined) return bumpDefault("failed")
-				bumpDefault(compareDefault(expected, row))
+				const outcome = compareDefault(expected, row)
+				bumpDefault(outcome)
+				if (outcome === "mismatch") {
+					const why = defaultMismatchReason(expected, row)
+					const key = `fields="${why.fields}",delta="${why.delta}"`
+					defaultMismatchReasons.set(key, (defaultMismatchReasons.get(key) ?? 0) + 1)
+				}
 			})
 		} catch (error) {
 			bumpDefault(failureResult(error))

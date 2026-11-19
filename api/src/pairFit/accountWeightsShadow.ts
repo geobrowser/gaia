@@ -64,6 +64,10 @@ export const ACCOUNT_EXCLUSIONS_VALUE_BYTES = 9
 const WEIGHT_TOLERANCE = 1e-9
 
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
+/** Why a weight mismatch is one: Postgres has no weight, or the weights differ by this much. A closed set, so safe as a label. */
+export const MISMATCH_REASONS = ["served_null", "gap_lt_0.01", "gap_lt_1", "gap_ge_1"] as const
+export type MismatchReason = (typeof MISMATCH_REASONS)[number]
+
 export const UNSUPPORTED_REASONS = ["row_missing", "bad_layout", "busy"] as const
 type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 
@@ -72,6 +76,7 @@ let exclusionsActive = false
 const exclusionResults = new Map<string, number>()
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
+const mismatchReasons = new Map<string, number>()
 const bump = (map: Map<string, number>, key: string): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
@@ -90,6 +95,12 @@ export function renderAccountWeightsMetrics(): string {
 	)
 	for (const r of UNSUPPORTED_REASONS)
 		lines.push(`gaia_api_account_weights_shadow_unsupported_total{reason="${r}"} ${unsupported.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_account_weights_shadow_mismatch_total account weight comparisons counted mismatch, by reason: served_null (Postgres has no weight, geo-db has a row) or the size of the weight gap (gap_lt_0.01, gap_lt_1, gap_ge_1).",
+		"# TYPE gaia_api_account_weights_shadow_mismatch_total counter",
+	)
+	for (const r of MISMATCH_REASONS)
+		lines.push(`gaia_api_account_weights_shadow_mismatch_total{reason="${r}"} ${mismatchReasons.get(r) ?? 0}`)
 	if (exclusionsActive) {
 		lines.push(
 			"# HELP gaia_api_account_exclusions_shadow_total Pair-fit candidates' exclusion (a row in account_exclusions) from geo-db's derived collection 12 against Postgres, by result: match, mismatch, unsupported (geo-db cannot answer) or failed (geo-db read failed).",
@@ -107,6 +118,7 @@ export function __resetAccountWeightsMetricsForTests(): void {
 	exclusionResults.clear()
 	results.clear()
 	unsupported.clear()
+	mismatchReasons.clear()
 }
 
 /** What the served weight and geo-db's row say about each other: "match", "mismatch" or an unsupported reason. Pure. */
@@ -118,6 +130,16 @@ export function compareAccountWeight(
 	if (held.value.length !== ACCOUNT_WEIGHTS_VALUE_BYTES) return "bad_layout"
 	if (served === null) return "mismatch"
 	return Math.abs(served - held.score) <= WEIGHT_TOLERANCE * Math.max(1, Math.abs(served)) ? "match" : "mismatch"
+}
+
+/** The reason `compareAccountWeight` called these `mismatch`; only meaningful for that result. Pure. */
+export function accountWeightMismatchReason(
+	served: number | null,
+	held: {score: number; value: Buffer},
+): MismatchReason {
+	if (served === null) return "served_null"
+	const gap = Math.abs(served - held.score)
+	return gap < 0.01 ? "gap_lt_0.01" : gap < 1 ? "gap_lt_1" : "gap_ge_1"
 }
 
 /** What the served `excluded` flag and geo-db's collection 12 row say about each other. Pure. */
@@ -155,7 +177,8 @@ export function createAccountWeightsShadow(deps: {
 				const held = await reader.get(ACCOUNT_WEIGHTS_COLLECTION, userId)
 				const outcome = compareAccountWeight(served, held)
 				if (outcome === "match" || outcome === "mismatch") bump(results, outcome)
-				else {
+				if (outcome === "mismatch" && held) bump(mismatchReasons, accountWeightMismatchReason(served, held))
+				if (outcome !== "match" && outcome !== "mismatch") {
 					bump(results, "unsupported")
 					bump(unsupported, outcome)
 				}

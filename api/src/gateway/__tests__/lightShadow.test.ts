@@ -174,6 +174,9 @@ describe("the light entity selection (news app)", () => {
 		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tabc\tsx\t${HEX}\t-\t-\t1\n`
 		const s = await runEntity(ENTITY, {[geoSpace(SPACE_A)]: geoOutput(ENTITY) + extra})
 		expect(results()).toEqual({mismatch: 1})
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_mismatch_total{field="entity",part="statements_extra"} 1',
+		)
 		expect(s.log.warn).toHaveBeenCalledWith(
 			"gateway entity shadow mismatch (light)",
 			expect.objectContaining({first: expect.objectContaining({geoOnlyRows: 1})}),

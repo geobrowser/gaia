@@ -8,6 +8,7 @@ import {
 	ACCOUNT_WEIGHTS_COLLECTION,
 	ACCOUNT_WEIGHTS_VALUE_BYTES,
 	type AccountWeightsShadowConfig,
+	accountWeightMismatchReason,
 	compareAccountExclusion,
 	compareAccountWeight,
 	createAccountWeightsSampler,
@@ -70,7 +71,25 @@ describe("compareAccountWeight", () => {
 	})
 })
 
+describe("accountWeightMismatchReason", () => {
+	it("says served_null for a row Postgres lacks, else buckets the gap", () => {
+		expect(accountWeightMismatchReason(null, row(0.6))).toBe("served_null")
+		expect(accountWeightMismatchReason(0.5, row(0.505))).toBe("gap_lt_0.01")
+		expect(accountWeightMismatchReason(0.5, row(0.9))).toBe("gap_lt_1")
+		expect(accountWeightMismatchReason(0.5, row(7))).toBe("gap_ge_1")
+	})
+})
+
 describe("createAccountWeightsShadow", () => {
+	it("counts why a weight mismatched in gaia_api_account_weights_shadow_mismatch_total", async () => {
+		const get = vi.fn(async () => row(0.9))
+		const shadow = createAccountWeightsShadow({config, reader: {get, close: vi.fn()}, log})
+		expect(renderAccountWeightsMetrics()).toContain('shadow_mismatch_total{reason="served_null"} 0')
+		shadow.compare(new Map([[U1, {weight: null}]]))
+		await settle()
+		expect(renderAccountWeightsMetrics()).toContain('shadow_mismatch_total{reason="served_null"} 1')
+	})
+
 	it("exports nothing until mounted, then every series at zero", () => {
 		expect(renderAccountWeightsMetrics()).toBe("")
 		createAccountWeightsShadow({config, reader: {get: vi.fn(), close: vi.fn()}, log})
