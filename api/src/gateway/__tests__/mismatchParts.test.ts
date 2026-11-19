@@ -174,3 +174,90 @@ describe("gaia_api_gateway_shadow_requests_total", () => {
 		expect(series("gaia_api_gateway_shadow_requests_total")).toEqual({})
 	})
 })
+
+describe("gaia_api_gateway_shadow_postgres_seconds and gaia_api_gateway_shadow_geodb_seconds", () => {
+	const post = (query: string) =>
+		new Request("http://api/graphql", {
+			method: "POST",
+			headers: {"content-type": "application/json"},
+			body: JSON.stringify({query}),
+		})
+	const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+	const count = (name: string, field: string) => {
+		const line = renderGatewayMetrics()
+			.split("\n")
+			.find((l) => l.startsWith(`${name}_count{field="${field}"}`))
+		return line === undefined ? undefined : Number(line.split(" ").pop())
+	}
+	const bucket = (name: string, field: string, le: string) => {
+		const line = renderGatewayMetrics()
+			.split("\n")
+			.find((l) => l.startsWith(`${name}_bucket{field="${field}",le="${le}"}`))
+		return line === undefined ? undefined : Number(line.split(" ").pop())
+	}
+
+	it("registers both families at zero for an active field", () => {
+		activateGatewayMetrics("entity")
+		expect(count("gaia_api_gateway_shadow_postgres_seconds", "entity")).toBe(0)
+		expect(count("gaia_api_gateway_shadow_geodb_seconds", "entity")).toBe(0)
+		expect(bucket("gaia_api_gateway_shadow_geodb_seconds", "entity", "+Inf")).toBe(0)
+	})
+
+	it("times PostgreSQL for every shadowable operation and geo-db for each compared one", async () => {
+		activateGatewayMetrics("entity")
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "entity=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "0.5",
+			}),
+			delegate: async () => {
+				await sleep(30)
+				return new Response(JSON.stringify({data: {}}), {headers: {"content-type": "application/json"}})
+			},
+			shadows: new Map([
+				[
+					"entity",
+					async () => {
+						await sleep(80)
+					},
+				],
+			]),
+			random: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.9),
+		})
+		await gateway(post('{ entity(id: "a") { id } }'), {})
+		await gateway(post('{ entity(id: "a") { id } }'), {})
+		await sleep(200)
+		// Both operations were shadowable, only the first was sampled.
+		expect(count("gaia_api_gateway_shadow_postgres_seconds", "entity")).toBe(2)
+		expect(count("gaia_api_gateway_shadow_geodb_seconds", "entity")).toBe(1)
+		// A 30 ms delegate is over the 25 ms edge and under 250 ms; an 80 ms shadow is over 50 ms and under 250 ms.
+		expect(bucket("gaia_api_gateway_shadow_postgres_seconds", "entity", "0.025")).toBe(0)
+		expect(bucket("gaia_api_gateway_shadow_postgres_seconds", "entity", "0.25")).toBe(2)
+		expect(bucket("gaia_api_gateway_shadow_geodb_seconds", "entity", "0.05")).toBe(0)
+		expect(bucket("gaia_api_gateway_shadow_geodb_seconds", "entity", "0.25")).toBe(1)
+	})
+
+	it("still times a shadow that throws, and does not time an unshadowed field", async () => {
+		activateGatewayMetrics("entity")
+		const gateway = createGateway({
+			config: readGatewayConfig({GRAPHQL_GATEWAY: "on", GRAPHQL_GATEWAY_FIELDS: "entity=shadow"}),
+			delegate: async () =>
+				new Response(JSON.stringify({data: {}}), {headers: {"content-type": "application/json"}}),
+			shadows: new Map([
+				[
+					"entity",
+					async () => {
+						throw new Error("boom")
+					},
+				],
+			]),
+			random: () => 0,
+		})
+		await gateway(post("{ spaces { id } }"), {})
+		await gateway(post('{ entity(id: "a") { id } }'), {})
+		await sleep(20)
+		expect(count("gaia_api_gateway_shadow_postgres_seconds", "entity")).toBe(1)
+		expect(count("gaia_api_gateway_shadow_geodb_seconds", "entity")).toBe(1)
+	})
+})
