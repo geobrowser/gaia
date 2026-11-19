@@ -16,6 +16,10 @@
  * order, a missing or extra id) or failed (a geo-db read failed; a node below frame revision 11 refuses best_order). A Postgres
  * reference query that fails is not geo-db's fault: reference_timeout (statement timeout, SQLSTATE 57014) or reference_failed.
  *
+ * A score read orders the geo-db scores as Postgres `numeric` holds them (15 significant digits, `pgNumericScore`): ties that the
+ * SQL breaks by id are not ordered by the 16th digit here. `..._mismatch_kind_total{read,kind}` splits what remains into the same
+ * ids in another order (`order`) and a different set of ids (`ids`).
+ *
  * Reading the numbers: best_order compares geo-db's SERVED scores with the stored `entity_ranking_scores` snapshot, so an
  * entity whose card moved since its last refresh (nothing re-scores on a card edit) can reorder a list; read the rate, not one
  * count. The score reads hold f64 scores to Postgres `numeric`: two distinct numerics that collapse to one f64 tie here and not
@@ -40,6 +44,14 @@ export const READS = ["best_order", "global_score", "local_score"] as const
 export type Read = (typeof READS)[number]
 export const RESULTS = ["match", "mismatch", "failed", "reference_timeout", "reference_failed"] as const
 export type Result = (typeof RESULTS)[number]
+export const MISMATCH_KINDS = ["order", "ids"] as const
+export type MismatchKind = (typeof MISMATCH_KINDS)[number]
+
+/** Why two pages differ: the same ids in another order, or not the same ids. Pure. */
+export function mismatchKind(pg: readonly string[], twin: readonly string[]): MismatchKind {
+	const ids = new Set(pg)
+	return pg.length === twin.length && twin.every((id) => ids.has(id)) ? "order" : "ids"
+}
 
 /** Which Postgres reference query a reference failure came from: a fixed set, so the label stays bounded. */
 export const STEPS = ["sample_ids", "pg_order", "cards", "config", "pg_page", "sample_space", "other"] as const
@@ -72,6 +84,14 @@ export function readBestOrderShadowConfig(env: Record<string, string | undefined
 	}
 }
 
+/**
+ * The score as Postgres orders it. `local_scores.score` and `global_scores.score` are unconstrained `numeric`, and a float8
+ * goes into numeric at 15 significant digits (DBL_DIG), so two f64 scores that differ only past the 15th digit (the saturated
+ * top of a sigmoid-normalised Space: 1 - 2^-53 against 1) are ONE value in the SQL's `ORDER BY score DESC, id ASC` and the id
+ * breaks the tie, while geo-db holds the full f64 and a scan orders them apart. The twin rounds the same way before it sorts.
+ */
+export const pgNumericScore = (score: number): number => Number(score.toPrecision(15))
+
 /** Whether two id lists hold the same ids in the same positions. Pure. */
 export function samePage(pg: readonly string[], twin: readonly string[]): boolean {
 	return pg.length === twin.length && pg.every((id, i) => id === twin[i])
@@ -83,6 +103,7 @@ const bump = (read: Read, r: Result): void => {
 	const k = `${read}\t${r}`
 	counts.set(k, (counts.get(k) ?? 0) + 1)
 }
+const mismatchKinds = new Map<string, number>()
 const failReasons = new Map<string, number>()
 const referenceSteps = new Map<string, number>()
 const stepOf = (e: ReferenceSideError): Step =>
@@ -103,6 +124,15 @@ export function renderBestOrderShadowMetrics(): string {
 		for (const r of RESULTS)
 			lines.push(
 				`gaia_api_entities_best_order_shadow_total{read="${read}",result="${r}"} ${counts.get(`${read}\t${r}`) ?? 0}`,
+			)
+	lines.push(
+		"# HELP gaia_api_entities_best_order_shadow_mismatch_kind_total Mismatches by read and kind: order (the same ids in a different order, ties and rounding) or ids (a different set: staleness or scope).",
+		"# TYPE gaia_api_entities_best_order_shadow_mismatch_kind_total counter",
+	)
+	for (const read of READS)
+		for (const kind of MISMATCH_KINDS)
+			lines.push(
+				`gaia_api_entities_best_order_shadow_mismatch_kind_total{read="${read}",kind="${kind}"} ${mismatchKinds.get(`${read}\t${kind}`) ?? 0}`,
 			)
 	lines.push(
 		"# HELP gaia_api_entities_best_order_shadow_failed_total Failed (geo-db side) results by read and reason: a GeoDbError reason or other.",
@@ -129,6 +159,7 @@ export function renderBestOrderShadowMetrics(): string {
 export function __resetBestOrderShadowMetricsForTests(): void {
 	active = false
 	counts.clear()
+	mismatchKinds.clear()
 	failReasons.clear()
 	referenceSteps.clear()
 }
@@ -193,6 +224,10 @@ export function createBestOrderShadow(deps: {
 	const record = (read: Read, pg: readonly string[], twin: readonly string[]) => {
 		const ok = samePage(pg, twin)
 		bump(read, ok ? "match" : "mismatch")
+		if (!ok) {
+			const k = `${read}\t${mismatchKind(pg, twin)}`
+			mismatchKinds.set(k, (mismatchKinds.get(k) ?? 0) + 1)
+		}
 		// Counts only: never which entity.
 		if (!ok && logged < 20) {
 			logged++
@@ -259,7 +294,7 @@ export function createBestOrderShadow(deps: {
 			const [expected, page] = await Promise.all([pg, reader.scan(collection, group, config.sample)])
 			// A collection-3 key is the entity id then the space id; collection 2's key is the entity id.
 			const twin = entitiesOrderedByScore(
-				page.rows.map((r) => ({id: r.keyHex.slice(0, 32), score: r.score})),
+				page.rows.map((r) => ({id: r.keyHex.slice(0, 32), score: pgNumericScore(r.score)})),
 				null,
 				"DESC",
 			)
