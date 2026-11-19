@@ -54,6 +54,53 @@ const INDEXER_ID: &str = "hermes_ipfs_cache";
 /// Maximum concurrent IPFS fetches.
 const MAX_CONCURRENT_FETCHES: usize = 20;
 
+/// How the warmer re-fetches a URI whose fetch failed transiently (gateway
+/// timeout, 429, 5xx, broken connection) before writing it as errored.
+///
+/// An errored row is a permanent verdict: `Cache::put` is first-write-wins and
+/// hermes-pipeline drops an edit whose row is errored. So a transient failure
+/// is retried in rounds (each round is the client's own in-line retries) for
+/// `window`, holding this block's cursor so the pipeline waits rather than
+/// moving on. Only a failure that outlasts the window is written as errored,
+/// where `reconcile_errored` can still find it.
+///
+/// The window bounds when the LAST round may start; a round itself runs up to
+/// about 3.5 minutes (`ipfs::IpfsClient`), so the default of 5 minutes keeps a
+/// stuck fetch inside hermes-pipeline's 10-minute `IPFS_WARMER_WAIT_SECS`.
+#[derive(Debug, Clone, Copy)]
+pub struct TransientRetry {
+    pub window: Duration,
+    pub base_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl TransientRetry {
+    const DEFAULT_WINDOW_SECS: u64 = 300;
+
+    /// Defaults, with the window overridable via `IPFS_TRANSIENT_RETRY_SECS`
+    /// (0 restores the old write-errored-at-once behaviour).
+    pub fn from_env() -> Self {
+        let window_secs = std::env::var("IPFS_TRANSIENT_RETRY_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(Self::DEFAULT_WINDOW_SECS);
+        Self {
+            window: Duration::from_secs(window_secs),
+            base_backoff: Duration::from_secs(15),
+            max_backoff: Duration::from_secs(60),
+        }
+    }
+
+    fn backoff(&self, round: u32) -> Duration {
+        let multiplier = 2u32
+            .checked_pow(round.saturating_sub(1))
+            .unwrap_or(u32::MAX);
+        self.base_backoff
+            .saturating_mul(multiplier)
+            .min(self.max_backoff)
+    }
+}
+
 /// Error type for the IPFS cache sink.
 #[derive(Debug, thiserror::Error)]
 pub enum IpfsCacheError {
@@ -143,6 +190,7 @@ pub struct IpfsCacheSink {
     pending: Arc<Mutex<PendingFetches>>,
     /// Best-effort geo-db mirror of the cursor; `None` unless `GEODB_CURSOR_MIRROR` is on.
     geodb_mirror: Option<Arc<geodb_cursor::CursorMirror>>,
+    transient_retry: TransientRetry,
 }
 
 impl IpfsCacheSink {
@@ -166,6 +214,7 @@ impl IpfsCacheSink {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             pending: Arc::new(Mutex::new(PendingFetches::default())),
             geodb_mirror: geodb_cursor::CursorMirror::from_env().map(Arc::new),
+            transient_retry: TransientRetry::from_env(),
         }
     }
 
@@ -257,6 +306,7 @@ impl Sink for IpfsCacheSink {
             let geodb_mirror = self.geodb_mirror.clone();
             let block_str = block_number.to_string();
             let block_num = block_number;
+            let transient_retry = self.transient_retry;
 
             let ipfs_hash = ipfs_uri
                 .uri
@@ -276,8 +326,15 @@ impl Sink for IpfsCacheSink {
                 async move {
                     let uri = ipfs_uri.uri.clone();
                     let ipfs_hash_for_log = ipfs_hash.clone();
-                    let result =
-                        process_ipfs_uri(ipfs_uri, &cache, &ipfs, &block_str, block_num).await;
+                    let result = process_ipfs_uri(
+                        ipfs_uri,
+                        &cache,
+                        &ipfs,
+                        &block_str,
+                        block_num,
+                        &transient_retry,
+                    )
+                    .await;
                     if let Err(e) = result {
                         if ipfs_hash_for_log.is_empty() {
                             error!(
@@ -388,6 +445,7 @@ async fn process_ipfs_uri(
     ipfs: &Arc<dyn IpfsFetcher>,
     block_str: &str,
     block_number: u64,
+    transient_retry: &TransientRetry,
 ) -> Result<(), CacheError> {
     let uri = ipfs_uri.uri;
     let ipfs_hash = uri.strip_prefix("ipfs://").unwrap_or("").to_string();
@@ -401,8 +459,32 @@ async fn process_ipfs_uri(
         "Processing edit"
     );
 
-    // Fetch the raw bytes from IPFS
-    let result = ipfs.get_bytes(&uri).await;
+    // Fetch the raw bytes from IPFS, re-fetching transient failures for up to
+    // `transient_retry.window` (see `TransientRetry`).
+    let started = tokio::time::Instant::now();
+    let mut round: u32 = 0;
+    let result = loop {
+        match ipfs.get_bytes(&uri).await {
+            Err(error) if error.is_transient() && started.elapsed() < transient_retry.window => {
+                round += 1;
+                let backoff = transient_retry.backoff(round);
+                warn!(
+                    event = "ipfs_cache.fetch_transient_retry",
+                    uri = %uri,
+                    ipfs_hash = %ipfs_hash,
+                    space_id = %space_id,
+                    block = block_number,
+                    round,
+                    elapsed_secs = started.elapsed().as_secs(),
+                    backoff_secs = backoff.as_secs(),
+                    error = %error,
+                    "Transient IPFS fetch failure; holding the block and retrying"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            other => break other,
+        }
+    };
 
     let item = match result {
         Ok(bytes) => {
@@ -457,13 +539,16 @@ async fn process_ipfs_uri(
             }
         }
         Err(error) => {
+            let transient = error.is_transient();
             if ipfs_hash.is_empty() {
                 warn!(
                     uri = %uri,
                     space_id = %space_id,
                     block = block_number,
                     error = %error,
-                    "Failed to fetch IPFS content"
+                    transient,
+                    retry_rounds = round,
+                    "Failed to fetch IPFS content; caching as errored"
                 );
             } else {
                 warn!(
@@ -473,7 +558,9 @@ async fn process_ipfs_uri(
                     space_id = %space_id,
                     block = block_number,
                     error = %error,
-                    "Failed to fetch IPFS content"
+                    transient,
+                    retry_rounds = round,
+                    "Failed to fetch IPFS content; caching as errored"
                 );
             }
             CacheItem {
@@ -674,5 +761,139 @@ mod tests {
         )); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());
+    }
+
+    // ---- GEO-3803: transient fetch failures are retried, not cached as errored
+
+    /// Fails with each queued error in turn, then serves `bytes`.
+    struct ScriptedFetcher {
+        failures: std::sync::Mutex<std::collections::VecDeque<ipfs::IpfsError>>,
+        bytes: Vec<u8>,
+        calls: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl IpfsFetcher for ScriptedFetcher {
+        async fn get_bytes(&self, _uri: &str) -> ipfs::Result<Vec<u8>> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.failures.lock().unwrap().pop_front() {
+                Some(err) => Err(err),
+                None => Ok(self.bytes.clone()),
+            }
+        }
+    }
+
+    fn scripted(failures: Vec<ipfs::IpfsError>) -> Arc<ScriptedFetcher> {
+        let edit = grc_20::Edit {
+            id: [0x01; 16],
+            name: std::borrow::Cow::Borrowed("edit"),
+            authors: vec![[0x02; 16]],
+            created_at: 1_700_000_000,
+            ops: vec![],
+        };
+        Arc::new(ScriptedFetcher {
+            failures: std::sync::Mutex::new(failures.into()),
+            bytes: grc_20::encode_edit(&edit).unwrap(),
+            calls: Default::default(),
+        })
+    }
+
+    fn http(status: u16) -> ipfs::IpfsError {
+        ipfs::IpfsError::HttpStatus {
+            status,
+            body: String::new(),
+        }
+    }
+
+    fn fast_retry(window: Duration) -> TransientRetry {
+        TransientRetry {
+            window,
+            base_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(2),
+        }
+    }
+
+    const URI: &str = "ipfs://bafkreitransient";
+
+    async fn run(fetcher: Arc<ScriptedFetcher>, retry: TransientRetry) -> CacheItem {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        let ipfs: Arc<dyn IpfsFetcher> = fetcher;
+        process_ipfs_uri(
+            IpfsUri {
+                uri: URI.to_string(),
+                space_id: vec![0xaa; 16],
+                source: "edit".to_string(),
+            },
+            &cache,
+            &ipfs,
+            "100",
+            100,
+            &retry,
+        )
+        .await
+        .unwrap();
+        let item = cache.lock().await.get(URI).await.unwrap();
+        item.expect("process_ipfs_uri always writes a row")
+    }
+
+    #[tokio::test]
+    async fn transient_failures_are_retried_until_the_content_is_cached() {
+        let fetcher = scripted(vec![http(503), http(429), ipfs::IpfsError::Timeout]);
+        let item = run(fetcher.clone(), fast_retry(Duration::from_secs(60))).await;
+        assert!(!item.is_errored);
+        assert!(item.data.is_some());
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn a_final_failure_is_cached_as_errored_without_retrying() {
+        let fetcher = scripted(vec![ipfs::IpfsError::VerificationFailed {
+            cid: "bafkreitransient".into(),
+            attempts: 6,
+        }]);
+        let item = run(fetcher.clone(), fast_retry(Duration::from_secs(60))).await;
+        assert!(item.is_errored);
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let fetcher = scripted(vec![http(404)]);
+        assert!(
+            run(fetcher.clone(), fast_retry(Duration::from_secs(60)))
+                .await
+                .is_errored
+        );
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_transient_failure_that_outlasts_the_window_is_cached_as_errored() {
+        // More failures than the window allows: the row is written errored so
+        // the block can complete and reconcile_errored can find it later.
+        let fetcher = scripted((0..10_000).map(|_| http(502)).collect());
+        let item = run(fetcher.clone(), fast_retry(Duration::from_millis(30))).await;
+        assert!(item.is_errored);
+        assert!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    }
+
+    #[tokio::test]
+    async fn a_zero_window_restores_the_old_behaviour() {
+        let fetcher = scripted(vec![http(503)]);
+        assert!(
+            run(fetcher.clone(), fast_retry(Duration::ZERO))
+                .await
+                .is_errored
+        );
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn transient_retry_backoff_doubles_and_caps() {
+        let r = TransientRetry {
+            window: Duration::from_secs(300),
+            base_backoff: Duration::from_secs(15),
+            max_backoff: Duration::from_secs(60),
+        };
+        let secs: Vec<u64> = (1..=5).map(|n| r.backoff(n).as_secs()).collect();
+        assert_eq!(secs, vec![15, 30, 60, 60, 60]);
+        assert_eq!(r.backoff(u32::MAX), Duration::from_secs(60));
     }
 }
