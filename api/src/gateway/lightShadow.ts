@@ -76,7 +76,13 @@ import {
 	VALUE_IGNORED,
 	widenCrossSpace,
 } from "./entityShadow"
-import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
+import {
+	type MismatchPart,
+	recordGatewayUnsupportedShape,
+	type UncomparedReason,
+	type UnsupportedReason,
+} from "./metrics"
+import {mismatchPartsOf} from "./mismatchParts"
 import {checkOrderedPage} from "./orderPickShadow"
 import {checkPropertyInfo, checkRelationsMembership, collectPropertyInfo, type PropertyInfos} from "./propertyInfo"
 import {checkPropertyOrder} from "./propertyOrderShadow"
@@ -1626,6 +1632,18 @@ export async function checkLight(
 			sampleGeoOnly: reverse.geoOnly.slice(0, 5),
 			skipped,
 			derivedMismatches: wrong,
+			parts:
+				bad || badRelations || badInfo
+					? mismatchPartsOf({
+							missingInGeoDb: missing.length,
+							geoOnlyRows: reverse.geoOnly.length,
+							derivedMismatches: wrong,
+							unmetFilter: unmet,
+							notInSpace: outsideSpace,
+							propertyInfoMismatches,
+							relationsMembership: badRelations && membership.read ? membership.detail : undefined,
+						})
+					: undefined,
 			unmetFilter: unmet.slice(0, 3),
 			notInSpace: outsideSpace,
 			targetsCompared,
@@ -1762,7 +1780,7 @@ export async function runLight(
 		plan.kind === "entities" && plan.propertyOrder
 			? await checkPropertyOrder(deps, plan.propertyOrder, pageIds, label)
 			: ({result: "skip"} as const)
-	const checks: {id: string; check: LightCheck}[] = []
+	const checks: {id: string; check: LightCheck; backlink?: true}[] = []
 	const backlinkUncompared = new Set<UncomparedReason>()
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
@@ -1775,7 +1793,8 @@ export async function runLight(
 		for (const rows of plan.card.backlinkRows ?? []) {
 			const outcome = await checkBacklinkRows(deps, rows, node, id, plan.kind === "entity" ? 0 : 1, label)
 			if (outcome.result === "match") for (const r of outcome.uncompared) backlinkUncompared.add(r)
-			else if (outcome.result === "mismatch" || outcome.result === "failed") checks.push({id, check: outcome})
+			else if (outcome.result === "mismatch" || outcome.result === "failed")
+				checks.push({id, check: outcome, backlink: true})
 			// A question geo-db cannot be asked (flag off, unloaded Space, no budget) leaves the rows uncompared.
 			else backlinkUncompared.add("backlink_rows")
 		}
@@ -1799,6 +1818,20 @@ export async function runLight(
 				typeScan: scan.result === "mismatch" ? scan.detail : undefined,
 				propertyOrder: propertyOrder.result === "mismatch" ? propertyOrder.detail : undefined,
 				first: mismatched[0]?.check.result === "mismatch" ? mismatched[0].check.detail : undefined,
+				// Every part that differed over the whole operation, not only the first entity's.
+				parts: [
+					...new Set<MismatchPart>([
+						...mismatched.flatMap((c) =>
+							c.backlink
+								? (["backlink_rows"] as const)
+								: mismatchPartsOf(c.check.result === "mismatch" ? c.check.detail : undefined),
+						),
+						...(filterBreach ? (["filter_breach"] as const) : []),
+						...(page.result === "mismatch" ? (["ordered_page"] as const) : []),
+						...(scan.result === "mismatch" ? (["type_scan"] as const) : []),
+						...(propertyOrder.result === "mismatch" ? (["property_order"] as const) : []),
+					]),
+				],
 			},
 		}
 	}

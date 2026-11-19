@@ -104,7 +104,43 @@ export const UNCOMPARED_REASONS = [
 	"relation_facets",
 ] as const
 
+/**
+ * Which part of a shadowed answer differed, for a `mismatch`. A closed set, so it is safe as a label; `other` holds a
+ * mismatch no named part explains. One operation counts each part once, so the series can sum to more than `mismatch`.
+ */
+export const MISMATCH_PARTS = [
+	"statements_missing",
+	"statements_extra",
+	"name",
+	"description",
+	"types",
+	"types_names",
+	"space_ids",
+	"updated_at",
+	"created_at",
+	"all_values_list",
+	"property_names",
+	"type_names",
+	"to_entity_names",
+	"from_entity_names",
+	"nested_entity",
+	"property_info",
+	"relations_membership",
+	"relation_facets",
+	"relation_edge",
+	"backlink_rows",
+	"unmet_filter",
+	"not_in_space",
+	"filter_breach",
+	"ordered_page",
+	"type_scan",
+	"property_order",
+	"absent_in_postgres",
+	"other",
+] as const
+
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
+export type MismatchPart = (typeof MISMATCH_PARTS)[number]
 export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 export type UncomparedReason = (typeof UNCOMPARED_REASONS)[number]
 
@@ -114,6 +150,8 @@ const unsupported = new Map<string, number>()
 const failed = new Map<string, number>()
 const uncompared = new Map<string, number>()
 const shapes = new Map<string, number>()
+const mismatchParts = new Map<string, number>()
+const requests = new Map<string, number>()
 
 /** Most distinct (field, reason, shape) series one process exports; later shapes count as `other`. */
 export const MAX_UNSUPPORTED_SHAPES = 100
@@ -129,6 +167,18 @@ export function recordGatewayShadow(field: string, result: ShadowResult): void {
 	bump(results, `${field}\t${result}`)
 	// Why a read failed comes from the pool's failure scope (see geodb/failReason.ts); `other` when none was noted.
 	if (result === "failed") bump(failed, `${field}\t${notedFailReason()}`)
+}
+
+/** Counts each distinct part of one mismatching operation once. An empty list counts `other`. */
+export function recordGatewayMismatchParts(field: string, parts: Iterable<MismatchPart>): void {
+	const distinct = new Set(parts)
+	if (distinct.size === 0) distinct.add("other")
+	for (const part of distinct) bump(mismatchParts, `${field}\t${part}`)
+}
+
+/** Counts a shadowable operation for `field` as it arrives, before the sample decides whether to compare it. */
+export function recordGatewayRequest(field: string): void {
+	bump(requests, field)
 }
 
 export function recordGatewayUnsupported(field: string, reason: UnsupportedReason): void {
@@ -161,6 +211,21 @@ export function renderGatewayMetrics(): string {
 			lines.push(
 				`gaia_api_gateway_shadow_total{field="${field}",result="${result}"} ${results.get(`${field}\t${result}`) ?? 0}`,
 			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_mismatch_total Gateway shadow comparisons counted mismatch, by root field and the part that differed. An operation counts each differing part once, so the parts can sum to more than the mismatch result.",
+		"# TYPE gaia_api_gateway_shadow_mismatch_total counter",
+	)
+	for (const field of fields)
+		for (const part of MISMATCH_PARTS)
+			lines.push(
+				`gaia_api_gateway_shadow_mismatch_total{field="${field}",part="${part}"} ${mismatchParts.get(`${field}\t${part}`) ?? 0}`,
+			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_requests_total Operations whose root field has a shadow mounted, counted before the sample rate decides whether one is compared, by root field.",
+		"# TYPE gaia_api_gateway_shadow_requests_total counter",
+	)
+	for (const field of fields)
+		lines.push(`gaia_api_gateway_shadow_requests_total{field="${field}"} ${requests.get(field) ?? 0}`)
 	lines.push(
 		"# HELP gaia_api_gateway_shadow_failed_total Gateway shadow comparisons whose geo-db read failed (the failed result above), by root field and reason: timeout, client_failed, cooling_down or other.",
 		"# TYPE gaia_api_gateway_shadow_failed_total counter",
@@ -209,5 +274,7 @@ export function __resetGatewayMetricsForTests(): void {
 	uncompared.clear()
 	failed.clear()
 	shapes.clear()
+	mismatchParts.clear()
+	requests.clear()
 	__resetSearchMetricsForTests()
 }

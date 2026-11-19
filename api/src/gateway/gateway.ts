@@ -2,6 +2,7 @@ import type {DocumentNode} from "graphql"
 import {withFailureScope} from "../geodb/failReason"
 import {type Classification, classifyRequestWithDocument, type GraphqlRequestParams} from "./classify"
 import type {FieldMode, GatewayConfig} from "./config"
+import {recordGatewayRequest} from "./metrics"
 import {activateServeMetrics, observeServe, recordServeFallback, recordServeSource} from "./serveMetrics"
 
 /**
@@ -170,6 +171,7 @@ function scheduleShadow<Ctx>(
 		})
 		const shadow = field === undefined ? undefined : shadows.get(field)
 		if (field === undefined || !shadow) return
+		recordGatewayRequest(field)
 		if (!((deps.random ?? Math.random)() < deps.config.shadowSampleRate)) return
 		if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) return
 		if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) return

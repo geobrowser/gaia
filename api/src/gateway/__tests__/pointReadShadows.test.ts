@@ -275,6 +275,9 @@ describe("entities shadow", () => {
 		const {shadows, log} = setup({[hex(A)]: geoRows(A, "Ada"), [hex(B)]: geoRows(B, "Robert")})
 		await run(shadows, "entities", ENTITIES, body([cardOf(A, "Ada"), cardOf(B, "Bob")]), vars)
 		expect(totals("entities")).toEqual({mismatch: 1})
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_mismatch_total{field="entities",part="statements_extra"} 1',
+		)
 		expect(log.warn).toHaveBeenCalledWith(
 			"gateway entities shadow mismatch",
 			expect.objectContaining({items: 2, mismatches: 1}),

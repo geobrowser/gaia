@@ -69,12 +69,14 @@ import type {FieldShadow} from "./gateway"
 import {analyzeLightEntities, noteUnsupported, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
+	recordGatewayMismatchParts,
 	recordGatewayShadow,
 	recordGatewayUncompared,
 	recordGatewayUnsupported,
 	type UncomparedReason,
 	type UnsupportedReason,
 } from "./metrics"
+import {mismatchPartsOf} from "./mismatchParts"
 
 export const ENTITIES_FIELD = "entities"
 export const RELATION_FIELD = "relation"
@@ -785,6 +787,8 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 				]))
 					recordGatewayUncompared(field, reason)
 			recordGatewayShadow(field, result)
+			if (result === "mismatch")
+				recordGatewayMismatchParts(field, new Set(mismatched.flatMap((j) => mismatchPartsOf(j.detail))))
 			if (result === "mismatch")
 				deps.log.warn(`${label} mismatch`, {
 					operationName: classification.operationName,

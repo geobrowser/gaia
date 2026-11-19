@@ -104,7 +104,22 @@ export function compareWatermarks(
 	return postgres.getTime() === geo.watermark.getTime() ? "match" : "mismatch"
 }
 
+/** Why a `mismatch` is one: which side holds the newer cutoff, or the only one. A closed set, so safe as a label. */
+export const MISMATCH_REASONS = ["geo_behind", "geo_ahead", "geo_no_cutoff", "postgres_none"] as const
+export type MismatchReason = (typeof MISMATCH_REASONS)[number]
+
+/** The reason `compareWatermarks` called these two `mismatch`; only meaningful for that result. Pure. */
+export function feedRunMismatchReason(
+	postgres: Date | null,
+	geo: {present: false} | {present: true; watermark: Date | null},
+): MismatchReason {
+	if (postgres === null) return "postgres_none"
+	if (!geo.present || geo.watermark === null) return "geo_no_cutoff"
+	return geo.watermark.getTime() < postgres.getTime() ? "geo_behind" : "geo_ahead"
+}
+
 let active = false
+const mismatchReasons = new Map<MismatchReason, number>()
 const results = new Map<Result, number>()
 const bump = (result: Result): void => {
 	results.set(result, (results.get(result) ?? 0) + 1)
@@ -117,12 +132,18 @@ export function renderFeedRunsShadowMetrics(): string {
 		"# HELP gaia_api_feed_runs_shadow_total Whether geo-db's mirrored newest succeeded feed_signal_runs row (cursors collection 10) holds the same data_through instant as Postgres' max over the succeeded runs, by result: match, mismatch, absent (geo-db has no row: the mirror is not on, not a disagreement), malformed, failed (geo-db) or reference_timeout / reference_failed (the Postgres read).",
 		"# TYPE gaia_api_feed_runs_shadow_total counter",
 		...RESULTS.map((r) => `gaia_api_feed_runs_shadow_total{result="${r}"} ${results.get(r) ?? 0}`),
+		"# HELP gaia_api_feed_runs_shadow_mismatch_total The mismatch result above, by reason: geo_behind (geo-db's cutoff is older than Postgres'), geo_ahead (newer), geo_no_cutoff (geo-db's row has none, Postgres has one) or postgres_none (Postgres has none, geo-db does).",
+		"# TYPE gaia_api_feed_runs_shadow_mismatch_total counter",
+		...MISMATCH_REASONS.map(
+			(r) => `gaia_api_feed_runs_shadow_mismatch_total{reason="${r}"} ${mismatchReasons.get(r) ?? 0}`,
+		),
 	].join("\n")
 }
 
 export function __resetFeedRunsShadowMetricsForTests(): void {
 	active = false
 	results.clear()
+	mismatchReasons.clear()
 }
 
 /** Postgres' watermark: the same filter `readSeen` applies. */
@@ -154,8 +175,13 @@ export function createFeedRunsShadow(deps: {
 	async function pass(): Promise<void> {
 		try {
 			const postgres = await viaReference(readWatermark(db))
-			const outcome = compareWatermarks(postgres, await readFeedRunsWatermark(reader))
+			const geo = await readFeedRunsWatermark(reader)
+			const outcome = compareWatermarks(postgres, geo)
 			bump(outcome)
+			if (outcome === "mismatch") {
+				const why = feedRunMismatchReason(postgres, geo)
+				mismatchReasons.set(why, (mismatchReasons.get(why) ?? 0) + 1)
+			}
 			if (outcome === "mismatch" && logged < 20) {
 				logged++
 				log.warn("feed runs shadow: watermarks differ")

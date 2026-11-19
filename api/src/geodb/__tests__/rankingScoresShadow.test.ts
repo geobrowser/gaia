@@ -7,6 +7,7 @@ import {
 	compareDefault,
 	compareRow,
 	createRankingScoresShadow,
+	defaultMismatchReason,
 	mismatchReason,
 	overlayCounts,
 	readRankingScoresShadowConfig,
@@ -261,6 +262,29 @@ const scoresOf = (over: Record<string, unknown> = {}) => ({
 	...over,
 })
 
+describe("defaultMismatchReason", () => {
+	const pg = {quality: 0.25, intrinsic: 0.3, typeWeight: 1.4, ranking: 12.5}
+	it("names the scores that differ and buckets the ranking gap", () => {
+		expect(defaultMismatchReason(pg, served({ranking: 12.505}))).toEqual({fields: "ranking", delta: "lt_0.01"})
+		expect(defaultMismatchReason(pg, served({quality: 0.26, ranking: 13}))).toEqual({
+			fields: "quality+ranking",
+			delta: "lt_1",
+		})
+		expect(defaultMismatchReason(pg, served({typeWeight: 1, ranking: 50}))).toEqual({
+			fields: "type_weight+ranking",
+			delta: "lt_100",
+		})
+		expect(defaultMismatchReason(pg, served({ranking: 500}))).toEqual({fields: "ranking", delta: "ge_100"})
+		expect(defaultMismatchReason(pg, served({intrinsic: 0.31}))).toEqual({fields: "intrinsic", delta: "none"})
+	})
+	it("says many past three fields and none for equal scores", () => {
+		expect(defaultMismatchReason(pg, served({quality: 0, intrinsic: 0, typeWeight: 0, ranking: 0})).fields).toBe(
+			"many",
+		)
+		expect(defaultMismatchReason(pg, served()).fields).toBe("none")
+	})
+})
+
 describe("compareDefault", () => {
 	const pg = {quality: 0.25, intrinsic: 0.3, typeWeight: 1.4, ranking: 12.5}
 	it("matches four equal scores within tolerance and mismatches any one that differs", () => {
@@ -315,6 +339,18 @@ describe("the default pass", () => {
 		const plain = {get: vi.fn(async () => null), close: vi.fn()} as unknown as DerivedReader
 		await createRankingScoresShadow({config, db: db([], []), reader: plain, log}).runOnce()
 		expect(renderRankingScoresShadowMetrics()).toContain('default_shadow_total{result="match"} 0')
+	})
+	it("names why a default row mismatched, in gaia_api_ranking_scores_default_shadow_mismatch_total", async () => {
+		const scores = vi.fn(async (_config: unknown, cards: unknown[]) => cards.map(() => served({ranking: 1})))
+		await createRankingScoresShadow({
+			config,
+			db: db([{entity_id: A, ...scoresOf()}], [card(A)]),
+			reader: reader(scores as never),
+			log,
+		}).runOnce()
+		expect(renderRankingScoresShadowMetrics()).toContain(
+			'gaia_api_ranking_scores_default_shadow_mismatch_total{fields="ranking",delta="lt_100"} 1',
+		)
 	})
 	it("sends the un-engaged rows' cards and counts each served row, leaving engaged Postgres rows out", async () => {
 		const scores = vi.fn(async (_config: unknown, cards: {entityHex: string}[]) =>

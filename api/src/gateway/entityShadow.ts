@@ -73,12 +73,14 @@ import type {FieldShadow} from "./gateway"
 import {analyzeLightEntity, type LightOutcome, noteUnsupported, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
+	recordGatewayMismatchParts,
 	recordGatewayShadow,
 	recordGatewayUncompared,
 	recordGatewayUnsupported,
 	type UncomparedReason,
 	type UnsupportedReason,
 } from "./metrics"
+import {mismatchPartsOf} from "./mismatchParts"
 import {
 	checkNestedEntities,
 	collectNestedEntities,
@@ -1894,6 +1896,7 @@ export function countLight(
 	}
 	for (const reason of new Set(outcome.uncompared)) recordGatewayUncompared(field, reason)
 	recordGatewayShadow(field, outcome.result)
+	if (outcome.result === "mismatch") recordGatewayMismatchParts(field, mismatchPartsOf(outcome.detail))
 	if (outcome.result === "mismatch")
 		deps.log.warn(`gateway ${field} shadow mismatch (light)`, {...context, ...outcome.detail})
 }
@@ -2051,6 +2054,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			}
 			for (const reason of reasons) recordGatewayUncompared(ENTITY_FIELD, reason)
 			recordGatewayShadow(ENTITY_FIELD, result)
+			if (result === "mismatch") recordGatewayMismatchParts(ENTITY_FIELD, mismatchPartsOf(detail))
 			if (result === "mismatch")
 				deps.log.warn("gateway entity shadow mismatch", {
 					operationName: classification.operationName,

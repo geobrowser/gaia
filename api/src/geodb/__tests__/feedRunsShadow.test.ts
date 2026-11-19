@@ -11,6 +11,7 @@ import {
 	compareWatermarks,
 	createFeedRunsShadow,
 	feedRunKey,
+	feedRunMismatchReason,
 	parseFeedRunValue,
 	readFeedRunsShadowConfig,
 	readFeedRunsWatermark,
@@ -85,6 +86,29 @@ describe("compareWatermarks", () => {
 	})
 	it("keeps a missing geo-db row apart from a mismatch", () => {
 		expect(compareWatermarks(d, {present: false})).toBe("absent")
+	})
+})
+
+describe("feedRunMismatchReason", () => {
+	const d = new Date(T)
+	it("says which side holds the newer, or the only, cutoff", () => {
+		expect(feedRunMismatchReason(d, {present: true, watermark: new Date(d.getTime() - 1)})).toBe("geo_behind")
+		expect(feedRunMismatchReason(d, {present: true, watermark: new Date(d.getTime() + 1)})).toBe("geo_ahead")
+		expect(feedRunMismatchReason(d, {present: true, watermark: null})).toBe("geo_no_cutoff")
+		expect(feedRunMismatchReason(null, {present: true, watermark: d})).toBe("postgres_none")
+	})
+	it("is counted in gaia_api_feed_runs_shadow_mismatch_total, every reason at zero", async () => {
+		const warn = vi.fn()
+		const shadow = createFeedRunsShadow({
+			config: {enabled: true, intervalMs: 1000},
+			db: {} as Database,
+			reader: readerOf(value(1, `${T}/g`)),
+			readWatermark: async () => new Date(d.getTime() + 5000),
+			log: {warn},
+		})
+		expect(renderFeedRunsShadowMetrics()).toContain('feed_runs_shadow_mismatch_total{reason="geo_ahead"} 0')
+		await shadow.runOnce()
+		expect(renderFeedRunsShadowMetrics()).toContain('feed_runs_shadow_mismatch_total{reason="geo_behind"} 1')
 	})
 })
 
