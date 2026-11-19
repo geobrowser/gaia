@@ -62,7 +62,10 @@ async fn main() -> anyhow::Result<()> {
         .max_connections(5)
         .connect(&database_url)
         .await?;
-    let ipfs = IpfsClient::new(&ipfs_gateway);
+    // Rows are fetched one after another, so keep the per-URI budget short: a
+    // row still failing after 30 s is reported and the run moves on (GEO-3803;
+    // the live warmer uses the client's 180 s default).
+    let ipfs = IpfsClient::new(&ipfs_gateway).with_total_budget(Duration::from_secs(30));
 
     let errored: Vec<(String,)> =
         sqlx::query_as("SELECT uri FROM ipfs_cache WHERE is_errored = true ORDER BY uri LIMIT $1")

@@ -39,7 +39,7 @@ use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{IpfsUri, IpfsUriList};
-use ipfs::{IpfsError, IpfsFetcher, IpfsSource};
+use ipfs::{IpfsFetcher, IpfsSource};
 use prost::Message;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
@@ -52,64 +52,16 @@ use cache::{Cache, CacheError, CacheItem};
 const INDEXER_ID: &str = "hermes_ipfs_cache";
 
 /// Maximum concurrent IPFS fetches.
+///
+/// Invariant (GEO-3803): a URI holds its permit for at most the ipfs client's
+/// total budget (180 s, `IpfsClient::DEFAULT_TOTAL_BUDGET`). Permits are taken
+/// in block order and tokio's `Semaphore` is FIFO, so once hermes-pipeline
+/// reaches a block, that block's URIs queue only behind their own siblings,
+/// and the block completes within `ceil(uris / 20) x 180 s`. Keep that under
+/// hermes-pipeline's `IPFS_WARMER_WAIT_SECS` (600 s): up to 60 URIs per block
+/// (recent blocks carry 1 to 3). Past it the pipeline drops the edits as
+/// missing rows, which `reconcile_errored` cannot see.
 const MAX_CONCURRENT_FETCHES: usize = 20;
-
-/// How the warmer re-fetches a URI whose fetch failed transiently (gateway
-/// timeout, 429, 5xx, broken connection) before writing it as errored.
-///
-/// An errored row is a permanent verdict: `Cache::put` is first-write-wins and
-/// hermes-pipeline drops an edit whose row is errored. So a transient failure
-/// is retried in rounds (each round is the client's own in-line retries) until
-/// a hard deadline `window` after the block got its first fetch permit (shared
-/// by all its URIs), holding this block's cursor so the pipeline waits rather than
-/// moving on. Only a failure
-/// that outlasts the window is written as errored, where `reconcile_errored`
-/// can still find it.
-///
-/// Cost: hermes-pipeline handles blocks in order, so while one URI is in its
-/// window every later block waits too. The default of 3 minutes leaves wide
-/// margin under hermes-pipeline's 10-minute `IPFS_WARMER_WAIT_SECS`, past
-/// which the pipeline would drop the edit anyway.
-#[derive(Debug, Clone, Copy)]
-pub struct TransientRetry {
-    pub window: Duration,
-    pub base_backoff: Duration,
-    pub max_backoff: Duration,
-}
-
-impl TransientRetry {
-    const DEFAULT_WINDOW_SECS: u64 = 180;
-
-    /// Defaults, with the window overridable via `IPFS_TRANSIENT_RETRY_SECS`
-    /// (0 restores the old write-errored-at-once behaviour).
-    pub fn from_env() -> Self {
-        let window_secs = match std::env::var("IPFS_TRANSIENT_RETRY_SECS") {
-            Ok(v) => v.trim().parse().unwrap_or_else(|_| {
-                warn!(
-                    value = %v,
-                    default = Self::DEFAULT_WINDOW_SECS,
-                    "IPFS_TRANSIENT_RETRY_SECS is not a whole number of seconds; using the default"
-                );
-                Self::DEFAULT_WINDOW_SECS
-            }),
-            Err(_) => Self::DEFAULT_WINDOW_SECS,
-        };
-        Self {
-            window: Duration::from_secs(window_secs),
-            base_backoff: Duration::from_secs(15),
-            max_backoff: Duration::from_secs(60),
-        }
-    }
-
-    fn backoff(&self, round: u32) -> Duration {
-        let multiplier = 2u32
-            .checked_pow(round.saturating_sub(1))
-            .unwrap_or(u32::MAX);
-        self.base_backoff
-            .saturating_mul(multiplier)
-            .min(self.max_backoff)
-    }
-}
 
 /// Error type for the IPFS cache sink.
 #[derive(Debug, thiserror::Error)]
@@ -200,7 +152,6 @@ pub struct IpfsCacheSink {
     pending: Arc<Mutex<PendingFetches>>,
     /// Best-effort geo-db mirror of the cursor; `None` unless `GEODB_CURSOR_MIRROR` is on.
     geodb_mirror: Option<Arc<geodb_cursor::CursorMirror>>,
-    transient_retry: TransientRetry,
 }
 
 impl IpfsCacheSink {
@@ -224,7 +175,6 @@ impl IpfsCacheSink {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             pending: Arc::new(Mutex::new(PendingFetches::default())),
             geodb_mirror: geodb_cursor::CursorMirror::from_env().map(Arc::new),
-            transient_retry: TransientRetry::from_env(),
         }
     }
 
@@ -307,13 +257,6 @@ impl Sink for IpfsCacheSink {
             edit_count,
         );
 
-        // One retry deadline for the whole block (see `TransientRetry`): URIs
-        // wait for permits in waves of MAX_CONCURRENT_FETCHES, so a per-URI
-        // deadline would stack up wave after wave past hermes-pipeline's wait.
-        // It starts when this block gets its first permit, so time spent
-        // queued behind EARLIER blocks does not eat this block's window.
-        let mut block_deadline: Option<tokio::time::Instant> = None;
-
         // Process each IPFS URI
         for ipfs_uri in uri_list.uris {
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
@@ -323,10 +266,6 @@ impl Sink for IpfsCacheSink {
             let geodb_mirror = self.geodb_mirror.clone();
             let block_str = block_number.to_string();
             let block_num = block_number;
-            let transient_retry = self.transient_retry;
-            let window = self.transient_retry.window;
-            let retry_deadline =
-                *block_deadline.get_or_insert_with(|| tokio::time::Instant::now() + window);
 
             let ipfs_hash = ipfs_uri
                 .uri
@@ -346,16 +285,8 @@ impl Sink for IpfsCacheSink {
                 async move {
                     let uri = ipfs_uri.uri.clone();
                     let ipfs_hash_for_log = ipfs_hash.clone();
-                    let result = process_ipfs_uri(
-                        ipfs_uri,
-                        &cache,
-                        &ipfs,
-                        &block_str,
-                        block_num,
-                        &transient_retry,
-                        retry_deadline,
-                    )
-                    .await;
+                    let result =
+                        process_ipfs_uri(ipfs_uri, &cache, &ipfs, &block_str, block_num).await;
                     if let Err(e) = result {
                         if ipfs_hash_for_log.is_empty() {
                             error!(
@@ -466,8 +397,6 @@ async fn process_ipfs_uri(
     ipfs: &Arc<dyn IpfsFetcher>,
     block_str: &str,
     block_number: u64,
-    transient_retry: &TransientRetry,
-    deadline: tokio::time::Instant,
 ) -> Result<(), CacheError> {
     let uri = ipfs_uri.uri;
     let ipfs_hash = uri.strip_prefix("ipfs://").unwrap_or("").to_string();
@@ -481,70 +410,24 @@ async fn process_ipfs_uri(
         "Processing edit"
     );
 
-    // Fetch the raw bytes from IPFS, re-fetching transient failures until the
-    // block's retry `deadline` (see `TransientRetry`). The first attempt is
-    // always made, bounded only by the client, so a URI that waited for a
-    // permit past the deadline is still really tried; only retries are cut.
-    let started = tokio::time::Instant::now();
-    let mut round: u32 = 0;
-    // The last real failure, so an attempt cut by the deadline still reports
-    // what the gateway was doing (503, 401, ...) rather than a bare timeout.
-    let mut last_error: Option<IpfsError> = None;
-    let result = loop {
-        let attempt = if round == 0 {
-            ipfs.get_bytes(&uri).await
-        } else {
-            match tokio::time::timeout_at(deadline, ipfs.get_bytes(&uri)).await {
-                Ok(attempt) => attempt,
-                Err(_) => Err(last_error.take().unwrap_or(IpfsError::Timeout)),
-            }
-        };
-        match attempt {
-            Err(error) if error.is_transient() && tokio::time::Instant::now() < deadline => {
-                // A warmer restart replays from the last persisted cursor and
-                // re-fetches URIs that already have a row. `put` would be a
-                // no-op (first write wins), so holding the block is pointless.
-                // A failed lookup counts as "not cached": returning the error
-                // here would complete the block with no row at all, which
-                // hermes-pipeline drops and reconcile_errored cannot see.
-                let cached = round == 0
-                    && match cache.lock().await.get(&uri).await {
-                        Ok(row) => row.is_some(),
-                        Err(e) => {
-                            warn!(uri = %uri, error = %e, "Cache lookup failed; retrying the fetch");
-                            false
-                        }
-                    };
-                if cached {
-                    debug!(
-                        uri = %uri,
-                        block = block_number,
-                        "Transient fetch failure for an already-cached URI; skipping"
-                    );
-                    return Ok(());
-                }
-                round += 1;
-                let backoff = transient_retry
-                    .backoff(round)
-                    .min(deadline.saturating_duration_since(tokio::time::Instant::now()));
-                warn!(
-                    event = "ipfs_cache.fetch_transient_retry",
-                    uri = %uri,
-                    ipfs_hash = %ipfs_hash,
-                    space_id = %space_id,
-                    block = block_number,
-                    round,
-                    elapsed_secs = started.elapsed().as_secs(),
-                    backoff_secs = backoff.as_secs(),
-                    error = %error,
-                    "Transient IPFS fetch failure; holding the block and retrying"
-                );
-                last_error = Some(error);
-                tokio::time::sleep(backoff).await;
-            }
-            other => break other,
+    // A warmer restart replays from the last persisted cursor and re-fetches
+    // URIs that already have a row. `put` is first-write-wins, so fetching
+    // again cannot change anything; skip it. A failed lookup counts as "not
+    // cached": returning the error here would complete the block with no row
+    // at all.
+    match cache.lock().await.get(&uri).await {
+        Ok(Some(_)) => {
+            debug!(uri = %uri, block = block_number, "Already cached; skipping fetch");
+            return Ok(());
         }
-    };
+        Ok(None) => {}
+        Err(e) => warn!(uri = %uri, error = %e, "Cache lookup failed; fetching anyway"),
+    }
+
+    // Fetch the raw bytes from IPFS. The client retries transient failures
+    // (timeouts, 429, 5xx, 401/403) for up to its 180 s budget; what comes back
+    // here is final for this pass.
+    let result = ipfs.get_bytes(&uri).await;
 
     let item = match result {
         Ok(bytes) => {
@@ -599,6 +482,8 @@ async fn process_ipfs_uri(
             }
         }
         Err(error) => {
+            // `transient` = the gateway, not the content, failed for the whole
+            // budget: a candidate for reconcile_errored once it recovers.
             let transient = error.is_transient();
             if ipfs_hash.is_empty() {
                 warn!(
@@ -607,7 +492,6 @@ async fn process_ipfs_uri(
                     block = block_number,
                     error = %error,
                     transient,
-                    retry_rounds = round,
                     "Failed to fetch IPFS content; caching as errored"
                 );
             } else {
@@ -619,7 +503,6 @@ async fn process_ipfs_uri(
                     block = block_number,
                     error = %error,
                     transient,
-                    retry_rounds = round,
                     "Failed to fetch IPFS content; caching as errored"
                 );
             }
@@ -823,7 +706,7 @@ mod tests {
         assert!(pending.blocks.is_empty());
     }
 
-    // ---- GEO-3803: transient fetch failures are retried, not cached as errored
+    // ---- GEO-3803: what the warmer writes after the client's retries --------
 
     /// Fails with each queued error in turn, then serves `bytes`.
     struct ScriptedFetcher {
@@ -858,108 +741,58 @@ mod tests {
         })
     }
 
-    fn http(status: u16) -> ipfs::IpfsError {
-        ipfs::IpfsError::HttpStatus {
-            status,
-            body: String::new(),
-        }
-    }
+    const URI: &str = "ipfs://bafkreiwarmer";
 
-    fn fast_retry(window: Duration) -> TransientRetry {
-        TransientRetry {
-            window,
-            base_backoff: Duration::from_millis(1),
-            max_backoff: Duration::from_millis(2),
-        }
-    }
-
-    const URI: &str = "ipfs://bafkreitransient";
-
-    async fn run(fetcher: Arc<ScriptedFetcher>, retry: TransientRetry) -> CacheItem {
-        let cache = Arc::new(Mutex::new(Cache::mock()));
-        let ipfs: Arc<dyn IpfsFetcher> = fetcher;
+    async fn run(cache: &Arc<Mutex<Cache>>, fetcher: &Arc<ScriptedFetcher>) {
+        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
         process_ipfs_uri(
             IpfsUri {
                 uri: URI.to_string(),
                 space_id: vec![0xaa; 16],
                 source: "edit".to_string(),
             },
-            &cache,
+            cache,
             &ipfs,
             "100",
             100,
-            &retry,
-            tokio::time::Instant::now() + retry.window,
         )
         .await
         .unwrap();
-        let item = cache.lock().await.get(URI).await.unwrap();
-        item.expect("process_ipfs_uri always writes a row")
     }
 
     #[tokio::test]
-    async fn transient_failures_are_retried_until_the_content_is_cached() {
-        let fetcher = scripted(vec![http(503), http(429), ipfs::IpfsError::Timeout]);
-        let item = run(fetcher.clone(), fast_retry(Duration::from_secs(60))).await;
+    async fn a_fetch_error_after_the_clients_retries_is_cached_as_errored() {
+        for err in [
+            ipfs::IpfsError::HttpStatus {
+                status: 503,
+                body: String::new(),
+            },
+            ipfs::IpfsError::VerificationFailed {
+                cid: "bafkreiwarmer".into(),
+                attempts: 15,
+            },
+        ] {
+            let cache = Arc::new(Mutex::new(Cache::mock()));
+            let fetcher = scripted(vec![err]);
+            run(&cache, &fetcher).await;
+            let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+            assert!(item.is_errored);
+            assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn fetched_content_is_cached() {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        let fetcher = scripted(vec![]);
+        run(&cache, &fetcher).await;
+        let item = cache.lock().await.get(URI).await.unwrap().unwrap();
         assert!(!item.is_errored);
         assert!(item.data.is_some());
-        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
-    async fn a_final_failure_is_cached_as_errored_without_retrying() {
-        let fetcher = scripted(vec![ipfs::IpfsError::VerificationFailed {
-            cid: "bafkreitransient".into(),
-            attempts: 6,
-        }]);
-        let item = run(fetcher.clone(), fast_retry(Duration::from_secs(60))).await;
-        assert!(item.is_errored);
-        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-
-        let fetcher = scripted(vec![http(404)]);
-        assert!(
-            run(fetcher.clone(), fast_retry(Duration::from_secs(60)))
-                .await
-                .is_errored
-        );
-        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn a_transient_failure_that_outlasts_the_window_is_cached_as_errored() {
-        // More failures than the window allows: the row is written errored so
-        // the block can complete and reconcile_errored can find it later.
-        let fetcher = scripted((0..10_000).map(|_| http(502)).collect());
-        let item = run(fetcher.clone(), fast_retry(Duration::from_millis(30))).await;
-        assert!(item.is_errored);
-        assert!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst) > 1);
-    }
-
-    #[tokio::test]
-    async fn a_zero_window_restores_the_old_behaviour() {
-        let fetcher = scripted(vec![http(503)]);
-        assert!(
-            run(fetcher.clone(), fast_retry(Duration::ZERO))
-                .await
-                .is_errored
-        );
-        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn transient_retry_backoff_doubles_and_caps() {
-        let r = TransientRetry {
-            window: Duration::from_secs(300),
-            base_backoff: Duration::from_secs(15),
-            max_backoff: Duration::from_secs(60),
-        };
-        let secs: Vec<u64> = (1..=5).map(|n| r.backoff(n).as_secs()).collect();
-        assert_eq!(secs, vec![15, 30, 60, 60, 60]);
-        assert_eq!(r.backoff(u32::MAX), Duration::from_secs(60));
-    }
-
-    #[tokio::test]
-    async fn an_already_cached_uri_does_not_hold_the_block_on_a_transient_failure() {
+    async fn an_already_cached_uri_is_not_fetched_again() {
         let cache = Arc::new(Mutex::new(Cache::mock()));
         cache
             .lock()
@@ -974,127 +807,10 @@ mod tests {
             })
             .await
             .unwrap();
-        let fetcher = scripted((0..10_000).map(|_| http(503)).collect());
-        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
-        process_ipfs_uri(
-            IpfsUri {
-                uri: URI.to_string(),
-                space_id: vec![0xaa; 16],
-                source: "edit".to_string(),
-            },
-            &cache,
-            &ipfs,
-            "100",
-            100,
-            &fast_retry(Duration::from_secs(3600)),
-            tokio::time::Instant::now() + Duration::from_secs(3600),
-        )
-        .await
-        .unwrap();
-        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let fetcher = scripted(vec![]);
+        run(&cache, &fetcher).await;
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         let item = cache.lock().await.get(URI).await.unwrap().unwrap();
-        assert!(!item.is_errored);
         assert_eq!(item.block, "90");
-    }
-
-    /// 503 once, then hangs, like a gateway that accepted the connection and
-    /// stalled. The hung retry must be cut by the block deadline.
-    struct FailThenHang(std::sync::atomic::AtomicU32);
-
-    #[async_trait::async_trait]
-    impl IpfsFetcher for FailThenHang {
-        async fn get_bytes(&self, _uri: &str) -> ipfs::Result<Vec<u8>> {
-            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                return Err(http(503));
-            }
-            tokio::time::sleep(Duration::from_secs(3600)).await;
-            unreachable!()
-        }
-    }
-
-    fn uri_msg() -> IpfsUri {
-        IpfsUri {
-            uri: URI.to_string(),
-            space_id: vec![0xaa; 16],
-            source: "edit".to_string(),
-        }
-    }
-
-    #[tokio::test]
-    async fn the_block_deadline_cuts_a_hung_retry() {
-        let fetcher = Arc::new(FailThenHang(Default::default()));
-        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
-        let cache = Arc::new(Mutex::new(Cache::mock()));
-        let retry = fast_retry(Duration::from_millis(50));
-        let started = std::time::Instant::now();
-        process_ipfs_uri(
-            uri_msg(),
-            &cache,
-            &ipfs,
-            "100",
-            100,
-            &retry,
-            tokio::time::Instant::now() + retry.window,
-        )
-        .await
-        .unwrap();
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "deadline not enforced"
-        );
-        assert!(
-            cache
-                .lock()
-                .await
-                .get(URI)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_errored
-        );
-        assert_eq!(fetcher.0.load(std::sync::atomic::Ordering::SeqCst), 2);
-    }
-
-    /// A URI that only got a permit after its block's deadline (it queued
-    /// behind earlier waves) is still really tried once.
-    #[tokio::test]
-    async fn a_uri_reached_after_the_block_deadline_still_gets_one_attempt() {
-        let past = tokio::time::Instant::now();
-        let retry = fast_retry(Duration::from_secs(60));
-
-        let healthy = scripted(vec![]);
-        let cache = Arc::new(Mutex::new(Cache::mock()));
-        let ipfs: Arc<dyn IpfsFetcher> = healthy.clone();
-        process_ipfs_uri(uri_msg(), &cache, &ipfs, "100", 100, &retry, past)
-            .await
-            .unwrap();
-        assert!(
-            !cache
-                .lock()
-                .await
-                .get(URI)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_errored
-        );
-
-        let failing = scripted(vec![http(503), http(503)]);
-        let cache = Arc::new(Mutex::new(Cache::mock()));
-        let ipfs: Arc<dyn IpfsFetcher> = failing.clone();
-        process_ipfs_uri(uri_msg(), &cache, &ipfs, "100", 100, &retry, past)
-            .await
-            .unwrap();
-        assert!(
-            cache
-                .lock()
-                .await
-                .get(URI)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_errored
-        );
-        assert_eq!(failing.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
