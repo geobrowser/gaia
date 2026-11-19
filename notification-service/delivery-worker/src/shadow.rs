@@ -291,6 +291,72 @@ pub struct Tally {
     pub skipped: u64,
     /// Held units retired uncounted because the wait list was full.
     pub evicted: u64,
+    /// A claim or marker call was answered with a definite auth refusal this pass.
+    pub refused: bool,
+}
+
+/// Longest the shadow waits between passes while the serve keeps refusing it.
+pub const BACKOFF_CAP: Duration = Duration::from_secs(300);
+
+/// Whether `e` is a refusal that retrying on the next tick cannot cure: the serve answered a
+/// coded token or permission refusal (`CapabilityTokenExpired`, `PermissionDenied`, ...).
+pub fn is_definite_refusal(e: &MirrorError) -> bool {
+    let MirrorError::Refused(body) = e else {
+        return false;
+    };
+    let Some(rest) = body.strip_prefix("code=") else {
+        return false;
+    };
+    let code = rest.split_whitespace().next().unwrap_or("");
+    [
+        "Capability",
+        "Token",
+        "Permission",
+        "Denied",
+        "Unauthorized",
+        "Forbidden",
+        "NoAccess",
+    ]
+    .iter()
+    .any(|m| code.contains(m))
+}
+
+/// Pass spacing: the tick interval, doubled after each pass the serve refused, up to a cap.
+/// Any pass without a definite refusal that also had no error resets it.
+#[derive(Debug)]
+pub struct Backoff {
+    base: Duration,
+    cap: Duration,
+    step: u32,
+}
+
+impl Backoff {
+    pub fn new(base: Duration, cap: Duration) -> Self {
+        Backoff { base, cap, step: 0 }
+    }
+
+    pub fn delay(&self) -> Duration {
+        self.base
+            .saturating_mul(1u32.checked_shl(self.step).unwrap_or(u32::MAX))
+            .min(self.cap.max(self.base))
+    }
+
+    /// Folds in one pass. Returns the new delay when it changed upward (the caller logs it, so
+    /// a refusal is logged once per step, not once per tick).
+    pub fn on_pass(&mut self, t: &Tally) -> Option<Duration> {
+        if t.refused {
+            let before = self.delay();
+            if before < self.cap {
+                self.step += 1;
+            }
+            let after = self.delay();
+            return (after != before).then_some(after);
+        }
+        if t.claim_errors == 0 {
+            self.step = 0;
+        }
+        None
+    }
 }
 
 impl Tally {
@@ -378,6 +444,10 @@ pub async fn pass<S: Source>(
         match src.enter_marker().await {
             Ok(k) => *gate = Gate::Draining(k),
             Err(MirrorError::CoolingDown) => t.claim_errors += 1,
+            Err(e) if is_definite_refusal(&e) => {
+                t.claim_errors += 1;
+                t.refused = true;
+            }
             Err(e) => {
                 t.claim_errors += 1;
                 warn!(error = %e, "geo-db shadow start marker failed; Postgres delivery is unaffected");
@@ -423,6 +493,12 @@ pub async fn pass<S: Source>(
                 }
                 Err(MirrorError::CoolingDown) => {
                     t.claim_errors += 1;
+                    break;
+                }
+                Err(e) if is_definite_refusal(&e) => {
+                    // `run` backs off and logs once per step.
+                    t.claim_errors += 1;
+                    t.refused = true;
                     break;
                 }
                 Err(e) => {
@@ -495,10 +571,9 @@ pub fn spawn<S: Source + Send + 'static>(src: S, settings: Settings) -> Shadow {
 async fn run<S: Source>(mut src: S, s: Settings, mut rx: mpsc::Receiver<Observation>) {
     let mut m = Matcher::new(s.miss_grace, s.extra_grace);
     let mut gate = Gate::Entering;
-    let mut tick = tokio::time::interval(s.interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut backoff = Backoff::new(s.interval, BACKOFF_CAP);
     loop {
-        tick.tick().await;
+        tokio::time::sleep(backoff.delay()).await;
         let mut observed = Vec::new();
         while let Ok(o) = rx.try_recv() {
             observed.push(o);
@@ -514,6 +589,12 @@ async fn run<S: Source>(mut src: S, s: Settings, mut rx: mpsc::Receiver<Observat
         )
         .await;
         t.emit();
+        if let Some(next) = backoff.on_pass(&t) {
+            warn!(
+                next_pass_in_secs = next.as_secs(),
+                "geo-db shadow is refused by the serve; backing off. Postgres delivery is unaffected"
+            );
+        }
         metrics::gauge!(LIVE).set(if gate == Gate::Live { 1.0 } else { 0.0 });
         metrics::gauge!(PENDING_UNITS).set(m.units_held() as f64);
         metrics::gauge!(PENDING_ROWS).set(m.rows_held() as f64);
@@ -991,5 +1072,95 @@ mod tests {
         assert!(handle
             .render()
             .contains("delivery_worker_shadow_skipped_total{reason=\"pre_start\"} 5"));
+    }
+
+    fn refused(code: &str) -> MirrorError {
+        MirrorError::Refused(format!("code={code} refused: DefiniteRefusal {code}"))
+    }
+
+    #[test]
+    fn token_and_permission_refusals_are_definite_and_other_errors_are_not() {
+        assert!(is_definite_refusal(&refused("CapabilityTokenExpired")));
+        assert!(is_definite_refusal(&refused("PermissionDenied")));
+        assert!(is_definite_refusal(&refused("Unauthorized")));
+        assert!(!is_definite_refusal(&refused("ScanLimitExceeded")));
+        assert!(!is_definite_refusal(&MirrorError::Refused(
+            "want a|b".into()
+        )));
+        assert!(!is_definite_refusal(&MirrorError::CoolingDown));
+        assert!(!is_definite_refusal(&MirrorError::Closed));
+    }
+
+    #[tokio::test]
+    async fn a_definite_refusal_on_claim_is_flagged_on_the_tally_and_still_counted() {
+        let mut m = matcher();
+        let mut src = Fake::default();
+        src.claims.push_back(Err(refused("CapabilityTokenExpired")));
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut Gate::Live,
+            vec![],
+            16,
+            1000,
+            Instant::now(),
+        )
+        .await;
+        assert_eq!((t.claim_errors, t.refused), (1, true));
+        let mut src = Fake::default();
+        src.claims.push_back(Err(MirrorError::CoolingDown));
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut Gate::Live,
+            vec![],
+            16,
+            1000,
+            Instant::now(),
+        )
+        .await;
+        assert_eq!((t.claim_errors, t.refused), (1, false));
+    }
+
+    fn refusal_tally() -> Tally {
+        Tally {
+            claim_errors: 1,
+            refused: true,
+            ..Tally::default()
+        }
+    }
+
+    #[test]
+    fn repeated_refusals_back_off_exponentially_to_a_cap_and_log_once_per_step() {
+        let mut b = Backoff::new(Duration::from_secs(5), Duration::from_secs(300));
+        assert_eq!(b.delay(), Duration::from_secs(5));
+        let mut seen = Vec::new();
+        let mut logged = 0;
+        for _ in 0..20 {
+            if b.on_pass(&refusal_tally()).is_some() {
+                logged += 1;
+            }
+            seen.push(b.delay().as_secs());
+        }
+        assert_eq!(&seen[..7], &[10, 20, 40, 80, 160, 300, 300]);
+        assert!(seen.iter().all(|d| *d <= 300));
+        // One log per step that changed the delay: 10, 20, 40, 80, 160, 300.
+        assert_eq!(logged, 6);
+    }
+
+    #[test]
+    fn a_clean_pass_resets_the_back_off_and_a_non_refusal_error_does_not_step_it() {
+        let mut b = Backoff::new(Duration::from_secs(5), Duration::from_secs(300));
+        b.on_pass(&refusal_tally());
+        b.on_pass(&refusal_tally());
+        assert_eq!(b.delay(), Duration::from_secs(20));
+        // A transient (not definite) failure neither steps nor resets.
+        b.on_pass(&Tally {
+            claim_errors: 1,
+            ..Tally::default()
+        });
+        assert_eq!(b.delay(), Duration::from_secs(20));
+        b.on_pass(&Tally::default());
+        assert_eq!(b.delay(), Duration::from_secs(5));
     }
 }
