@@ -2,7 +2,8 @@
 //!
 //! The recorder and the `/metrics` listener come from `hermes_instrumentation::metrics`,
 //! installed in `main`. The CronJob binaries that share this crate never install one, so
-//! the calls here are no-ops in them. Every series is registered at zero by [`register`]
+//! the calls here are no-ops in them unless `PUSHGATEWAY_URL` is set, when
+//! `job_metrics` installs a recorder and pushes it once at exit. Every series is registered at zero by [`register`]
 //! so it exists from startup: a counter that first appears at 1 has no earlier sample, so
 //! `increase()` cannot see its first event.
 //!
@@ -30,8 +31,8 @@ pub const USER_INTEREST_SHADOW_MISMATCHES: &str =
     "ranking_indexer_user_interest_shadow_mismatches_total";
 
 /// Compares made by the `*_RUST_COMPUTE` shadows, by `flag` and `outcome`. The shadows run in the
-/// CronJob binaries, which install no recorder, so the series are no-ops there until one is
-/// installed and scraped; the shadow's log line is the reading in the meantime.
+/// CronJob binaries, which push them to a Pushgateway at exit when `PUSHGATEWAY_URL` is set
+/// (`job_metrics`) and otherwise count into nothing; the shadow's log line is the reading then.
 pub const RUST_COMPUTE_SHADOW: &str = "ranking_indexer_rust_compute_shadow_total";
 
 /// One `*_RUST_COMPUTE` flag: a Rust twin of a SQL job that runs after it and only compares.

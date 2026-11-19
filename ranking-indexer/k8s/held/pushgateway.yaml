@@ -1,0 +1,90 @@
+# HELD: not in any deploy manifest list. Applying it is a deployment change for a human.
+#
+# A Pushgateway for the ranking-indexer CronJobs. Each Job binary PUTs its metrics to
+# /metrics/job/<cronjob-name> once at exit when PUSHGATEWAY_URL is set (ranking-indexer
+# src/job_metrics.rs). Nothing scrapes Job pods, so without this the *_RUST_COMPUTE shadow
+# counters and ranking_indexer_pg_writes_skipped_total are no-ops in the Jobs.
+#
+# To turn it on:
+#   1. kubectl apply -f this file (creates Deployment, Service, ServiceMonitor in `monitoring`).
+#   2. Add to each ranking-indexer CronJob container (the 11 whose bin is wired):
+#        - name: PUSHGATEWAY_URL
+#          value: http://pushgateway.monitoring.svc:9091
+#      Until step 2 the bins push nothing, so applying this file alone changes no series.
+#   3. A new series shows up as ranking_indexer_rust_compute_shadow_total{job="ranking-indexer-<x>",...}.
+#
+# Pushed groups are replaced per run (PUT), so a value is the last run's count, not a total.
+# `honorLabels: true` keeps the `job` label the Job pushed instead of the scrape target's.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pushgateway
+  namespace: monitoring
+  labels:
+    app: pushgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pushgateway
+  template:
+    metadata:
+      labels:
+        app: pushgateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: pushgateway
+          image: prom/pushgateway:v1.11.0
+          args:
+            - --web.listen-address=:9091
+          ports:
+            - name: http
+              containerPort: 9091
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pushgateway
+  namespace: monitoring
+  labels:
+    app: pushgateway
+spec:
+  selector:
+    app: pushgateway
+  ports:
+    - name: http
+      port: 9091
+      targetPort: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pushgateway
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      honorLabels: true
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  selector:
+    matchLabels:
+      app: pushgateway
