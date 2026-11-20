@@ -149,37 +149,31 @@ describe("createRelationResolver", () => {
 
 	it("wires through createGateway: serves supported shapes and falls back to PostGraphile on declines", async () => {
 		__resetServeMetricsForTests()
+		const post = (query: string) =>
+			new Request("http://api/graphql", {
+				method: "POST",
+				headers: {"content-type": "application/json"},
+				body: JSON.stringify({query}),
+			})
 		const config = readGatewayConfig({GRAPHQL_GATEWAY: "on", GRAPHQL_GATEWAY_FIELDS: "relation=on"})
 		const {deps} = make([{prop: PROP, raw: "", entity: FROM}])
-		const fallback = vi.fn(async () => ({
-			status: 200,
-			headers: {"content-type": "application/json"},
-			body: JSON.stringify({data: {relation: {id: REL, spaceId: "00000000000040008000000000000009"}}}),
-		}))
-		const gateway = createGateway({
+		const delegate = vi.fn(async () => new Response("pg"))
+		const run = createGateway({
 			config,
+			delegate,
 			resolvers: new Map([["relation", createRelationResolver(deps)]]),
 		})
 
-		const served = await gateway.execute(
-			{query: Q, operationName: null, variables: {}},
-			{},
-			new AbortController().signal,
-			fallback,
-		)
-		expect(fallback).not.toHaveBeenCalled()
-		expect(JSON.parse(served.body)).toEqual({
+		const served = await run(post(Q), {})
+		expect(served.headers.get("x-gaia-source")).toBe("geodb")
+		expect(delegate).not.toHaveBeenCalled()
+		expect(await served.json()).toEqual({
 			data: {relation: {id: REL, fromEntityId: FROM, __typename: "Relation"}},
 		})
 
-		const declined = await gateway.execute(
-			{query: `{ relation(id: "${REL}") { id spaceId } }`, operationName: null, variables: {}},
-			{},
-			new AbortController().signal,
-			fallback,
-		)
-		expect(fallback).toHaveBeenCalledTimes(1)
-		expect(JSON.parse(declined.body).data.relation.spaceId).toBe("00000000000040008000000000000009")
+		const declined = await run(post(`{ relation(id: "${REL}") { id spaceId } }`), {})
+		expect(delegate).toHaveBeenCalledTimes(1)
+		expect(await declined.text()).toBe("pg")
 
 		const metrics = renderServeMetrics()
 		expect(metrics).toContain('gaia_api_gateway_served_total{field="relation",source="geodb"} 1')

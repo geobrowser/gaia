@@ -24,7 +24,7 @@ import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway
 import type {FieldResolver} from "./src/gateway/gateway"
 import {createGateway, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
 import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
-import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createPointReadShadows, POINT_READ_FIELDS, RELATION_FIELD} from "./src/gateway/pointReadShadows"
 import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
 import {
 	createBestOrderResolver,
@@ -42,6 +42,7 @@ import {
 	kubeConfigMapPatchRevert,
 	readAutoRevertConfig,
 } from "./src/gateway/readSourceSwitch"
+import {createRelationResolver} from "./src/gateway/relationServe"
 import {createRelationsResolver} from "./src/gateway/relationsServe"
 import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
@@ -339,6 +340,8 @@ const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayC
 // `entitiesConnection=on` serves the same type-scan page under `nodes { id }` (gateway/entitiesConnectionServe.ts), else PostGraphile.
 const gatewayServeEntitiesConnection =
 	gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITIES_CONNECTION_FIELD) === "on"
+// `relation=on` has its own resolver (gateway/relationServe.ts): relation(id) { id fromEntityId } via readRelationEntity, else PostGraphile.
+const gatewayServeRelation = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, RELATION_FIELD) === "on"
 // `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
 const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
 // `search` / `searchConnection` =on have their own resolver (gateway/searchServe.ts); it also needs GEODB_SEARCH_SERVE=on (off by default).
@@ -384,6 +387,7 @@ const sharedGeoDb =
 	gatewayServeEntity ||
 	gatewayServeEntities ||
 	gatewayServeEntitiesConnection ||
+	gatewayServeRelation ||
 	gatewayServeRelations ||
 	gatewayServeSearchFields.length > 0 ||
 	gatewayServeSpace ||
@@ -861,6 +865,14 @@ if (sharedGeoDb) {
 		})
 		if (gatewayServeEntitiesConnection) gatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
 		else runtimeGatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
+	}
+	if (gatewayServeRelation || wireForRuntime) {
+		const relationResolver = createRelationResolver({
+			geoDb: sharedGeoDb.geoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+		})
+		if (gatewayServeRelation) gatewayResolvers.set(RELATION_FIELD, relationResolver)
+		else runtimeGatewayResolvers.set(RELATION_FIELD, relationResolver)
 	}
 	if (gatewayServeRelations || wireForRuntime) {
 		const relationsResolver = createRelationsResolver({
