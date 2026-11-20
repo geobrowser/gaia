@@ -2,7 +2,13 @@ import type {DocumentNode} from "graphql"
 import {withFailureScope} from "../geodb/failReason"
 import {type Classification, classifyRequestWithDocument, type GraphqlRequestParams} from "./classify"
 import type {FieldMode, GatewayConfig} from "./config"
-import {observeGatewayGeoDb, observeGatewayPostgres, recordGatewayRequest} from "./metrics"
+import {
+	activateGatewayRequests,
+	observeGatewayGeoDb,
+	observeGatewayPostgres,
+	recordGatewayFieldRequest,
+	recordGatewayRequest,
+} from "./metrics"
 import {activateServeMetrics, observeServe, recordServeFallback, recordServeSource} from "./serveMetrics"
 
 /**
@@ -173,6 +179,7 @@ function scheduleShadow<Ctx>(
 		const shadow = field === undefined ? undefined : shadows.get(field)
 		if (field === undefined || !shadow) return
 		recordGatewayRequest(field)
+		recordGatewayFieldRequest(field)
 		observeGatewayPostgres(field, postgresSeconds)
 		if (!((deps.random ?? Math.random)() < deps.config.shadowSampleRate)) return
 		if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) return
@@ -215,7 +222,11 @@ function scheduleObservers<Ctx>(
 export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 	const resolvers: ReadonlyMap<string, FieldResolver> = deps.resolvers ?? new Map()
 	if (deps.config.mode === "on")
-		for (const field of resolvers.keys()) if (fieldModeOf(deps.config, field) === "on") activateServeMetrics(field)
+		for (const field of resolvers.keys())
+			if (fieldModeOf(deps.config, field) === "on") {
+				activateServeMetrics(field)
+				activateGatewayRequests(field)
+			}
 	return async (request, context) => {
 		if (deps.config.mode === "off") return deps.delegate(request, context)
 		const classified = await classifyRequestWithDocument(request)
@@ -227,6 +238,7 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 		}
 		const resolver = route.kind === "serve" ? resolvers.get(route.field) : undefined
 		if (route.kind === "serve" && resolver && classified.params && classified.document) {
+			recordGatewayFieldRequest(route.field)
 			const started = performance.now()
 			const result = await runResolver(
 				resolver,
