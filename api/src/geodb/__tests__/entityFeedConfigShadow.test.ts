@@ -218,6 +218,19 @@ describe("shadow", () => {
 		expect(metric('table="entity_feed_blocklist",result="missing"')).toBe("1")
 		expect(JSON.stringify(warn.mock.calls)).not.toContain(T)
 	})
+	it("counts a pass that sampled no rows as empty, so an empty table reads as run, not never run", async () => {
+		const shadow = createEntityFeedConfigShadow({
+			config: allOn,
+			db: {} as Database,
+			readers: {typeWeight: async () => null, typeExclusion: async () => null, feedBlock: async () => null},
+			log: {warn: vi.fn()},
+			sampleRows: async (_db, table) => (table === "entity_feed_blocklist" ? [] : (rows[table] as ConfigRow[])),
+		})
+		await shadow.runOnce()
+		await shadow.runOnce()
+		expect(metric('table="entity_feed_blocklist",result="empty"')).toBe("2")
+		expect(metric('table="entity_type_weights",result="empty"')).toBe("0")
+	})
 	it("counts unsupported, ambiguous (mismatch) and failed reads without throwing", async () => {
 		const {ConfigSpaceMissing} = await import("../entityFeedConfigShadow")
 		const {shadow} = make({

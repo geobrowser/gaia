@@ -51,6 +51,8 @@ const mismatch = (f: string) => count("gaia_api_versions_shadow_mismatch_total",
 const unsupported = (r: string) => count("gaia_api_versions_shadow_unsupported_total", "reason", r)
 const skipped = (r: string) => count("gaia_api_versions_shadow_skipped_total", "reason", r)
 
+const failedBy = (r: string) => count("gaia_api_versions_shadow_failed_total", "reason", r)
+const countKind = (k: string) => count("gaia_api_versions_shadow_count_total", "kind", k)
 const timesCount = (r: string) => count("gaia_api_versions_shadow_times_total", "result", r)
 const instant = (seconds: number) => `instant:${seconds}.000000000`
 const T = (n: number) => 1_700_000_000 + n * 60
@@ -313,6 +315,44 @@ describe("createEntityVersionsShadow", () => {
 		await settle()
 		expect(result("failed")).toBe(2)
 		expect(warn).toHaveBeenCalledWith("versions shadow failed", {error: "Error: boom"})
+	})
+
+	it("splits failed reads by why geo-db could not answer", async () => {
+		for (const [error, reason] of [
+			[new GeoDbError("timeout", "slow"), "timeout"],
+			[new GeoDbError("client_failed", "refused: DefiniteRefusal DefiniteRefusal"), "client_failed"],
+			[new Error("boom"), "other"],
+		] as const) {
+			const {shadow} = setup(async () => {
+				throw error
+			})
+			shadow.versions(served())
+			await settle()
+			expect(failedBy(reason)).toBe(1)
+		}
+		expect(failedBy("cooling_down")).toBe(0)
+		expect(result("failed")).toBe(3)
+	})
+
+	it("names which way a count mismatch went: geo-db empty, short or long", async () => {
+		const live = vi.fn(async () => true)
+		const empty = setup(async () => [], {}, {t: 1_000_000}, live)
+		empty.shadow.versions(served({}, [1, 2]))
+		await settle()
+		expect(countKind("geo_empty")).toBe(1)
+		const short = setup(async () => [geoRow(1, {}, 2), geoRow(2, {}, 2)])
+		short.shadow.versions(served())
+		await settle()
+		expect(countKind("geo_fewer")).toBe(1)
+		const long = setup(async () => [geoRow(1, {}, 5), geoRow(2, {}, 5), geoRow(3, {}, 5)])
+		long.shadow.versions(served({}, [1, 2]))
+		await settle()
+		expect(countKind("geo_more")).toBe(1)
+		expect(mismatch("count")).toBe(3)
+		const agree = setup(async () => [geoRow(1), geoRow(2), geoRow(3)])
+		agree.shadow.versions(served())
+		await settle()
+		expect(countKind("geo_empty") + countKind("geo_fewer") + countKind("geo_more")).toBe(3)
 	})
 
 	it("reports a client that predates the line, then leaves it alone until the cooldown ends", async () => {

@@ -20,6 +20,8 @@
  *    record per pass, only when the readers can list geo-db's keys (`heldKeys`);
  *  - unsupported: the `config` system Space is not in the system-space map;
  *  - failed: a geo-db read failed;
+ *  - empty: a pass sampled no rows (the Postgres table holds none), counted once per pass, so a table that is empty reads
+ *    as "ran, nothing to compare" and not as a shadow that never fired;
  *  - reference_timeout / reference_failed: the Postgres sample read hit its statement timeout, or failed otherwise (referenceSide.ts).
  * The timer is `createIntervalSampler` (geodb/intervalSampler.ts), shared with the other config shadows.
  * Blind spot: the sample is of rows Postgres has, so a record geo-db keeps after its row was deleted is seen only through
@@ -143,6 +145,7 @@ export const RESULTS = [
 	"failed",
 	"reference_timeout",
 	"reference_failed",
+	"empty",
 ] as const
 export type Result = (typeof RESULTS)[number]
 
@@ -216,7 +219,7 @@ const bump = (table: Table, result: Result): void => {
 export function renderEntityFeedConfigShadowMetrics(): string {
 	if (active.size === 0) return ""
 	const lines = [
-		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), stale (a record for a key Postgres no longer has), unsupported (no config Space) failed (a geo-db read failed), reference_timeout or reference_failed (the Postgres sample read).",
+		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), stale (a record for a key Postgres no longer has), unsupported (no config Space) failed (a geo-db read failed), empty (a pass sampled no rows), reference_timeout or reference_failed (the Postgres sample read).",
 		"# TYPE gaia_api_entity_feed_config_shadow_total counter",
 	]
 	for (const t of TABLES)
@@ -323,6 +326,7 @@ export function createEntityFeedConfigShadow(deps: {
 			log.warn("entity feed config shadow sample failed", {table, error: String(error)})
 			return
 		}
+		if (sampled.length === 0) bump(table, "empty")
 		for (const row of sampled) {
 			try {
 				const outcome = compareConfigRow(row, await held(row))

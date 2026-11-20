@@ -44,6 +44,7 @@
 
 import {conformingId, entityTimesOf, type GeoCardRow, type GeoVersionRow} from "./card"
 import {entityVersionsUnsupported, type GeoDbCardClient, GeoDbError} from "./client"
+import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 
 export type EntityVersionsShadowConfig = {
 	enabled: boolean
@@ -84,6 +85,9 @@ export const MISMATCH_FIELDS = [
 /** `times`: how the createdAt comparison ended (see the header): ok, mismatch, absent (no time to compare) or failed. */
 export const TIME_RESULTS = ["ok", "mismatch", "absent", "failed"] as const
 export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server", "removed"] as const
+/** Which way a `count` mismatch went: geo-db lists no version of the entity, fewer than Postgres served, or more. */
+export const COUNT_KINDS = ["geo_empty", "geo_fewer", "geo_more"] as const
+type CountKind = (typeof COUNT_KINDS)[number]
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Result = (typeof RESULTS)[number]
 type MismatchField = (typeof MISMATCH_FIELDS)[number]
@@ -103,6 +107,8 @@ const mismatches = new Map<MismatchField, number>()
 const unsupported = new Map<UnsupportedReason, number>()
 const skipped = new Map<SkipReason, number>()
 const timeResults = new Map<TimeResult, number>()
+const failedReasons = new Map<FailReason, number>()
+const countKinds = new Map<CountKind, number>()
 const bump = <K>(map: Map<K, number>, key: K): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
@@ -143,10 +149,24 @@ export function renderEntityVersionsShadowMetrics(): string {
 	)
 	for (const t of TIME_RESULTS)
 		lines.push(`gaia_api_versions_shadow_times_total{result="${t}"} ${timeResults.get(t) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_versions_shadow_failed_total Version shadow comparisons whose geo-db read failed (the failed result above), by why: timeout, client_failed (a refusal or a broken pipe worker), cooling_down or other.",
+		"# TYPE gaia_api_versions_shadow_failed_total counter",
+	)
+	for (const r of FAIL_REASONS)
+		lines.push(`gaia_api_versions_shadow_failed_total{reason="${r}"} ${failedReasons.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_versions_shadow_count_total Version shadow count mismatches by direction: geo_empty (geo-db lists none of the entity's versions), geo_fewer or geo_more than the served page implies.",
+		"# TYPE gaia_api_versions_shadow_count_total counter",
+	)
+	for (const k of COUNT_KINDS)
+		lines.push(`gaia_api_versions_shadow_count_total{kind="${k}"} ${countKinds.get(k) ?? 0}`)
 	return lines.join("\n")
 }
 
 export function __resetEntityVersionsShadowMetricsForTests(): void {
+	failedReasons.clear()
+	countKinds.clear()
 	active = false
 	results.clear()
 	mismatches.clear()
@@ -299,6 +319,13 @@ export function createEntityVersionsShadow(deps: {
 			}
 			bump(results, fields.length === 0 ? "match" : "mismatch")
 			for (const f of fields) bump(mismatches, f)
+			if (fields.includes("count")) {
+				const expected = Math.min(Math.max((rows[0]?.total ?? 0) - served.offset, 0), served.limit)
+				bump(
+					countKinds,
+					rows.length === 0 ? "geo_empty" : served.versions.length > expected ? "geo_fewer" : "geo_more",
+				)
+			}
 			if (fields.length > 0 && logged < 20) {
 				logged++
 				log.warn("versions shadow mismatch", {
@@ -319,6 +346,7 @@ export function createEntityVersionsShadow(deps: {
 			}
 			if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported("busy")
 			bump(results, "failed")
+			bump(failedReasons, failReason(error))
 			if (!(error instanceof GeoDbError)) log.warn("versions shadow failed", {error: String(error)})
 		}
 	}

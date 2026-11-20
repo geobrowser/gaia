@@ -37,6 +37,7 @@
 
 import {conformingId, type GeoCardRow, type GeoVersionRow} from "./card"
 import {type GeoDbCardClient, GeoDbError, MAX_CARD_IDS} from "./client"
+import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 import {baseStatements, compareBase} from "./proposalDiffShadow"
 
 export type EntityDiffShadowConfig = {
@@ -86,6 +87,7 @@ const skipped = new Map<SkipReason, number>()
 const bump = <K>(map: Map<K, number>, key: K, by = 1): void => {
 	map.set(key, (map.get(key) ?? 0) + by)
 }
+const failedReasons = new Map<string, number>()
 const recordResult = (route: Route, result: Result) => bump(results, `${route}\t${result}`)
 const recordUnsupported = (route: Route, reason: UnsupportedReason) => {
 	recordResult(route, "unsupported")
@@ -132,6 +134,15 @@ export function renderEntityDiffShadowMetrics(): string {
 				`gaia_api_entity_diff_shadow_unsupported_total{route="${route}",reason="${u}"} ${unsupported.get(`${route}\t${u}`) ?? 0}`,
 			)
 	lines.push(
+		"# HELP gaia_api_entity_diff_shadow_failed_total Failed results above by route and why the geo-db read failed: timeout, client_failed (a refusal or a broken pipe worker), cooling_down or other.",
+		"# TYPE gaia_api_entity_diff_shadow_failed_total counter",
+	)
+	for (const route of ROUTES)
+		for (const r of FAIL_REASONS)
+			lines.push(
+				`gaia_api_entity_diff_shadow_failed_total{route="${route}",reason="${r}"} ${failedReasons.get(`${route}\t${r}`) ?? 0}`,
+			)
+	lines.push(
 		"# HELP gaia_api_entity_diff_shadow_skipped_total Eligible diff requests not compared, by reason: sample (not the 1-in-N picked) or rate (over the per-minute cap).",
 		"# TYPE gaia_api_entity_diff_shadow_skipped_total counter",
 	)
@@ -147,6 +158,7 @@ export function __resetEntityDiffShadowMetricsForTests(): void {
 	outcomes.clear()
 	unsupported.clear()
 	skipped.clear()
+	failedReasons.clear()
 }
 
 /** What `GET /(v2/)versioned/entities/:id/diff` served: the change lists, with the after side. */
@@ -260,6 +272,7 @@ export function createEntityDiffShadow(deps: {
 			return recordUnsupported(route, "unmapped_space")
 		if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported(route, "busy")
 		recordResult(route, "failed")
+		bump(failedReasons, `${route}\t${failReason(error)}`)
 		if (!(error instanceof GeoDbError)) log.warn("entity diff shadow failed", {route, error: String(error)})
 	}
 
