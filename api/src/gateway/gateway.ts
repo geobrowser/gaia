@@ -94,6 +94,11 @@ export type GatewayDeps<Ctx> = {
 	shadows?: ReadonlyMap<string, FieldShadow>
 	/** Observers of delegated operations (see `ResponseObserver`); they never change or delay a response. */
 	observers?: readonly ResponseObserver[]
+	/**
+	 * Called synchronously with a promise that settles when a scheduled shadow comparison finishes. Lets a background
+	 * sampler wait for the comparison (it otherwise runs detached after the response); user traffic leaves it unset.
+	 */
+	trackShadow?: (done: Promise<void>) => void
 	/** Sampling draw in [0, 1); injectable for tests. */
 	random?: () => number
 	/** Runtime per-field read-source switch with auto-revert (overrides static config.fieldModes when set). */
@@ -202,14 +207,34 @@ function scheduleShadow<Ctx>(
 		if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) return
 		if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) return
 		const clone = response.clone()
-		setTimeout(() => {
-			const started = performance.now()
-			withFailureScope(() => shadow({classification, params, document, response: clone}))
-				.catch(() => {})
-				.finally(() => observeGatewayGeoDb(field, (performance.now() - started) / 1000))
-		}, 0)
+		const done = new Promise<void>((resolve) => {
+			setTimeout(() => {
+				const started = performance.now()
+				withFailureScope(() => shadow({classification, params, document, response: clone}))
+					.catch(() => {})
+					.finally(() => {
+						observeGatewayGeoDb(field, (performance.now() - started) / 1000)
+						resolve()
+					})
+			}, 0)
+		})
+		deps.trackShadow?.(done)
 	} catch {
 		// A shadow must never fail a read.
+	}
+}
+
+/** Collects the shadow promises a gateway reports through `trackShadow`, so a caller can wait for them. */
+export function createShadowTracker(): {track: (done: Promise<void>) => void; settled: () => Promise<void>} {
+	const pending = new Set<Promise<void>>()
+	return {
+		track: (done) => {
+			pending.add(done)
+			void done.finally(() => pending.delete(done))
+		},
+		settled: async () => {
+			await Promise.all([...pending])
+		},
 	}
 }
 
