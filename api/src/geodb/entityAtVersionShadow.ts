@@ -46,6 +46,7 @@ import {
 	type ValueRow,
 } from "./card"
 import {entityVersionsUnsupported, type GeoDbCardClient, GeoDbError, MAX_CARD_IDS} from "./client"
+import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 import {NAME_PROPERTY} from "./rankedReads/typeCounts"
 
 export type EntityAtVersionShadowConfig = {
@@ -99,6 +100,7 @@ const skipped = new Map<SkipReason, number>()
 const bump = <K>(map: Map<K, number>, key: K): void => {
 	map.set(key, (map.get(key) ?? 0) + 1)
 }
+const failedReasons = new Map<string, number>()
 const recordResult = (route: Route, result: Result) => bump(results, `${route}\t${result}`)
 const recordUnsupported = (route: Route, reason: UnsupportedReason) => {
 	recordResult(route, "unsupported")
@@ -136,6 +138,15 @@ export function renderEntityAtVersionShadowMetrics(): string {
 				`gaia_api_entity_at_version_shadow_unsupported_total{route="${route}",reason="${u}"} ${unsupported.get(`${route}\t${u}`) ?? 0}`,
 			)
 	lines.push(
+		"# HELP gaia_api_entity_at_version_shadow_failed_total Failed results above by route and why the geo-db read failed: timeout, client_failed (a refusal or a broken pipe worker), cooling_down or other.",
+		"# TYPE gaia_api_entity_at_version_shadow_failed_total counter",
+	)
+	for (const route of ROUTES)
+		for (const r of FAIL_REASONS)
+			lines.push(
+				`gaia_api_entity_at_version_shadow_failed_total{route="${route}",reason="${r}"} ${failedReasons.get(`${route}\t${r}`) ?? 0}`,
+			)
+	lines.push(
 		"# HELP gaia_api_entity_at_version_shadow_skipped_total Eligible requests not compared, by reason: sample (not the 1-in-N picked) or rate (over the per-minute cap).",
 		"# TYPE gaia_api_entity_at_version_shadow_skipped_total counter",
 	)
@@ -150,6 +161,7 @@ export function __resetEntityAtVersionShadowMetricsForTests(): void {
 	mismatches.clear()
 	unsupported.clear()
 	skipped.clear()
+	failedReasons.clear()
 }
 
 /** A value as `GET /versioned/entities/:id` serves it (the columns the card compare reads). */
@@ -282,6 +294,7 @@ export function createEntityAtVersionShadow(deps: {
 		}
 		if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported(route, "busy")
 		recordResult(route, "failed")
+		bump(failedReasons, `${route}\t${failReason(error)}`)
 		if (!(error instanceof GeoDbError)) log.warn("entity-at-version shadow failed", {route, error: String(error)})
 	}
 

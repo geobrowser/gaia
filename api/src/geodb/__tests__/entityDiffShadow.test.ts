@@ -202,6 +202,9 @@ describe("createEntityDiffShadow: entity diff", () => {
 		shadow.entityDiff(served())
 		await settle()
 		expect(result("entity_diff", "failed")).toBe(1)
+		expect(renderEntityDiffShadowMetrics()).toContain(
+			'gaia_api_entity_diff_shadow_failed_total{route="entity_diff",reason="timeout"} 1',
+		)
 		const busy = make({
 			readEntityVersions: async () => {
 				throw new GeoDbError("overloaded", "full")

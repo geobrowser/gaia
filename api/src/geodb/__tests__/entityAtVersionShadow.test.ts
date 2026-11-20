@@ -280,6 +280,9 @@ describe("snapshot twin", () => {
 		failed.shadow.snapshot(snapshot())
 		await settle()
 		expect(result("snapshot", "failed")).toBe(1)
+		expect(renderEntityAtVersionShadowMetrics()).toContain(
+			'gaia_api_entity_at_version_shadow_failed_total{route="snapshot",reason="timeout"} 1',
+		)
 
 		__resetEntityAtVersionShadowMetricsForTests()
 		const busy = make({versions: new GeoDbError("overloaded", "full")})
