@@ -8,6 +8,15 @@
 # Every field ships as "shadow" (unchanged from the startup env vars). When a pod trips auto-revert it
 # patches `"reverted": {"<field>": "<iso-ts> <reason>"}` into `read-source.json`; every replica honours
 # that latch across restarts. A person resets by deleting the field's key under `"reverted"`.
+#
+# Freeze rule: every manual flip or revert MUST stamp `"lastFlipAt"` (ISO-8601 UTC) in `read-source.json`
+# in the same edit so deploy-v2's 24 h geodb roll freeze sees it. One-line kubectl patch for a flip:
+#
+#   FIELD=entity MODE=on; NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+#     kubectl -n gaia get cm geodb-read-source -o jsonpath='{.data.read-source\.json}' \
+#     | jq --arg f "$FIELD" --arg m "$MODE" --arg t "$NOW" '.fields[$f]=$m | .lastFlipAt=$t' \
+#     | jq -Rs '{data:{"read-source.json":.}}' \
+#     | kubectl -n gaia patch cm geodb-read-source --type=merge --patch-file /dev/stdin
 apiVersion: v1
 kind: ConfigMap
 metadata:

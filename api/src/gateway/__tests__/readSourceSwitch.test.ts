@@ -13,6 +13,9 @@ import {
 	DEFAULT_AUTO_REVERT_CONFIG,
 	ENTITY_CARDS_FIELD,
 	isGeoDbErrorReason,
+	type KubeApiCall,
+	patchConfigMapRevertWithTransport,
+	READ_SOURCE_CONFIGMAP_KEY,
 	renderReadSourceSwitchMetrics,
 } from "../readSourceSwitch"
 import {createSearchResolver} from "../searchServe"
@@ -495,6 +498,66 @@ describe("readSourceSwitch", () => {
 		)
 		expect(res.headers.get("x-gaia-source")).toBe("geodb")
 		expect(await res.json()).toEqual({data: {search: [{id: "11111111111141118111111111111111"}]}})
+	})
+
+	it("retries on 409 resourceVersion conflict so two concurrent reverts on different fields both land in reverted", async () => {
+		let rv = 1
+		let doc: Record<string, unknown> = {fields: {entity: "on", entities: "on"}}
+		let conflicts = 0
+		let releaseFirstGet: (() => void) | null = null
+		let gets = 0
+
+		const fakeApi: KubeApiCall = async (method, _path, body) => {
+			if (method === "GET") {
+				gets++
+				const snapshot = JSON.stringify({
+					metadata: {resourceVersion: String(rv)},
+					data: {[READ_SOURCE_CONFIGMAP_KEY]: JSON.stringify(doc)},
+				})
+				// Hold the first two GETs at the same resourceVersion so both concurrent PATCHes race
+				if (gets === 1) {
+					await new Promise<void>((resolve) => {
+						releaseFirstGet = resolve
+					})
+				} else if (gets === 2) {
+					releaseFirstGet?.()
+				}
+				return {status: 200, text: snapshot}
+			}
+			const patch = body as {metadata?: {resourceVersion?: string}; data?: Record<string, string>}
+			if (patch.metadata?.resourceVersion !== String(rv)) {
+				conflicts++
+				return {status: 409, text: "Conflict: resourceVersion mismatch"}
+			}
+			rv++
+			doc = JSON.parse(patch.data?.[READ_SOURCE_CONFIGMAP_KEY] ?? "{}") as Record<string, unknown>
+			return {status: 200, text: "{}"}
+		}
+
+		await Promise.all([
+			patchConfigMapRevertWithTransport(
+				fakeApi,
+				"/api/v1/namespaces/gaia/configmaps/geodb-read-source",
+				READ_SOURCE_CONFIGMAP_KEY,
+				"entity",
+				"2026-11-20T03:00:00Z error_rate",
+				{sleep: async () => {}},
+			),
+			patchConfigMapRevertWithTransport(
+				fakeApi,
+				"/api/v1/namespaces/gaia/configmaps/geodb-read-source",
+				READ_SOURCE_CONFIGMAP_KEY,
+				"entities",
+				"2026-11-20T03:00:00Z latency",
+				{sleep: async () => {}},
+			),
+		])
+
+		expect(conflicts).toBe(1)
+		expect(doc.reverted).toEqual({
+			entity: "2026-11-20T03:00:00Z error_rate",
+			entities: "2026-11-20T03:00:00Z latency",
+		})
 	})
 
 	it("ships create-once all-shadow ConfigMap outside api.yaml and scoped Role in api.yaml", () => {

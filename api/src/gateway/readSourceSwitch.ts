@@ -199,16 +199,79 @@ function parseReadSourceFile(raw: string): ParsedFile {
 	return {fields, reverted, resets}
 }
 
+export type KubeApiCall = (
+	method: string,
+	reqPath: string,
+	body?: unknown,
+	contentType?: string,
+) => Promise<{status: number; text: string}>
+
+export type PatchRevertOptions = {
+	maxAttempts?: number
+	sleep?: (ms: number) => Promise<void>
+	random?: () => number
+}
+
+const DEFAULT_PATCH_ATTEMPTS = 5
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Performs an optimistic-concurrency GET -> merge -> PATCH of `reverted[field] = entry` inside `key`
+ * of the ConfigMap at `url`, passing `metadata.resourceVersion` so concurrent pods get HTTP 409 and
+ * re-GET/retry instead of overwriting each other's latches or an operator's concurrent flip.
+ */
+export async function patchConfigMapRevertWithTransport(
+	call: KubeApiCall,
+	url: string,
+	key: string,
+	field: string,
+	entry: string,
+	opts: PatchRevertOptions = {},
+): Promise<void> {
+	const maxAttempts = opts.maxAttempts ?? DEFAULT_PATCH_ATTEMPTS
+	const sleep = opts.sleep ?? defaultSleep
+	const random = opts.random ?? Math.random
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const current = await call("GET", url)
+		if (current.status !== 200) {
+			throw new Error(`configmap get: HTTP ${current.status} ${current.text.slice(0, 200)}`)
+		}
+		const cm = JSON.parse(current.text) as {metadata?: {resourceVersion?: string}; data?: Record<string, string>}
+		const resourceVersion = cm.metadata?.resourceVersion
+		const existingRaw = cm.data?.[key] ?? "{}"
+		const doc = JSON.parse(existingRaw) as Record<string, unknown>
+		const reverted =
+			doc.reverted && typeof doc.reverted === "object" && !Array.isArray(doc.reverted)
+				? {...(doc.reverted as Record<string, string>)}
+				: {}
+		reverted[field] = entry
+		const nextDoc = {...doc, reverted}
+		const patchBody: Record<string, unknown> = {
+			data: {[key]: `${JSON.stringify(nextDoc, null, 2)}\n`},
+		}
+		if (resourceVersion) patchBody.metadata = {resourceVersion}
+		const patch = await call("PATCH", url, patchBody, "application/merge-patch+json")
+		if (patch.status === 200) return
+		if (patch.status === 409 && attempt < maxAttempts) {
+			await sleep(20 + Math.floor(random() * 60))
+			continue
+		}
+		throw new Error(`configmap patch: HTTP ${patch.status} ${patch.text.slice(0, 200)}`)
+	}
+}
+
 /**
  * Patches `"reverted": {"<field>": "<ts> <reason>"}` inside `read-source.json` of ConfigMap `name`
  * using the pod's ServiceAccount (requires a Role scoped to `resourceNames: [name]` with verbs `get`
- * and `patch`). Returns null outside a Kubernetes cluster or when `name` is empty.
+ * and `patch`). Uses `metadata.resourceVersion` optimistic concurrency with bounded 409 retry.
+ * Returns null outside a Kubernetes cluster or when `name` is empty.
  */
 export function kubeConfigMapPatchRevert(name: string, key: string = READ_SOURCE_CONFIGMAP_KEY): PersistRevert | null {
 	const host = process.env.KUBERNETES_SERVICE_HOST
 	if (!name.trim() || !host) return null
 	const port = process.env.KUBERNETES_SERVICE_PORT ?? "443"
-	const call = (method: string, reqPath: string, body?: unknown, contentType?: string) =>
+	const call: KubeApiCall = (method, reqPath, body, contentType) =>
 		new Promise<{status: number; text: string}>((resolve, reject) => {
 			const payload = body === undefined ? undefined : JSON.stringify(body)
 			const headers: Record<string, string | number> = {
@@ -236,28 +299,7 @@ export function kubeConfigMapPatchRevert(name: string, key: string = READ_SOURCE
 	return async (field, entry) => {
 		const namespace = readFileSync(`${SA}/namespace`, "utf8").trim()
 		const url = `/api/v1/namespaces/${namespace}/configmaps/${name.trim()}`
-		const current = await call("GET", url)
-		if (current.status !== 200) {
-			throw new Error(`configmap get: HTTP ${current.status} ${current.text.slice(0, 200)}`)
-		}
-		const cm = JSON.parse(current.text) as {data?: Record<string, string>}
-		const existingRaw = cm.data?.[key] ?? "{}"
-		const doc = JSON.parse(existingRaw) as Record<string, unknown>
-		const reverted =
-			doc.reverted && typeof doc.reverted === "object" && !Array.isArray(doc.reverted)
-				? {...(doc.reverted as Record<string, string>)}
-				: {}
-		reverted[field] = entry
-		const nextDoc = {...doc, reverted}
-		const patch = await call(
-			"PATCH",
-			url,
-			{data: {[key]: `${JSON.stringify(nextDoc, null, 2)}\n`}},
-			"application/merge-patch+json",
-		)
-		if (patch.status !== 200) {
-			throw new Error(`configmap patch: HTTP ${patch.status} ${patch.text.slice(0, 200)}`)
-		}
+		await patchConfigMapRevertWithTransport(call, url, key, field, entry)
 	}
 }
 
