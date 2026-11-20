@@ -40,11 +40,11 @@ import {
 	fieldsOf,
 	isPlainField,
 	isUnfilteredField,
-	MAX_EVERY_SPACES,
 	orNull,
 	planColumns,
 	RELATION_IGNORED,
 	responseKeyOf,
+	scopeOfSpaces,
 	spaceFromFilter,
 	TYPES_PROPERTY,
 	VALUE_COLUMNS,
@@ -319,12 +319,12 @@ export async function checkNestedEntities(
 	if (ids.length > MAX_CARD_IDS) return {read: false}
 	try {
 		const spaces = await deps.allGeoSpaces()
-		if (spaces.length === 0 || spaces.length > MAX_EVERY_SPACES) return {read: false}
+		if (spaces.length === 0) return {read: false}
 		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1)) return {read: false}
 		const started = performance.now()
 		let rows: GeoCardRow[]
 		try {
-			rows = await readCards({geoSpaceIds: spaces, entityIds: ids})
+			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids})
 			observeGeoDbRead((performance.now() - started) / 1000, "ok")
 		} catch (error) {
 			observeGeoDbRead((performance.now() - started) / 1000, "error")

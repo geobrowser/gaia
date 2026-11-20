@@ -1175,3 +1175,73 @@ lines((line) => {
 		client.close()
 	})
 })
+
+describe("createPipeGeoDbClient, the `every` scope (geo-db DR-177-583)", () => {
+	const SPACE = "22222222222242228222222222222222"
+	const ENTITY = "11111111111141118111111111111111"
+	const TYPE = "44444444444444448444444444444444"
+	const FIELD = "74d9c34835444345969a3c9d70362ea5"
+	const PROP = "44444444444444448444444444444444"
+	// Echoes the line's scope cell as the row's value, so the test sees what the worker was asked.
+	const echo = `
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope] = line.split("\\t")
+	frame("+", ["${PROP}", "scope=" + scope, "${SPACE}:stmt", "${ENTITY}", "1"].join("\\t") + "\\n")
+})
+`
+
+	it("sends one `*` line for a card read and reads the `<space>:<statement>` cells", async () => {
+		const {client} = fakePipe(echo)
+		const rows = await client.readCardSpaces?.({geoSpaceIds: "every", entityId: ENTITY})
+		expect(rows).toEqual([{prop: PROP, raw: "scope=*", space: SPACE}])
+		client.close()
+	})
+
+	it("sends the `*` line for the cards, backlinks and ordered-page reads too", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope] = line.split("\\t")
+	frame("+", ["${PROP}", scope, "${SPACE}:stmt", "${ENTITY}", "1"].join("\\t") + "\\n")
+})
+`)
+		for (const read of [
+			() => client.readCards?.({geoSpaceIds: "every", entityIds: [ENTITY]}),
+			() => client.readBacklinks?.({geoSpaceIds: "every", entityId: ENTITY, limit: 7}),
+			() =>
+				client.readEntitiesPage?.({
+					geoSpaceIds: "every",
+					typeId: TYPE,
+					field: FIELD,
+					direction: "desc",
+					pick: "least",
+					first: 3,
+				}),
+		])
+			await expect(read()).resolves.toBeDefined()
+		client.close()
+	})
+
+	it("sends the `*` line for the holders read", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope] = line.split("\\t")
+	// Answers the Space only when the line is the star line.
+	frame("+", ["-", scope === "*" ? "${SPACE}" : "${ENTITY}", "-", "${ENTITY}", "1"].join("\\t") + "\\n")
+})
+`)
+		expect(await client.readHolders?.({geoSpaceIds: "every", entityId: ENTITY})).toEqual([SPACE])
+		client.close()
+	})
+
+	it("still refuses a list past 1024 Spaces, which a caller splits", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		const many = Array.from({length: 1025}, (_, i) => (i + 1).toString(16).padStart(32, "0"))
+		await expect(client.readCardSpaces?.({geoSpaceIds: many, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "bad_request",
+		})
+		expect(starts()).toBe(0)
+	})
+})

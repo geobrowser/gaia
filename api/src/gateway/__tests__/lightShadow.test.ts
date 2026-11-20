@@ -7,7 +7,6 @@ import {createEntitiesConnectionShadow, createEntitiesOrderedShadow} from "../en
 import {createEntityShadow, createHoldersGate, type HoldersGate, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
-import {mergeIsExact, mergePages} from "../orderPickShadow"
 import {createPointReadShadows} from "../pointReadShadows"
 import {createReadBudget} from "../readBudget"
 
@@ -93,22 +92,33 @@ const askOf = (outputs: Record<string, string>) =>
 
 /** One multi-space pipe line's answer: each Space's rows with the statement cell prefixed `<space>:`. */
 const askSpacesOf = (outputs: Record<string, string>) =>
-	vi.fn(async ({geoSpaceIds, entityId, names}: {geoSpaceIds: string[]; entityId: string; names?: boolean}) => {
-		const text = geoSpaceIds
-			.flatMap((geo) =>
-				(outputs[geo] ?? "")
-					.split("\n")
-					.filter(Boolean)
-					.map((line) =>
-						line
-							.split("\t")
-							.map((c, i) => (i === 2 ? `${geo}:${c}` : c))
-							.join("\t"),
-					),
-			)
-			.join("\n")
-		return rowsFromGeoDbOutput(`${text}\n`, entityId, {names, spaces: true})
-	})
+	vi.fn(
+		async ({
+			geoSpaceIds,
+			entityId,
+			names,
+		}: {
+			geoSpaceIds: string[] | "every"
+			entityId: string
+			names?: boolean
+		}) => {
+			// The `*` line reads every Space the store holds.
+			const text = (geoSpaceIds === "every" ? Object.keys(outputs) : geoSpaceIds)
+				.flatMap((geo) =>
+					(outputs[geo] ?? "")
+						.split("\n")
+						.filter(Boolean)
+						.map((line) =>
+							line
+								.split("\t")
+								.map((c, i) => (i === 2 ? `${geo}:${c}` : c))
+								.join("\t"),
+						),
+				)
+				.join("\n")
+			return rowsFromGeoDbOutput(`${text}\n`, entityId, {names, spaces: true})
+		},
+	)
 
 function setup(outputs: Record<string, string>, budget?: ReturnType<typeof createReadBudget>, multiSpace = false) {
 	const log = {info: vi.fn(), warn: vi.fn()}
@@ -891,15 +901,23 @@ describe("entities with the light selection", () => {
 		const pageSetup = (
 			entities: Entity[],
 			geoPage: {entity: string; prop: string; raw: string}[],
-			options: {flag?: boolean; chunks?: boolean; pages?: {entity: string; prop: string; raw: string}[][]} = {},
+			options: {
+				flag?: boolean
+				chunks?: boolean
+				pages?: {entity: string; prop: string; raw: string}[][]
+				budget?: ReturnType<typeof createReadBudget>
+			} = {},
 		) => {
 			const log = {info: vi.fn(), warn: vi.fn()}
 			const typed = entities.map((e) => `${TYPES}\t${T}\tt\t${e.id}\t-\t-\t1\n`).join("")
 			const outputs = {[geoSpace(SPACE_A)]: (outputsFor(entities)[geoSpace(SPACE_A)] ?? "") + typed}
 			let line = 0
-			const readEntitiesPage = vi.fn(async () => (options.pages ? (options.pages[line++] ?? []) : geoPage))
+			const readEntitiesPage = vi.fn(async (_args: {geoSpaceIds: string[] | "every"}) =>
+				options.pages ? (options.pages[line++] ?? []) : geoPage,
+			)
 			const deps = {
 				everySpaceChunks: options.chunks,
+				...(options.budget ? {everySpaceBudget: options.budget} : {}),
 				multiSpace: true,
 				orderPick: options.flag !== false,
 				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readEntitiesPage},
@@ -920,94 +938,46 @@ describe("entities with the light selection", () => {
 			)
 
 		describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
-			// Two lines. Entity X is oldest in line 1 (created 100) but line 2 holds an older row of it (created 5).
+			// X holds a row created at 100 and another at 5, so its least key is 5; Y is 50 and Z is 10.
 			const [X, Y, Z] = list(3)
-			const line1 = [...created([X, Y] as Entity[], [100, 50]), ...created([Z] as Entity[], [10])]
-			const line2 = created([X] as Entity[], [5])
+			const everyRead = [...created([Y, Z, X] as Entity[], [50, 10, 100]), ...created([X] as Entity[], [5])]
 
-			it("leaves CREATED_AT_DESC uncompared (desc + least): a plain merge would be wrong", async () => {
-				// Merged by the lines' own tops X would be placed by 5 and fall to the bottom of a desc page; the
-				// reads cannot prove who is above it, so the page is left uncompared (`order_completeness`).
-				const s = pageSetup([X, Y] as Entity[], [], {chunks: true, pages: [line1, line2]})
-				await run(s, [X, Y] as Entity[], query("CREATED_AT_DESC", undefined, 2))
-				expect(s.readEntitiesPage).not.toHaveBeenCalled()
-				expect(uncompared()).toMatchObject({order_completeness: 1})
-			})
-
-			it("leaves the page uncompared with the flag off, even for an exact direction", async () => {
-				const s = pageSetup([Z, X] as Entity[], [], {pages: [line1, line2]})
-				await run(s, [Z, X] as Entity[], query("CREATED_AT_ASC", undefined, 2))
-				expect(s.readEntitiesPage).not.toHaveBeenCalled()
-				expect(uncompared()).toMatchObject({order_completeness: 1})
-			})
-
-			it("merges CREATED_AT_ASC (asc + least) by key: X is placed by its earliest row", async () => {
-				const s = pageSetup([X, Z] as Entity[], [], {chunks: true, pages: [line1, line2]})
-				await run(s, [X, Z] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+			it("reads CREATED_AT_DESC (desc + least) in the every_space scope: one read, and it is compared", async () => {
+				// A per-line merge cannot place X (a line can top it while another pulls it down), so the page used
+				// to be left uncompared. One read with one key order can be compared.
+				const s = pageSetup([Y, Z] as Entity[], [], {chunks: true, pages: [everyRead]})
+				await run(s, [Y, Z] as Entity[], query("CREATED_AT_DESC", undefined, 2))
+				expect(s.readEntitiesPage).toHaveBeenCalledTimes(1)
+				expect(s.readEntitiesPage.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: "every", direction: "desc"})
 				expect(results()).toEqual({match: 1})
-				expect(s.readEntitiesPage).toHaveBeenCalledTimes(2)
 			})
 
-			it("flags the merge when PostGraphile placed X by its later row", async () => {
-				const s = pageSetup([Z, X] as Entity[], [], {chunks: true, pages: [line1, line2]})
-				await run(s, [Z, X] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+			it("flags CREATED_AT_DESC when PostGraphile placed X above Z", async () => {
+				const s = pageSetup([Y, X] as Entity[], [], {chunks: true, pages: [everyRead]})
+				await run(s, [Y, X] as Entity[], query("CREATED_AT_DESC", undefined, 2))
 				expect(results()).toEqual({mismatch: 1})
 			})
 
-			it("the desc + least counterexample: merging each line's top-2 puts A and B on the page; the truth is C and D", () => {
-				// Key = least over the lines. A and B top line 1 (100, 90) but line 2 holds them at 1; C (80) is
-				// third in line 1 and D (50) tops line 2. The true desc top-2 by global key is C, D.
-				const nanos = (n: number) => BigInt(n)
-				const line1: [string, bigint | null][] = [
-					["A", nanos(100)],
-					["B", nanos(90)],
-				]
-				const line2: [string, bigint | null][] = [
-					["D", nanos(50)],
-					["E", nanos(40)],
-				]
-				const naive = mergePages([line1, line2], "desc", "least")
-					.slice(0, 2)
-					.map(([id]) => id)
-				expect(naive).toEqual(["A", "B"])
-				const truth = [
-					["A", 1],
-					["B", 1],
-					["C", 80],
-					["D", 50],
-					["E", 40],
-				] as [string, number][]
-				expect(
-					truth
-						.sort((a, b) => b[1] - a[1])
-						.slice(0, 2)
-						.map(([id]) => id),
-				).toEqual(["C", "D"])
-				expect(mergeIsExact("desc", "least")).toBe(false)
+			it("reads CREATED_AT_ASC in the every_space scope too", async () => {
+				const asc = [...created([X, Z, Y] as Entity[], [5, 10, 50])]
+				const s = pageSetup([X, Z] as Entity[], [], {chunks: true, pages: [asc]})
+				await run(s, [X, Z] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+				expect(s.readEntitiesPage.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: "every"})
+				expect(results()).toEqual({match: 1})
 			})
 
-			it("the asc + least merge is exact on the same data shape", () => {
-				const nanos = (n: number) => BigInt(n)
-				const line1: [string, bigint | null][] = [
-					["A", nanos(1)],
-					["B", nanos(2)],
-				]
-				const line2: [string, bigint | null][] = [
-					["B", nanos(0)],
-					["D", nanos(5)],
-				]
-				expect(
-					mergePages([line1, line2], "asc", "least")
-						.slice(0, 2)
-						.map(([id]) => id),
-				).toEqual(["B", "A"])
+			it("leaves the page uncompared with the flag off", async () => {
+				const s = pageSetup([Z, X] as Entity[], [], {pages: [everyRead]})
+				await run(s, [Z, X] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+				expect(s.readEntitiesPage).not.toHaveBeenCalled()
+				expect(uncompared()).toMatchObject({order_completeness: 1})
 			})
 
-			it("exposes which directions merge exactly", () => {
-				expect(mergeIsExact("asc", "least")).toBe(true)
-				expect(mergeIsExact("desc", "greatest")).toBe(true)
-				expect(mergeIsExact("desc", "least")).toBe(false)
-				expect(mergeIsExact("asc", "greatest")).toBe(false)
+			it("takes one token of the budget for the whole read", async () => {
+				const budget = createReadBudget({perSecond: 0, burst: 1})
+				const s = pageSetup([Y, Z] as Entity[], [], {chunks: true, pages: [everyRead], budget})
+				await run(s, [Y, Z] as Entity[], query("CREATED_AT_DESC", undefined, 2))
+				expect(s.readEntitiesPage).toHaveBeenCalledTimes(1)
 			})
 		})
 
@@ -1395,13 +1365,18 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			expect(s.readCardSpaces).not.toHaveBeenCalled()
 		})
 
-		it("reads them in lines of at most 1024 and compares the concatenated rows", async () => {
+		it("asks for the every_space scope in one read, not two lines, and compares its rows", async () => {
 			const s = everySetup(rows(), {spaces: many, chunks: true})
 			await run(s, EVERY.entityTypes)
 			expect(results()).toEqual({match: 1})
-			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
-			const sizes = s.readCardSpaces.mock.calls.map((c) => c[0].geoSpaceIds.length)
-			expect(sizes).toEqual([1024, many.length - 1024])
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toBe("every")
+		})
+
+		it("keeps an explicit list while the Spaces fit one line", async () => {
+			const s = everySetup(rows(), {chunks: true})
+			await run(s, EVERY.entityTypes)
+			expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toEqual(ALL)
 		})
 	})
 
@@ -1451,17 +1426,15 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			expect(s.log.warn).not.toHaveBeenCalled()
 		})
 
-		it("batches the holders in lines of at most 1024 Spaces", async () => {
+		it("asks the holders of past 1024 Spaces in the every_space scope, in one read", async () => {
 			const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
 			const many = [...ALL, ...filler]
-			const holders = holdersOf(async ({geoSpaceIds}) => geoSpaceIds.filter((g) => g === geoSpace(SPACE_C)))
+			const holders = holdersOf(async () => [geoSpace(SPACE_C)])
 			const s = everySetup(rows(), {spaces: many, chunks: true, holders})
 			await run(s, EVERY.entityTypes)
 			expect(results()).toEqual({match: 1})
-			expect(holders.readHolders.mock.calls.map((c) => c[0].geoSpaceIds.length)).toEqual([
-				1024,
-				many.length - 1024,
-			])
+			expect(holders.readHolders).toHaveBeenCalledTimes(1)
+			expect(holders.readHolders.mock.calls[0]?.[0].geoSpaceIds).toBe("every")
 			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
 			expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toEqual([geoSpace(SPACE_C)])
 		})
@@ -1534,12 +1507,12 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		})
 	})
 
-	describe("the lines of one every-Space read go out together", () => {
+	describe("an every-Space read past 1024 Spaces is one read", () => {
 		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
 		const many = [...ALL, ...filler]
 		const rows = () => ({[geoSpace(SPACE_C)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
 
-		it("issues both lines before either answers, and matches when the first answers last", async () => {
+		it("never holds two claims at once: one read is in flight", async () => {
 			const s = everySetup(rows(), {spaces: many, chunks: true})
 			const answer = s.readCardSpaces.getMockImplementation() as (a: never) => Promise<unknown>
 			let inFlight = 0
@@ -1547,21 +1520,21 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			s.readCardSpaces.mockImplementation((async (a: {geoSpaceIds: string[]}) => {
 				inFlight += 1
 				widest = Math.max(widest, inFlight)
-				await new Promise((resolve) => setTimeout(resolve, a.geoSpaceIds.length === 1024 ? 20 : 1))
+				await new Promise((resolve) => setTimeout(resolve, 5))
 				inFlight -= 1
 				return answer(a as never)
 			}) as never)
 			await run(s, EVERY.entityTypes)
-			expect(widest).toBe(2)
+			expect(widest).toBe(1)
 			expect(results()).toEqual({match: 1})
 		})
 
-		it("is throttled whole when the budget cannot give both lines", async () => {
+		it("takes one token of the budget, not one a line", async () => {
 			const budget = createReadBudget({perSecond: 0, burst: 1})
 			const s = everySetup(rows(), {spaces: many, chunks: true, budget})
 			await run(s, EVERY.entityTypes)
-			expect(unsupported()).toEqual({throttled: 1})
-			expect(s.readCardSpaces).not.toHaveBeenCalled()
+			expect(unsupported()).toEqual({})
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
 		})
 	})
 

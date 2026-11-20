@@ -37,11 +37,18 @@
 import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "graphql"
 
 import {conformingId} from "../geodb/card"
-import {type GeoDbCardClient, GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
+import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
 import {type GeoDbSearchClient, type GeoDbSearchMode, MAX_EVERY_SPACE_SEARCH, MAX_LISTED_SPACES} from "../geodb/search"
 import {DEFAULT_EXCLUDED_TYPE_IDS} from "../search"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
-import {asRecord, type EntityShadowDeps, parseOperation, TYPES_PROPERTY, Unsupported} from "./entityShadow"
+import {
+	asRecord,
+	type EntityShadowDeps,
+	parseOperation,
+	scopeOfSpaces,
+	TYPES_PROPERTY,
+	Unsupported,
+} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
 import {
@@ -92,7 +99,7 @@ export const EXCLUDED_TYPES: ReadonlySet<string> = new Set(
 
 /**
  * `hits` without the entities that hold an excluded Type, in order, and at most `limit`. Reads the hits' cards in
- * batches of Spaces (a line holds MAX_LINE_SPACES). An entity whose card shows no Type is kept.
+ * one read (the `every_space` scope past MAX_LINE_SPACES Spaces). An entity whose card shows no Type is kept.
  */
 export async function withoutExcludedTypes(
 	readCards: NonNullable<GeoDbCardClient["readCards"]>,
@@ -102,12 +109,11 @@ export async function withoutExcludedTypes(
 ): Promise<string[]> {
 	// Nothing to read: readCards refuses an empty id list (bad_request), which would abort an empty answer's comparison.
 	if (hits.length === 0) return []
-	const spaceChunks: string[][] = []
-	for (let at = 0; at < geoSpaceIds.length; at += MAX_LINE_SPACES)
-		spaceChunks.push(geoSpaceIds.slice(at, at + MAX_LINE_SPACES))
-	const answers = await Promise.all(spaceChunks.map((chunk) => readCards({geoSpaceIds: chunk, entityIds: hits})))
+	// Past one line's Spaces the search ran in every Space, so the cards are read in the `every_space` scope (one read,
+	// not two lines holding two claims: geo-db DR-177-583).
+	const answer = await readCards({geoSpaceIds: scopeOfSpaces(geoSpaceIds), entityIds: hits})
 	const excluded = new Set<string>()
-	for (const row of answers.flat())
+	for (const row of answer)
 		if (row.prop === TYPES_PROPERTY && row.entity !== undefined && EXCLUDED_TYPES.has(row.raw))
 			excluded.add(row.entity)
 	return hits.filter((id) => !excluded.has(id)).slice(0, limit)

@@ -31,7 +31,7 @@ import {
 import {GeoDbError, MAX_CARD_IDS} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {normalizeUuid} from "../utils/uuid"
-import {asRecord, type EntityShadowDeps, fieldsOf, isPlainField, MAX_EVERY_SPACES, responseKeyOf} from "./entityShadow"
+import {asRecord, type EntityShadowDeps, fieldsOf, isPlainField, responseKeyOf, scopeOfSpaces} from "./entityShadow"
 
 /** PostgreSQL's property_info columns, by the PostGraphile field that carries each. */
 export const PROPERTY_INFO_FIELDS = [
@@ -156,13 +156,13 @@ export async function checkPropertyInfo(
 	const ids = [...byProperty.keys()]
 	try {
 		const spaces = await deps.allGeoSpaces()
-		if (spaces.length === 0 || spaces.length > MAX_EVERY_SPACES) return {read: false}
+		if (spaces.length === 0) return {read: false}
 		const reads = Math.ceil(ids.length / MAX_CARD_IDS)
 		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(reads)) return {read: false}
 		const started = performance.now()
 		let rows: GeoCardRow[]
 		try {
-			rows = await readCards({geoSpaceIds: spaces, entityIds: ids, names: true})
+			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids, names: true})
 			observeGeoDbRead((performance.now() - started) / 1000, "ok")
 		} catch (error) {
 			observeGeoDbRead((performance.now() - started) / 1000, "error")

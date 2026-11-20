@@ -433,11 +433,18 @@ describe("type exclusion", () => {
 		expect(readCards).not.toHaveBeenCalled()
 	})
 
-	it("reads the Spaces in lines of at most 1024", async () => {
+	it("reads the cards in the every_space scope, one read, past 1024 Spaces", async () => {
 		const spaces = Array.from({length: 1580}, (_, i) => i.toString(16).padStart(32, "0"))
-		const readCards = vi.fn(async (_: {geoSpaceIds: string[]; entityIds: string[]}) => [])
+		const readCards = vi.fn(async (_: {geoSpaceIds: string[] | "every"; entityIds: string[]}) => [])
 		await withoutExcludedTypes(readCards, spaces, [geo(ids(1)[0] as string)], 20)
-		expect(readCards.mock.calls.map(([a]) => a.geoSpaceIds.length)).toEqual([1024, 556])
+		expect(readCards.mock.calls.map(([a]) => a.geoSpaceIds)).toEqual(["every"])
+	})
+
+	it("names the Spaces while they fit one line", async () => {
+		const spaces = Array.from({length: 1024}, (_, i) => i.toString(16).padStart(32, "0"))
+		const readCards = vi.fn(async (_: {geoSpaceIds: string[] | "every"; entityIds: string[]}) => [])
+		await withoutExcludedTypes(readCards, spaces, [geo(ids(1)[0] as string)], 20)
+		expect(readCards.mock.calls.map(([a]) => a.geoSpaceIds)).toEqual([spaces])
 	})
 
 	function setupFilter(
