@@ -858,8 +858,16 @@ if (sharedGeoDb) {
 				}),
 			)
 	}
-	if (gatewayServeSpace) gatewayResolvers.set(SPACE_ROOT, createSpaceResolver(sharedGeoDb, SPACE_ROOT))
-	if (gatewayServeSpaces) gatewayResolvers.set(SPACES_ROOT, createSpaceResolver(sharedGeoDb, SPACES_ROOT))
+	if (gatewayServeSpace || gatewayServeSpaces) {
+		// `address` and `topicId` come from the keyed records in the governance system Space (GEODB_SPACE_ADDRESSES, GEODB_SPACE_TOPICS).
+		const spaceDeps = {
+			...sharedGeoDb,
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+		}
+		if (gatewayServeSpace) gatewayResolvers.set(SPACE_ROOT, createSpaceResolver(spaceDeps, SPACE_ROOT))
+		if (gatewayServeSpaces) gatewayResolvers.set(SPACES_ROOT, createSpaceResolver(spaceDeps, SPACES_ROOT))
+	}
 	if (gatewayServeBestOrder) {
 		gatewayResolvers.set(
 			ENTITIES_IN_BEST_ORDER_FIELD,
