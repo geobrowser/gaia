@@ -11,6 +11,7 @@ import {
 import {createFeedExperimentShadow, readFeedExperimentShadowConfig} from "./src/forYou/feedExperimentShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
+import {createEntitiesConnectionResolver} from "./src/gateway/entitiesConnectionServe"
 import {
 	createEntitiesConnectionShadow,
 	createEntitiesOrderedShadow,
@@ -335,6 +336,9 @@ const gatewayShadowsAny = gatewayShadowFields.size > 0
 const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
 // `entities=on` has its own resolver (gateway/entitiesServe.ts): the type-scan page that selects only id, else PostGraphile.
 const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "entities") === "on"
+// `entitiesConnection=on` serves the same type-scan page under `nodes { id }` (gateway/entitiesConnectionServe.ts), else PostGraphile.
+const gatewayServeEntitiesConnection =
+	gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITIES_CONNECTION_FIELD) === "on"
 // `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
 const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
 // `search` / `searchConnection` =on have their own resolver (gateway/searchServe.ts); it also needs GEODB_SEARCH_SERVE=on (off by default).
@@ -379,6 +383,7 @@ const sharedGeoDb =
 	gatewayShadowsAny ||
 	gatewayServeEntity ||
 	gatewayServeEntities ||
+	gatewayServeEntitiesConnection ||
 	gatewayServeRelations ||
 	gatewayServeSearchFields.length > 0 ||
 	gatewayServeSpace ||
@@ -846,6 +851,16 @@ if (sharedGeoDb) {
 		})
 		if (gatewayServeEntities) gatewayResolvers.set("entities", entitiesResolver)
 		else runtimeGatewayResolvers.set("entities", entitiesResolver)
+	}
+	if (gatewayServeEntitiesConnection || wireForRuntime) {
+		const entitiesConnectionResolver = createEntitiesConnectionResolver({
+			...sharedGeoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+			typeScan: geoDbCardConfig.typeScan === true,
+			multiSpace: geoDbCardConfig.multiSpaceReads === true,
+		})
+		if (gatewayServeEntitiesConnection) gatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
+		else runtimeGatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
 	}
 	if (gatewayServeRelations || wireForRuntime) {
 		const relationsResolver = createRelationsResolver({
