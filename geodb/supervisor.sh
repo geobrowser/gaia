@@ -91,10 +91,15 @@ publish_ids() {
 }
 
 SERVE_PID=
+TAIL_PID=
+# shellcheck disable=SC2329 # invoked by trap below
 on_term() {
 	if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
 		kill -INT "$SERVE_PID" 2>/dev/null
 		wait "$SERVE_PID" 2>/dev/null
+	fi
+	if [ -n "$TAIL_PID" ]; then
+		kill "$TAIL_PID" 2>/dev/null
 	fi
 	exit 0
 }
@@ -102,8 +107,20 @@ trap on_term TERM INT
 
 rm -f "$RUN/geodb.sock" "$CTL/serving"
 : > "$RUN/serve.log"
-geodb-serve --binding "$RUN/binding.txt" --root "$STORE" --config "$CONFIG" --profile "$PROFILE" \
-	--secret-file "$GEODB_STORE_SECRET_FILE" > "$RUN/serve.log" 2>&1 &
+# geo-db 8982c92f86 refuses non-loopback plaintext listens (`tcp:0.0.0.0`, `http:0.0.0.0`) unless
+# `--allow-plaintext` is passed (or the listen is marked `confidential` behind TLS). Older builds
+# (such as 99fdac58cf) reject `--allow-plaintext` as an unknown flag, so probe `--help` before
+# passing it. In-cluster traffic is already isolated by NetworkPolicy `geodb-ingress`.
+set -- \
+	--binding "$RUN/binding.txt" \
+	--root "$STORE" \
+	--config "$CONFIG" \
+	--profile "$PROFILE" \
+	--secret-file "$GEODB_STORE_SECRET_FILE"
+case "$(geodb-serve --help 2>&1 || true)" in
+	*--allow-plaintext*) set -- "$@" --allow-plaintext ;;
+esac
+geodb-serve "$@" > "$RUN/serve.log" 2>&1 &
 SERVE_PID=$!
 tail -n +1 -F "$RUN/serve.log" &
 TAIL_PID=$!
