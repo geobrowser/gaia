@@ -3,10 +3,7 @@ import {describe, expect, it, vi} from "vitest"
 import {conformingId} from "../../geodb/card"
 import {MAX_TYPE_SCAN} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
-import {
-	createEntitiesConnectionResolver,
-	planEntitiesConnectionServe,
-} from "../entitiesConnectionServe"
+import {createEntitiesConnectionResolver, planEntitiesConnectionServe} from "../entitiesConnectionServe"
 import type {EntitiesServeDeps} from "../entitiesServe"
 import {createGateway, type ResolveContext} from "../gateway"
 import {__resetServeMetricsForTests, renderServeMetrics} from "../serveMetrics"
@@ -68,7 +65,9 @@ describe("planEntitiesConnectionServe", () => {
 
 	it("declines totalCount, pageInfo, edges, extra node fields, unsupported args, and non-single roots", () => {
 		expect(
-			reason(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { totalCount nodes { id } } }`),
+			reason(
+				`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { totalCount nodes { id } } }`,
+			),
 		).toBe("selection")
 		expect(
 			reason(
@@ -76,13 +75,17 @@ describe("planEntitiesConnectionServe", () => {
 			),
 		).toBe("selection")
 		expect(
-			reason(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { edges { node { id } } } }`),
+			reason(
+				`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { edges { node { id } } } }`,
+			),
 		).toBe("selection")
 		expect(
 			reason(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { nodes { id name } } }`),
 		).toBe("selection")
 		expect(
-			reason(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10, after: "cur") { nodes { id } } }`),
+			reason(
+				`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10, after: "cur") { nodes { id } } }`,
+			),
 		).toBe("args")
 		expect(
 			reason(
@@ -98,7 +101,9 @@ describe("planEntitiesConnectionServe", () => {
 		).toBe("filter")
 		expect(reason(`{ entities(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { id } }`)).toBe("not_single_root")
 		expect(
-			reason(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { nodes { id } } spaces { id } }`),
+			reason(
+				`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { nodes { id } } spaces { id } }`,
+			),
 		).toBe("not_single_root")
 	})
 })
@@ -181,7 +186,9 @@ describe("createEntitiesConnectionResolver", () => {
 			ok: false,
 			reason: "legacy_id",
 		})
-		expect(await createEntitiesConnectionResolver(make([A], {geoSpaceOf: async () => null}).deps)(context(Q))).toEqual({
+		expect(
+			await createEntitiesConnectionResolver(make([A], {geoSpaceOf: async () => null}).deps)(context(Q)),
+		).toEqual({
 			ok: false,
 			reason: "unmapped_space",
 		})
@@ -220,13 +227,17 @@ describe("entitiesConnection=on through the gateway", () => {
 			data: {entitiesConnection: {nodes: [{id: A, __typename: "Entity"}]}},
 		})
 		expect(delegate).not.toHaveBeenCalled()
-		expect(renderServeMetrics()).toContain('gaia_api_gateway_served_total{field="entitiesConnection",source="geodb"} 1')
+		expect(renderServeMetrics()).toContain(
+			'gaia_api_gateway_served_total{field="entitiesConnection",source="geodb"} 1',
+		)
 	})
 
 	it("falls back to PostGraphile for totalCount and counts the reason", async () => {
 		const {delegate, run} = gateway([A])
 		const response = await run(
-			post(`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { totalCount nodes { id } } }`),
+			post(
+				`{ entitiesConnection(spaceId: "${SPACE}", typeId: "${TYPE}", first: 10) { totalCount nodes { id } } }`,
+			),
 			{},
 		)
 		expect(await response.text()).toBe("pg")
