@@ -3216,7 +3216,7 @@ Reads that still have no serve switch, so no serve path exists and D1 for them n
 - Notification-indexer: its twin compares; its source reads of `proposals_current`, `votes_count` and the other KG tables have no geo-db home (plan 22 section 25.3). S5 covers only delivery-worker's claim.
 - search-indexer: `spaces_for_entities`, `docs_for_relations` and `empty_in_space` are compared only; a timer to compare a Space is pending #1523 (`SEARCH_INDEXER_GEODB_SHADOW_TIMER_SECS`, off by default, at least 30).
 - Feeder applied block: `GEODB_APPLIED_BLOCK` is `"1"` in `geodb/k8s/v2/geodb-feeder.yaml` and live since 2026-11-12 (write side, the geo-db `cursors` row `geodb-feeder-applied`); it is the lag guard S3 and S6 read, not a source flip.
-- The `*_RUST_COMPUTE` flags (`ranking-indexer/src/bin/*`, default off, in no manifest) run a Rust twin of a SQL job and compare; they do not move a source.
+- The `*_RUST_COMPUTE` flags (`ranking-indexer/src/bin/*`, default off, in no manifest) run a Rust twin of a SQL job and compare; they do not move a source. Each shadow compare is counted in `ranking_indexer_rust_compute_shadow_total{flag,outcome}` (match, mismatch, failed, unsupported); the CronJob bins install a recorder and push it to a Pushgateway at exit only when `PUSHGATEWAY_URL` is set (manifest held in `ranking-indexer/k8s/held/pushgateway.yaml`); without it the series is a no-op there and the log line is the reading.
 
 ### 13.3 Writer off-switches (`*_PG_WRITES`), in order
 
