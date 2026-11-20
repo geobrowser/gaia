@@ -47,6 +47,11 @@ export class ModelStore {
 				if (held) held.active = m[2] === "true"
 				continue
 			}
+			m = /^\.\{ \.unset = \.\{ \.entity = "([0-9a-f]{32})", \.property = "([0-9a-f]{32})" \} \}$/.exec(i)
+			if (m) {
+				for (const s of this.statements.values()) if (s.entity === m[1] && s.property === m[2]) s.active = false
+				continue
+			}
 			if (i.startsWith(".{ .") && !i.startsWith(".{ .space =")) throw new Error(`unmodelled intent ${i}`)
 		}
 	}
