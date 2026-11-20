@@ -17,6 +17,7 @@ import {
 	ENTITIES_CONNECTION_FIELD,
 	ENTITIES_ORDERED_FIELD,
 } from "./src/gateway/entitiesConnectionShadow"
+import {createEntitiesResolver} from "./src/gateway/entitiesServe"
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import type {FieldResolver} from "./src/gateway/gateway"
@@ -323,6 +324,8 @@ const gatewayShadowsAny = gatewayShadowFields.size > 0
 // PostGraphile for everything else (gaia_api_gateway_serve_fallback_total). geo-db's ids are turned back into gaia
 // ids through the reverse id map in Postgres (geodb/idMap.ts, migration 0116; gaia_api_geodb_id_map_*).
 const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
+// `entities=on` has its own resolver (gateway/entitiesServe.ts): the type-scan page that selects only id, else PostGraphile.
+const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "entities") === "on"
 // The ranked reads that GEODB_RANKED_READS_SERVE lists are served at the gateway only when their field is also "on" in
 // GRAPHQL_GATEWAY_FIELDS: two opt-ins, both off by default (gateway/rankedReadsServe.ts). The listing itself is read below, where
 // the serve layer is built, so the env is read here once for the two names.
@@ -346,6 +349,7 @@ const sharedGeoDb =
 	geoDbCardConfig.mode !== "off" ||
 	gatewayShadowsAny ||
 	gatewayServeEntity ||
+	gatewayServeEntities ||
 	gatewayServeBestOrder ||
 	gatewayServeTypeCounts
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
@@ -797,6 +801,17 @@ if (sharedGeoDb) {
 						entityResolver,
 					)
 				: entityResolver,
+		)
+	}
+	if (gatewayServeEntities) {
+		gatewayResolvers.set(
+			"entities",
+			createEntitiesResolver({
+				...sharedGeoDb,
+				gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+				typeScan: geoDbCardConfig.typeScan === true,
+				multiSpace: geoDbCardConfig.multiSpaceReads === true,
+			}),
 		)
 	}
 	if (gatewayServeBestOrder) {
