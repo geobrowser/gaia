@@ -34,6 +34,7 @@ pub mod cache;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
@@ -63,6 +64,32 @@ const INDEXER_ID: &str = "hermes_ipfs_cache";
 /// missing rows, which `reconcile_errored` cannot see.
 const MAX_CONCURRENT_FETCHES: usize = 20;
 
+/// Counter of cache-write retries (a `put` failed and is being attempted again).
+pub const CACHE_WRITE_RETRIES: &str = "hermes_ipfs_cache_write_retries_total";
+
+/// Counter of blocks held back because a cache write still failed after every retry.
+pub const BLOCKS_HELD: &str = "hermes_ipfs_cache_blocks_held_total";
+
+/// Bounded retry policy for cache writes (`attempts` tries, delay doubling from `base`).
+#[derive(Debug, Clone, Copy)]
+pub struct WriteRetry {
+    pub attempts: u32,
+    pub base: Duration,
+    pub max_delay: Duration,
+}
+
+impl Default for WriteRetry {
+    /// 5 tries, waits of 0.5 s, 1 s, 2 s, 4 s: about 7.5 s of waiting, long enough for a
+    /// saturated pool (3 s acquire timeout) to drain.
+    fn default() -> Self {
+        Self {
+            attempts: 5,
+            base: Duration::from_millis(500),
+            max_delay: Duration::from_secs(5),
+        }
+    }
+}
+
 /// Error type for the IPFS cache sink.
 #[derive(Debug, thiserror::Error)]
 pub enum IpfsCacheError {
@@ -74,6 +101,13 @@ pub enum IpfsCacheError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A cache write failed for good. The block stays pending so its cursor is never
+    /// persisted; stopping lets the process restart from the last persisted cursor.
+    #[error(
+        "cache write failed for block {0}; stopping so it is re-processed from the persisted cursor"
+    )]
+    BlockHeld(u64),
 }
 
 /// Tracks pending fetches per block for cursor management.
@@ -152,6 +186,9 @@ pub struct IpfsCacheSink {
     pending: Arc<Mutex<PendingFetches>>,
     /// Best-effort geo-db mirror of the cursor; `None` unless `GEODB_CURSOR_MIRROR` is on.
     geodb_mirror: Option<Arc<geodb_cursor::CursorMirror>>,
+    write_retry: WriteRetry,
+    /// Lowest block whose cache write failed after all retries, or `u64::MAX` for none.
+    held_block: Arc<AtomicU64>,
 }
 
 impl IpfsCacheSink {
@@ -175,7 +212,15 @@ impl IpfsCacheSink {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             pending: Arc::new(Mutex::new(PendingFetches::default())),
             geodb_mirror: geodb_cursor::CursorMirror::from_env().map(Arc::new),
+            write_retry: WriteRetry::default(),
+            held_block: Arc::new(AtomicU64::new(u64::MAX)),
         }
+    }
+
+    /// Override the cache-write retry policy (tests).
+    pub fn with_write_retry(mut self, retry: WriteRetry) -> Self {
+        self.write_retry = retry;
+        self
     }
 
     /// Get the hermes module this sink subscribes to.
@@ -191,6 +236,13 @@ impl Sink for IpfsCacheSink {
         &self,
         data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
     ) -> Result<(), Self::Error> {
+        // A block whose cache write failed is still pending, so its cursor cannot persist.
+        // Stop instead of running on: the restart resumes from the cursor behind it.
+        let held = self.held_block.load(Ordering::SeqCst);
+        if held != u64::MAX {
+            return Err(IpfsCacheError::BlockHeld(held));
+        }
+
         // Get the output from the block data
         let output = data
             .output
@@ -264,6 +316,8 @@ impl Sink for IpfsCacheSink {
             let ipfs = self.ipfs.clone();
             let pending = self.pending.clone();
             let geodb_mirror = self.geodb_mirror.clone();
+            let write_retry = self.write_retry;
+            let held_block = self.held_block.clone();
             let block_str = block_number.to_string();
             let block_num = block_number;
 
@@ -285,9 +339,30 @@ impl Sink for IpfsCacheSink {
                 async move {
                     let uri = ipfs_uri.uri.clone();
                     let ipfs_hash_for_log = ipfs_hash.clone();
-                    let result =
-                        process_ipfs_uri(ipfs_uri, &cache, &ipfs, &block_str, block_num).await;
+                    let result = process_ipfs_uri(
+                        ipfs_uri,
+                        &cache,
+                        &ipfs,
+                        &block_str,
+                        block_num,
+                        write_retry,
+                    )
+                    .await;
                     if let Err(e) = result {
+                        // The cache write failed after every retry. Real IPFS and decode
+                        // failures never land here (they are stored as is_errored rows).
+                        // Do NOT complete the block: it stays pending, so its cursor (and
+                        // every later one) is never persisted and a restart re-processes it.
+                        metrics::counter!(BLOCKS_HELD).increment(1);
+                        held_block.fetch_min(block_num, Ordering::SeqCst);
+                        error!(
+                            event = "ipfs_cache.block_held",
+                            block_number = block_num,
+                            space_id = %space_id,
+                            uri = %uri,
+                            error = %e,
+                            "Cache write failed after retries; holding block cursor"
+                        );
                         if ipfs_hash_for_log.is_empty() {
                             error!(
                                 event = "ipfs_cache.fetch_failed",
@@ -309,6 +384,8 @@ impl Sink for IpfsCacheSink {
                                 "Failed to process edit event"
                             );
                         }
+                        drop(permit);
+                        return;
                     }
 
                     // Mark this fetch as complete - persist cursor if block fully completed
@@ -397,6 +474,7 @@ async fn process_ipfs_uri(
     ipfs: &Arc<dyn IpfsFetcher>,
     block_str: &str,
     block_number: u64,
+    write_retry: WriteRetry,
 ) -> Result<(), CacheError> {
     let uri = ipfs_uri.uri;
     let ipfs_hash = uri.strip_prefix("ipfs://").unwrap_or("").to_string();
@@ -517,8 +595,39 @@ async fn process_ipfs_uri(
         }
     };
 
-    cache.lock().await.put(&item).await?;
-    Ok(())
+    put_with_retry(cache, &item, write_retry).await
+}
+
+/// Write `item`, retrying with doubling backoff. Returns the last error once the attempts
+/// are spent. A pool timeout under load is the common transient failure.
+async fn put_with_retry(
+    cache: &Arc<Mutex<Cache>>,
+    item: &CacheItem,
+    retry: WriteRetry,
+) -> Result<(), CacheError> {
+    let mut delay = retry.base;
+    let mut attempt = 1;
+    loop {
+        // Take the lock per attempt, so the backoff sleep does not stall other writers.
+        match cache.lock().await.put(item).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt >= retry.attempts => return Err(e),
+            Err(e) => {
+                metrics::counter!(CACHE_WRITE_RETRIES).increment(1);
+                warn!(
+                    event = "ipfs_cache.write_retry",
+                    uri = %item.uri,
+                    block = %item.block,
+                    attempt = attempt,
+                    error = %e,
+                    "Cache write failed; retrying"
+                );
+            }
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(retry.max_delay);
+        attempt += 1;
+    }
 }
 
 #[cfg(test)]
@@ -755,6 +864,7 @@ mod tests {
             &ipfs,
             "100",
             100,
+            WriteRetry::default(),
         )
         .await
         .unwrap();
@@ -812,5 +922,160 @@ mod tests {
         assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         let item = cache.lock().await.get(URI).await.unwrap().unwrap();
         assert_eq!(item.block, "90");
+    }
+
+    // ---- cache-write failure handling ----
+
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+
+    use cache::{CacheStorage, MockStorage};
+    use hermes_relay::source::MockSource;
+
+    /// Storage whose `insert` fails the first `fail_first` calls (`usize::MAX`: always),
+    /// like a pool timeout. Everything else delegates to an in-memory store.
+    struct FlakyStorage {
+        inner: MockStorage,
+        fail_first: usize,
+        inserts: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl CacheStorage for FlakyStorage {
+        async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
+            let n = self.inserts.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_first {
+                return Err(CacheError::Database(sqlx::Error::PoolTimedOut));
+            }
+            self.inner.insert(item).await
+        }
+        async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
+            self.inner.get(uri).await
+        }
+        async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
+            self.inner.load_cursor(id).await
+        }
+        async fn persist_cursor(&self, id: &str, c: &str, b: u64) -> Result<(), CacheError> {
+            self.inner.persist_cursor(id, c, b).await
+        }
+    }
+
+    const CACHE_WRITE_URI: &str = "ipfs://QmX65gRctsCHnBZSG7izR4vhMUTH3HbMuCuHRYP8tu5BVv";
+
+    fn fast_retry() -> WriteRetry {
+        WriteRetry {
+            attempts: 3,
+            base: Duration::from_millis(1),
+            max_delay: Duration::from_millis(2),
+        }
+    }
+
+    fn sink_with(fail_first: usize) -> (IpfsCacheSink, Arc<AtomicUsize>) {
+        let inserts = Arc::new(AtomicUsize::new(0));
+        let storage = FlakyStorage {
+            inner: MockStorage::new(),
+            fail_first,
+            inserts: inserts.clone(),
+        };
+        let mut data = HashMap::new();
+        // Not valid GRC-20, so the item is stored as an errored row; the write path is
+        // identical to the valid case.
+        data.insert(CACHE_WRITE_URI.to_string(), vec![1u8, 2, 3]);
+        let sink = IpfsCacheSink::new(
+            Cache::with_storage(Box::new(storage)),
+            IpfsSource::mock_bytes(data),
+        )
+        .with_write_retry(fast_retry());
+        (sink, inserts)
+    }
+
+    fn block(n: u64) -> hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData {
+        let list = IpfsUriList {
+            uris: vec![IpfsUri {
+                uri: CACHE_WRITE_URI.to_string(),
+                space_id: vec![7; 16],
+                source: "edit".to_string(),
+            }],
+        };
+        MockSource::builder(list.encode_to_vec())
+            .single_block(n)
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    /// Wait for the spawned fetch tasks to finish (all permits returned).
+    async fn drain(sink: &IpfsCacheSink) {
+        for _ in 0..500 {
+            if sink.semaphore.available_permits() == MAX_CONCURRENT_FETCHES {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("fetch tasks did not finish");
+    }
+
+    #[tokio::test]
+    async fn failed_cache_write_holds_the_block_and_its_cursor() {
+        let (sink, inserts) = sink_with(usize::MAX);
+        sink.process_block_scoped_data(&block(100)).await.unwrap();
+        drain(&sink).await;
+
+        // Every attempt was made, then the block was given up on without completing.
+        assert_eq!(inserts.load(Ordering::SeqCst), 3);
+        assert!(sink.pending.lock().await.blocks.contains_key(&100));
+        assert_eq!(sink.load_persisted_cursor().await.unwrap(), None);
+        assert!(
+            sink.cache
+                .lock()
+                .await
+                .get(CACHE_WRITE_URI)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // A later block must not carry the cursor past the held one.
+        sink.held_block.store(u64::MAX, Ordering::SeqCst);
+        sink.process_block_scoped_data(&block(101)).await.unwrap();
+        drain(&sink).await;
+        assert_eq!(sink.load_persisted_cursor().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn held_block_stops_the_sink_so_it_restarts_behind_the_cursor() {
+        let (sink, _) = sink_with(usize::MAX);
+        sink.process_block_scoped_data(&block(100)).await.unwrap();
+        drain(&sink).await;
+        let err = sink
+            .process_block_scoped_data(&block(101))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IpfsCacheError::BlockHeld(100)));
+    }
+
+    #[tokio::test]
+    async fn transient_cache_write_failure_is_retried_and_cursor_persists() {
+        let (sink, inserts) = sink_with(2);
+        sink.process_block_scoped_data(&block(100)).await.unwrap();
+        drain(&sink).await;
+
+        assert_eq!(inserts.load(Ordering::SeqCst), 3);
+        assert!(
+            sink.cache
+                .lock()
+                .await
+                .get(CACHE_WRITE_URI)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(sink.pending.lock().await.blocks.is_empty());
+        assert_eq!(
+            sink.load_persisted_cursor().await.unwrap().as_deref(),
+            Some("cursor_100")
+        );
+        // Not held: the next block is accepted.
+        sink.process_block_scoped_data(&block(101)).await.unwrap();
     }
 }
