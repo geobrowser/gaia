@@ -11,6 +11,7 @@ import {
 import {createFeedExperimentShadow, readFeedExperimentShadowConfig} from "./src/forYou/feedExperimentShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
+import {createEntitiesConnectionResolver} from "./src/gateway/entitiesConnectionServe"
 import {
 	createEntitiesConnectionShadow,
 	createEntitiesOrderedShadow,
@@ -24,7 +25,7 @@ import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway
 import type {FieldResolver} from "./src/gateway/gateway"
 import {createGateway, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
 import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
-import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createPointReadShadows, POINT_READ_FIELDS, RELATION_FIELD} from "./src/gateway/pointReadShadows"
 import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
 import {
 	createBestOrderResolver,
@@ -42,6 +43,7 @@ import {
 	kubeConfigMapPatchRevert,
 	readAutoRevertConfig,
 } from "./src/gateway/readSourceSwitch"
+import {createRelationResolver} from "./src/gateway/relationServe"
 import {createRelationsResolver} from "./src/gateway/relationsServe"
 import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
@@ -78,6 +80,7 @@ import {createFeedRunsShadow, readFeedRunsShadowConfig} from "./src/geodb/feedRu
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
+import {createMetaShadow, readMetaShadowConfig} from "./src/geodb/metaShadow"
 import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
 	createProposalDiffShadow,
@@ -106,6 +109,7 @@ import {createReplayPairsRouter} from "./src/geodb/replayPairs"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
+import {createSearchRelationShadow, readSearchRelationShadowConfig} from "./src/geodb/searchRelationShadow"
 import {readServeGateConfig} from "./src/geodb/serveGate"
 import {
 	createPostgresTypeCountsSource,
@@ -339,6 +343,11 @@ const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayC
 // `entitiesOrderedByProperty=on` has its own resolver (gateway/entitiesOrderedByPropertyServe.ts): a single-Space, single-Type, exact-order page selecting only id, else PostGraphile.
 const gatewayServeEntitiesOrderedByProperty =
 	gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITIES_ORDERED_FIELD) === "on"
+// `entitiesConnection=on` serves the same type-scan page under `nodes { id }` (gateway/entitiesConnectionServe.ts), else PostGraphile.
+const gatewayServeEntitiesConnection =
+	gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITIES_CONNECTION_FIELD) === "on"
+// `relation=on` has its own resolver (gateway/relationServe.ts): relation(id) { id fromEntityId } via readRelationEntity, else PostGraphile.
+const gatewayServeRelation = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, RELATION_FIELD) === "on"
 // `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
 const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
 // `search` / `searchConnection` =on have their own resolver (gateway/searchServe.ts); it also needs GEODB_SEARCH_SERVE=on (off by default).
@@ -384,6 +393,8 @@ const sharedGeoDb =
 	gatewayServeEntity ||
 	gatewayServeEntities ||
 	gatewayServeEntitiesOrderedByProperty ||
+	gatewayServeEntitiesConnection ||
+	gatewayServeRelation ||
 	gatewayServeRelations ||
 	gatewayServeSearchFields.length > 0 ||
 	gatewayServeSpace ||
@@ -741,6 +752,13 @@ const feedRunsShadowConfig = readFeedRunsShadowConfig(process.env)
 if (feedRunsShadowConfig.enabled) {
 	createFeedRunsShadow({config: feedRunsShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
 }
+// GEODB_META_SHADOW (default ON; 0 / off / false disables) samples the `meta` indexer-cursor rows from Postgres on a timer and compares
+// them with geo-db's `cursors` collection, counting into gaia_api_gateway_shadow_total{field="metas"}. Background only; one SELECT over a
+// two-row table plus at most a few derived gets every GEODB_META_SHADOW_INTERVAL_MS (default 5 min). Reads stay on Postgres.
+const metaShadowConfig = readMetaShadowConfig(process.env)
+if (metaShadowConfig.enabled) {
+	createMetaShadow({config: metaShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
+}
 // GEODB_PRIVATE_READERS_SHADOW (off by default) samples one user on a timer and compares the twins of user_topic_weights (readWeights,
 // readOwnWeights) and feed_user_seen (readSeen), computed from geo-db's restricted collections 28 / 29, with Postgres
 // (gaia_api_private_readers_shadow_total). It needs GEODB_PRIVATE_KEY_PATH, a key whose principal has derived_read=28,29;
@@ -861,6 +879,24 @@ if (sharedGeoDb) {
 		if (gatewayServeEntitiesOrderedByProperty)
 			gatewayResolvers.set(ENTITIES_ORDERED_FIELD, entitiesOrderedByPropertyResolver)
 		else runtimeGatewayResolvers.set(ENTITIES_ORDERED_FIELD, entitiesOrderedByPropertyResolver)
+	}
+	if (gatewayServeEntitiesConnection || wireForRuntime) {
+		const entitiesConnectionResolver = createEntitiesConnectionResolver({
+			...sharedGeoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+			typeScan: geoDbCardConfig.typeScan === true,
+			multiSpace: geoDbCardConfig.multiSpaceReads === true,
+		})
+		if (gatewayServeEntitiesConnection) gatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
+		else runtimeGatewayResolvers.set(ENTITIES_CONNECTION_FIELD, entitiesConnectionResolver)
+	}
+	if (gatewayServeRelation || wireForRuntime) {
+		const relationResolver = createRelationResolver({
+			geoDb: sharedGeoDb.geoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+		})
+		if (gatewayServeRelation) gatewayResolvers.set(RELATION_FIELD, relationResolver)
+		else runtimeGatewayResolvers.set(RELATION_FIELD, relationResolver)
 	}
 	if (gatewayServeRelations || wireForRuntime) {
 		const relationsResolver = createRelationsResolver({
@@ -1089,7 +1125,11 @@ const graphqlHandler = createGateway(gatewayDeps)
 // the same shadows with the sample rate forced to 1, so their gaia_api_gateway_shadow_total series fill without client traffic.
 // It never touches a request and never serves: no resolvers or observers, only the shadows.
 const gatewayProbeConfig = readGatewayProbeConfig(process.env)
-if (gatewayProbeConfig.enabled && gatewayConfig.mode === "on") {
+// GEODB_SEARCH_RELATION_SHADOW (default ON; 0 / off / false disables) does the same for `search`, `searchConnection` and `relation`
+// on a timer: a few real entity names and relation ids from Postgres, sent through the same probe gateway, so the existing shadows
+// count them into gaia_api_gateway_shadow_total. Background only; reads stay on Postgres (see geodb/searchRelationShadow.ts).
+const searchRelationShadowConfig = readSearchRelationShadowConfig(process.env)
+if ((gatewayProbeConfig.enabled || searchRelationShadowConfig.enabled) && gatewayConfig.mode === "on") {
 	const probeGateway = createGateway({
 		...gatewayDeps,
 		config: {...gatewayConfig, shadowSampleRate: 1},
@@ -1097,12 +1137,10 @@ if (gatewayProbeConfig.enabled && gatewayConfig.mode === "on") {
 		observers: undefined,
 		random: () => 0,
 	})
-	createGatewayProbe({
-		config: gatewayProbeConfig,
-		db,
-		send: (request) => probeGateway(request, {requestId: "gateway-probe"}),
-		log,
-	}).start()
+	const probeSend = (request: Request) => probeGateway(request, {requestId: "gateway-probe"})
+	createGatewayProbe({config: gatewayProbeConfig, db, send: probeSend, log}).start()
+	if (searchRelationShadowConfig.enabled)
+		createSearchRelationShadow({config: searchRelationShadowConfig, db, send: probeSend, log}).start()
 }
 if (gatewayConfig.mode === "on")
 	log.info("GraphQL gateway enabled", {fields: Object.fromEntries(gatewayConfig.fieldModes)})
