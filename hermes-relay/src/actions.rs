@@ -65,6 +65,14 @@ pub use hermes_substream::ACTION_TOPIC_UNSET as TOPIC_UNSET;
 pub use hermes_substream::ACTION_UNFLAGGED as UNFLAGGED;
 pub use hermes_substream::ACTION_VOTING_SETTINGS_UPDATED as VOTING_SETTINGS_UPDATED;
 
+// Legacy Governance V1 names, still sent by the web app (GEO-3803). Never match
+// on these directly: `normalize_actions` / `canonical` rewrite them to their V2
+// constant at decode time, so every filter downstream sees one hash.
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_DECLARED as LEGACY_SUBSPACE_TOPIC_DECLARED;
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_REMOVED as LEGACY_SUBSPACE_TOPIC_REMOVED;
+pub use hermes_substream::ACTION_TOPIC_DECLARED as LEGACY_TOPIC_DECLARED;
+pub use hermes_substream::ACTION_TOPIC_REMOVED as LEGACY_TOPIC_REMOVED;
+
 // =============================================================================
 // Permissionless Actions
 // =============================================================================
@@ -99,6 +107,64 @@ pub use hermes_substream::SPACE_TYPE_EOA;
 /// Check if an action matches a specific action type.
 pub fn matches(action_bytes: &[u8], action_type: &[u8; 32]) -> bool {
     action_bytes == action_type
+}
+
+// =============================================================================
+// Legacy aliases and action names (GEO-3803)
+// =============================================================================
+
+/// V1 → V2 aliases. Governance V2 (#759) renamed these four actions; the
+/// registry accepts any hash and the web app still sends the V1 names, with the
+/// same `topic`/`data` layout, so each V1 hash means exactly its V2 action.
+pub const LEGACY_ALIASES: [(&[u8; 32], &[u8; 32], &str); 4] = [
+    (&LEGACY_TOPIC_DECLARED, &TOPIC_SET, "TOPIC_DECLARED"),
+    (&LEGACY_TOPIC_REMOVED, &TOPIC_UNSET, "TOPIC_REMOVED"),
+    (
+        &LEGACY_SUBSPACE_TOPIC_DECLARED,
+        &SUBSPACE_TOPIC_SET,
+        "SUBSPACE_TOPIC_DECLARED",
+    ),
+    (
+        &LEGACY_SUBSPACE_TOPIC_REMOVED,
+        &SUBSPACE_TOPIC_UNSET,
+        "SUBSPACE_TOPIC_REMOVED",
+    ),
+];
+
+/// The V2 constant a legacy V1 action hash stands for, or `None` when the hash
+/// is not a legacy alias (V2 hashes and everything else map to `None`).
+pub fn canonical(action_bytes: &[u8]) -> Option<&'static [u8; 32]> {
+    LEGACY_ALIASES
+        .iter()
+        .find(|(legacy, _, _)| action_bytes == legacy.as_slice())
+        .map(|(_, v2, _)| *v2)
+}
+
+/// Rewrite every legacy V1 action hash to its V2 constant, in place, and
+/// return how many were rewritten. Call once, right after decoding a block's
+/// `Actions`, so every filter downstream matches on the canonical hash only.
+/// Order and every other field are untouched, so `sequence` and `is_last`
+/// (both derived from positions) are unaffected.
+pub fn normalize_actions(actions: &mut [crate::Action]) -> usize {
+    let mut rewritten = 0;
+    for action in actions.iter_mut() {
+        if let Some(v2) = canonical(&action.action) {
+            action.action = v2.to_vec();
+            rewritten += 1;
+        }
+    }
+    rewritten
+}
+
+/// Decode one block's `map_actions` output and normalise it
+/// ([`normalize_actions`]). Every consumer of raw actions decodes through this,
+/// so no decode site can skip the normalisation. Returns the actions and how
+/// many legacy hashes were rewritten.
+pub fn decode_normalized(bytes: &[u8]) -> Result<(crate::Actions, usize), prost::DecodeError> {
+    use prost::Message;
+    let mut actions = crate::Actions::decode(bytes)?;
+    let rewritten = normalize_actions(&mut actions.actions);
+    Ok((actions, rewritten))
 }
 
 #[cfg(test)]
@@ -212,5 +278,154 @@ mod tests {
     #[test]
     fn permissionless_verified_is_not_subspace_verified() {
         assert_ne!(super::VERIFIED, super::SUBSPACE_VERIFIED);
+    }
+
+    // ---- GEO-3803: legacy V1 aliases -------------------------------------
+
+    #[test]
+    fn legacy_aliases_match_their_v1_names() {
+        assert_eq!(
+            super::LEGACY_TOPIC_DECLARED,
+            keccak256("GOVERNANCE.TOPIC_DECLARED").0
+        );
+        assert_eq!(
+            super::LEGACY_TOPIC_REMOVED,
+            keccak256("GOVERNANCE.TOPIC_REMOVED").0
+        );
+        assert_eq!(
+            super::LEGACY_SUBSPACE_TOPIC_DECLARED,
+            keccak256("GOVERNANCE.SUBSPACE_TOPIC_DECLARED").0
+        );
+        assert_eq!(
+            super::LEGACY_SUBSPACE_TOPIC_REMOVED,
+            keccak256("GOVERNANCE.SUBSPACE_TOPIC_REMOVED").0
+        );
+    }
+
+    /// The exact values the web app sends: geogenesis
+    /// apps/web/core/utils/contracts/space-registry.ts `GOVERNANCE_ACTIONS`.
+    /// If the web constants change, this is the test to update.
+    #[test]
+    fn legacy_aliases_match_the_web_app_constants() {
+        let hex = |b: [u8; 32]| alloy::primitives::hex::encode(b);
+        assert_eq!(
+            hex(super::LEGACY_TOPIC_DECLARED),
+            "d020fbe5a0270daba9a9031c59402c03d5093ebfa8c4caa2203c2c72f95ce30c"
+        );
+        assert_eq!(
+            hex(super::LEGACY_TOPIC_REMOVED),
+            "6311f3c439cf906060b1d174cabab01645a7c8c628bee916f91d714030e3f195"
+        );
+        assert_eq!(
+            hex(super::LEGACY_SUBSPACE_TOPIC_DECLARED),
+            "f475121947612f07c138e5ac27aa31355aaea0da3096cea1b702daeb5e8477aa"
+        );
+        assert_eq!(
+            hex(super::LEGACY_SUBSPACE_TOPIC_REMOVED),
+            "98ee515a05d2eb17f8e4c1e997a36ee6a8eca03af78d98943787935f9e39adda"
+        );
+    }
+
+    #[test]
+    fn v2_topic_constants_match_their_names() {
+        assert_eq!(super::TOPIC_SET, keccak256("GOVERNANCE.TOPIC_SET").0);
+        assert_eq!(super::TOPIC_UNSET, keccak256("GOVERNANCE.TOPIC_UNSET").0);
+        assert_eq!(
+            super::SUBSPACE_TOPIC_SET,
+            keccak256("GOVERNANCE.SUBSPACE_TOPIC_SET").0
+        );
+        assert_eq!(
+            super::SUBSPACE_TOPIC_UNSET,
+            keccak256("GOVERNANCE.SUBSPACE_TOPIC_UNSET").0
+        );
+    }
+
+    #[test]
+    fn canonical_maps_each_legacy_hash_to_its_v2_constant_only() {
+        assert_eq!(
+            super::canonical(&super::LEGACY_TOPIC_DECLARED),
+            Some(&super::TOPIC_SET)
+        );
+        assert_eq!(
+            super::canonical(&super::LEGACY_TOPIC_REMOVED),
+            Some(&super::TOPIC_UNSET)
+        );
+        assert_eq!(
+            super::canonical(&super::LEGACY_SUBSPACE_TOPIC_DECLARED),
+            Some(&super::SUBSPACE_TOPIC_SET)
+        );
+        assert_eq!(
+            super::canonical(&super::LEGACY_SUBSPACE_TOPIC_REMOVED),
+            Some(&super::SUBSPACE_TOPIC_UNSET)
+        );
+        assert_eq!(super::canonical(&super::TOPIC_SET), None);
+        assert_eq!(super::canonical(&super::EDITS_PUBLISHED), None);
+        assert_eq!(super::canonical(&[0u8; 32]), None);
+        assert_eq!(super::canonical(&[]), None);
+    }
+
+    fn action(hash: &[u8; 32], from: u8, to: u8) -> crate::Action {
+        crate::Action {
+            from_id: vec![from; 16],
+            to_id: vec![to; 16],
+            action: hash.to_vec(),
+            topic: vec![9; 32],
+            data: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn normalize_actions_rewrites_only_legacy_hashes_and_keeps_order() {
+        let unknown = [0xab; 32];
+        let mut actions = vec![
+            action(&super::EDITS_PUBLISHED, 1, 1),
+            action(&super::LEGACY_TOPIC_DECLARED, 1, 1),
+            action(&unknown, 2, 3),
+            action(&super::TOPIC_SET, 4, 4),
+            action(&super::LEGACY_SUBSPACE_TOPIC_DECLARED, 5, 6),
+        ];
+        let before = actions.clone();
+
+        assert_eq!(super::normalize_actions(&mut actions), 2);
+
+        assert_eq!(actions[0], before[0]);
+        assert_eq!(actions[1].action, super::TOPIC_SET.to_vec());
+        assert_eq!(actions[2], before[2]);
+        assert_eq!(actions[3], before[3]);
+        assert_eq!(actions[4].action, super::SUBSPACE_TOPIC_SET.to_vec());
+        // Only the hash changes.
+        for (a, b) in actions.iter().zip(&before) {
+            assert_eq!(
+                (&a.from_id, &a.to_id, &a.topic, &a.data),
+                (&b.from_id, &b.to_id, &b.topic, &b.data)
+            );
+        }
+    }
+
+    #[test]
+    fn decode_normalized_rewrites_legacy_hashes_in_encoded_output() {
+        use prost::Message;
+        let block = crate::Actions {
+            actions: vec![
+                action(&super::LEGACY_TOPIC_DECLARED, 1, 1),
+                action(&super::EDITS_PUBLISHED, 1, 1),
+            ],
+        };
+        let (decoded, rewritten) = super::decode_normalized(&block.encode_to_vec()).unwrap();
+        assert_eq!(rewritten, 1);
+        assert_eq!(decoded.actions[0].action, super::TOPIC_SET.to_vec());
+        assert_eq!(decoded.actions[1], block.actions[1]);
+        assert!(super::decode_normalized(&[0xff, 0xff, 0xff]).is_err());
+    }
+
+    #[test]
+    fn normalize_actions_on_an_all_v2_block_is_a_no_op() {
+        let mut actions = vec![
+            action(&super::TOPIC_SET, 1, 1),
+            action(&super::MEMBER_ADDED, 1, 2),
+        ];
+        let before = actions.clone();
+        assert_eq!(super::normalize_actions(&mut actions), 0);
+        assert_eq!(actions, before);
     }
 }

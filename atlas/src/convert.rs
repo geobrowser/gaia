@@ -470,4 +470,23 @@ mod tests {
         // Total topology events (edits, proposals, flagging, voting filtered out)
         assert_eq!(events.len(), 46);
     }
+
+    /// GEO-3803: the web app sends the legacy V1 SUBSPACE_TOPIC_DECLARED hash.
+    /// After `normalize_actions` (run at decode in main.rs) it converts exactly
+    /// like V2 SUBSPACE_TOPIC_SET.
+    #[test]
+    fn test_legacy_subspace_topic_declared_converts_after_normalize() {
+        let v2 = subspace_topic_set(make_id(0x01), make_id(0x02), make_id(0x8A));
+        let mut legacy = v2.clone();
+        legacy.action = hermes_relay::actions::LEGACY_SUBSPACE_TOPIC_DECLARED.to_vec();
+
+        // Unnormalised, the legacy hash converts to nothing.
+        assert!(convert_action(&legacy, &test_meta()).is_none());
+
+        let mut block = vec![legacy];
+        assert_eq!(hermes_relay::actions::normalize_actions(&mut block), 1);
+        let got = convert_action(&block[0], &test_meta()).expect("should convert");
+        let want = convert_action(&v2, &test_meta()).expect("should convert");
+        assert_eq!(format!("{got:?}"), format!("{want:?}"));
+    }
 }

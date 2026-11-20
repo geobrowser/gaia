@@ -527,4 +527,29 @@ mod tests {
         assert_eq!(result.events.len(), 1);
         assert!(result.total() > 0, "removal-only block must have total > 0");
     }
+
+    /// GEO-3803: the web app's subtopic writes use the legacy V1 hash.
+    #[test]
+    fn test_legacy_subspace_topic_declared_transforms_after_normalize() {
+        let mut topic = vec![2u8; 16];
+        topic.extend_from_slice(&[3u8; 16]);
+        let mut block = vec![Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
+            action: actions::LEGACY_SUBSPACE_TOPIC_DECLARED.to_vec(),
+            topic,
+            data: vec![],
+        }];
+        assert!(transform(&block, &test_meta()).unwrap().events.is_empty());
+
+        assert_eq!(actions::normalize_actions(&mut block), 1);
+        let result = transform(&block, &test_meta()).unwrap();
+        assert_eq!(result.topic_declared, 1);
+        match &result.events[0].extension {
+            Some(hermes_space_trust_extension::Extension::Subtopic(s)) => {
+                assert_eq!(s.target_topic_id, vec![3u8; 16]);
+            }
+            other => panic!("Expected Subtopic extension, got {other:?}"),
+        }
+    }
 }

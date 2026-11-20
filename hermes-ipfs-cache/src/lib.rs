@@ -52,6 +52,15 @@ use cache::{Cache, CacheError, CacheItem};
 const INDEXER_ID: &str = "hermes_ipfs_cache";
 
 /// Maximum concurrent IPFS fetches.
+///
+/// Invariant (GEO-3803): a URI holds its permit for at most the ipfs client's
+/// total budget (180 s, `IpfsClient::DEFAULT_TOTAL_BUDGET`). Permits are taken
+/// in block order and tokio's `Semaphore` is FIFO, so once hermes-pipeline
+/// reaches a block, that block's URIs queue only behind their own siblings,
+/// and the block completes within `ceil(uris / 20) x 180 s`. Keep that under
+/// hermes-pipeline's `IPFS_WARMER_WAIT_SECS` (600 s): up to 60 URIs per block
+/// (recent blocks carry 1 to 3). Past it the pipeline drops the edits as
+/// missing rows, which `reconcile_errored` cannot see.
 const MAX_CONCURRENT_FETCHES: usize = 20;
 
 /// Error type for the IPFS cache sink.
@@ -401,7 +410,23 @@ async fn process_ipfs_uri(
         "Processing edit"
     );
 
-    // Fetch the raw bytes from IPFS
+    // A warmer restart replays from the last persisted cursor and re-fetches
+    // URIs that already have a row. `put` is first-write-wins, so fetching
+    // again cannot change anything; skip it. A failed lookup counts as "not
+    // cached": returning the error here would complete the block with no row
+    // at all.
+    match cache.lock().await.get(&uri).await {
+        Ok(Some(_)) => {
+            debug!(uri = %uri, block = block_number, "Already cached; skipping fetch");
+            return Ok(());
+        }
+        Ok(None) => {}
+        Err(e) => warn!(uri = %uri, error = %e, "Cache lookup failed; fetching anyway"),
+    }
+
+    // Fetch the raw bytes from IPFS. The client retries transient failures
+    // (timeouts, 404, 429, 5xx, 401/403) for up to its 180 s budget; what comes back
+    // here is final for this pass.
     let result = ipfs.get_bytes(&uri).await;
 
     let item = match result {
@@ -457,13 +482,17 @@ async fn process_ipfs_uri(
             }
         }
         Err(error) => {
+            // `transient` = the gateway, not the content, failed for the whole
+            // budget: a candidate for reconcile_errored once it recovers.
+            let transient = error.is_transient();
             if ipfs_hash.is_empty() {
                 warn!(
                     uri = %uri,
                     space_id = %space_id,
                     block = block_number,
                     error = %error,
-                    "Failed to fetch IPFS content"
+                    transient,
+                    "Failed to fetch IPFS content; caching as errored"
                 );
             } else {
                 warn!(
@@ -473,7 +502,8 @@ async fn process_ipfs_uri(
                     space_id = %space_id,
                     block = block_number,
                     error = %error,
-                    "Failed to fetch IPFS content"
+                    transient,
+                    "Failed to fetch IPFS content; caching as errored"
                 );
             }
             CacheItem {
@@ -674,5 +704,113 @@ mod tests {
         )); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());
+    }
+
+    // ---- GEO-3803: what the warmer writes after the client's retries --------
+
+    /// Fails with each queued error in turn, then serves `bytes`.
+    struct ScriptedFetcher {
+        failures: std::sync::Mutex<std::collections::VecDeque<ipfs::IpfsError>>,
+        bytes: Vec<u8>,
+        calls: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl IpfsFetcher for ScriptedFetcher {
+        async fn get_bytes(&self, _uri: &str) -> ipfs::Result<Vec<u8>> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.failures.lock().unwrap().pop_front() {
+                Some(err) => Err(err),
+                None => Ok(self.bytes.clone()),
+            }
+        }
+    }
+
+    fn scripted(failures: Vec<ipfs::IpfsError>) -> Arc<ScriptedFetcher> {
+        let edit = grc_20::Edit {
+            id: [0x01; 16],
+            name: std::borrow::Cow::Borrowed("edit"),
+            authors: vec![[0x02; 16]],
+            created_at: 1_700_000_000,
+            ops: vec![],
+        };
+        Arc::new(ScriptedFetcher {
+            failures: std::sync::Mutex::new(failures.into()),
+            bytes: grc_20::encode_edit(&edit).unwrap(),
+            calls: Default::default(),
+        })
+    }
+
+    const URI: &str = "ipfs://bafkreiwarmer";
+
+    async fn run(cache: &Arc<Mutex<Cache>>, fetcher: &Arc<ScriptedFetcher>) {
+        let ipfs: Arc<dyn IpfsFetcher> = fetcher.clone();
+        process_ipfs_uri(
+            IpfsUri {
+                uri: URI.to_string(),
+                space_id: vec![0xaa; 16],
+                source: "edit".to_string(),
+            },
+            cache,
+            &ipfs,
+            "100",
+            100,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_fetch_error_after_the_clients_retries_is_cached_as_errored() {
+        for err in [
+            ipfs::IpfsError::HttpStatus {
+                status: 503,
+                body: String::new(),
+            },
+            ipfs::IpfsError::VerificationFailed {
+                cid: "bafkreiwarmer".into(),
+                attempts: 15,
+            },
+        ] {
+            let cache = Arc::new(Mutex::new(Cache::mock()));
+            let fetcher = scripted(vec![err]);
+            run(&cache, &fetcher).await;
+            let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+            assert!(item.is_errored);
+            assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn fetched_content_is_cached() {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        let fetcher = scripted(vec![]);
+        run(&cache, &fetcher).await;
+        let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+        assert!(!item.is_errored);
+        assert!(item.data.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_already_cached_uri_is_not_fetched_again() {
+        let cache = Arc::new(Mutex::new(Cache::mock()));
+        cache
+            .lock()
+            .await
+            .put(&CacheItem {
+                uri: URI.to_string(),
+                data: Some(vec![1, 2, 3]),
+                block: "90".to_string(),
+                space_id: hex::encode([0xaa; 16]),
+                is_errored: false,
+                name: None,
+            })
+            .await
+            .unwrap();
+        let fetcher = scripted(vec![]);
+        run(&cache, &fetcher).await;
+        assert_eq!(fetcher.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let item = cache.lock().await.get(URI).await.unwrap().unwrap();
+        assert_eq!(item.block, "90");
     }
 }

@@ -315,4 +315,29 @@ mod tests {
             .collect();
         assert_eq!(removed_seqs, vec![1]);
     }
+
+    /// GEO-3803: sign-up sends the legacy V1 TOPIC_DECLARED hash. It is ignored
+    /// as-is and becomes a topic declaration once normalised (main.rs does this
+    /// right after decode).
+    #[test]
+    fn test_legacy_topic_declared_transforms_after_normalize() {
+        let mut topic = vec![2; 16];
+        topic.extend_from_slice(&[0; 16]);
+        let mut block = vec![Action {
+            from_id: vec![1; 16],
+            to_id: vec![1; 16],
+            action: actions::LEGACY_TOPIC_DECLARED.to_vec(),
+            topic,
+            data: vec![],
+        }];
+
+        let before = transform(&block, &test_meta()).unwrap();
+        assert!(before.topics_declared.is_empty());
+
+        assert_eq!(actions::normalize_actions(&mut block), 1);
+        let after = transform(&block, &test_meta()).unwrap();
+        assert_eq!(after.topics_declared.len(), 1);
+        assert_eq!(after.topics_declared[0].space_id, vec![1; 16]);
+        assert_eq!(after.topics_declared[0].topic_id, vec![2; 16]);
+    }
 }
