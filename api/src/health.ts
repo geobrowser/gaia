@@ -5,6 +5,7 @@ import {renderEntityRankingConfigMetrics} from "./forYou/entityRankingConfigShad
 import {renderFeedExperimentMetrics} from "./forYou/feedExperimentShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
+import {renderReadSourceSwitchMetrics} from "./gateway/readSourceSwitch"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderEditMetaShadowMetrics} from "./geodb/editMetaShadow"
@@ -226,6 +227,8 @@ function renderPrometheusMetrics(): string {
 		renderRankTypedMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
+		// Runtime per-field read-source switch auto-revert counter and gauge — see gateway/readSourceSwitch.ts.
+		renderReadSourceSwitchMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
 		renderIdMapMetrics(),
 		// The same map checked against geo-db's legacy-id read (GEODB_ID_MAP_TWIN) — see geodb/idMapTwin.ts.

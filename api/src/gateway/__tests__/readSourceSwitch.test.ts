@@ -10,7 +10,9 @@ import {createGateway, type FieldResolver} from "../gateway"
 import {
 	__resetReadSourceSwitchMetricsForTests,
 	createReadSourceSwitch,
+	DEFAULT_AUTO_REVERT_CONFIG,
 	ENTITY_CARDS_FIELD,
+	isGeoDbErrorReason,
 	renderReadSourceSwitchMetrics,
 } from "../readSourceSwitch"
 import {__resetServeMetricsForTests} from "../serveMetrics"
@@ -137,17 +139,17 @@ describe("readSourceSwitch", () => {
 		await sw.refreshIfDue()
 		expect(sw.effectiveMode("entity")).toBe("on")
 
-		// 3 ok, 1 error => 25% (at threshold, does not trip)
-		sw.recordOutcome("entity", {ok: true, latencyMs: 10})
-		sw.recordOutcome("entity", {ok: true, latencyMs: 10})
-		sw.recordOutcome("entity", {ok: true, latencyMs: 10})
-		sw.recordOutcome("entity", {ok: false, latencyMs: 10})
+		// 3 served, 1 failure => 25% (at threshold, does not trip)
+		sw.recordOutcome("entity", {kind: "served", latencyMs: 10})
+		sw.recordOutcome("entity", {kind: "served", latencyMs: 10})
+		sw.recordOutcome("entity", {kind: "served", latencyMs: 10})
+		sw.recordOutcome("entity", {kind: "failure", latencyMs: 10})
 		expect(sw.effectiveMode("entity")).toBe("on")
 		expect(sw.isReverted("entity")).toBe(false)
 		expect(warn).not.toHaveBeenCalled()
 
-		// 1 more error => 2/5 = 40% > 25% => trips!
-		sw.recordOutcome("entity", {ok: false, latencyMs: 10})
+		// 1 more failure => 2/5 = 40% > 25% => trips!
+		sw.recordOutcome("entity", {kind: "failure", latencyMs: 10})
 		expect(sw.isReverted("entity")).toBe(true)
 		expect(sw.effectiveMode("entity")).toBe("off")
 		expect(warn).toHaveBeenCalledTimes(1)
@@ -156,7 +158,7 @@ describe("readSourceSwitch", () => {
 		// Even after the sliding window expires and file still says "on", it stays reverted and does not re-log or re-bump
 		now += 120_000
 		await sw.refreshIfDue()
-		sw.recordOutcome("entity", {ok: false, latencyMs: 10})
+		sw.recordOutcome("entity", {kind: "failure", latencyMs: 10})
 		expect(sw.isReverted("entity")).toBe(true)
 		expect(sw.effectiveMode("entity")).toBe("off")
 		expect(warn).toHaveBeenCalledTimes(1)
@@ -170,7 +172,7 @@ describe("readSourceSwitch", () => {
 		expect(sw.effectiveMode("entity")).toBe("on")
 
 		// Same reset token does not clear a second trip; a new token does
-		for (let i = 0; i < 4; i++) sw.recordOutcome("entity", {ok: false, latencyMs: 10})
+		for (let i = 0; i < 4; i++) sw.recordOutcome("entity", {kind: "failure", latencyMs: 10})
 		expect(sw.isReverted("entity")).toBe(true)
 		expect(warn).toHaveBeenCalledTimes(2)
 		expect(metric("gaia_api_gateway_read_source_auto_revert_total", 'field="entity",reason="error_rate"')).toBe(2)
@@ -201,18 +203,18 @@ describe("readSourceSwitch", () => {
 		await sw.refreshIfDue()
 
 		// Old slow samples age out of the sliding window before minSamples is reached
-		sw.recordOutcome("entities", {ok: true, latencyMs: 500})
-		sw.recordOutcome("entities", {ok: true, latencyMs: 500})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 500})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 500})
 		now += 70_000
-		sw.recordOutcome("entities", {ok: true, latencyMs: 20})
-		sw.recordOutcome("entities", {ok: true, latencyMs: 20})
-		sw.recordOutcome("entities", {ok: true, latencyMs: 20})
-		sw.recordOutcome("entities", {ok: true, latencyMs: 20})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 20})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 20})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 20})
+		sw.recordOutcome("entities", {kind: "served", latencyMs: 20})
 		expect(sw.isReverted("entities")).toBe(false)
 
 		// Now 4 slow samples in the active window trip latency auto-revert
 		now += 70_000
-		for (let i = 0; i < 4; i++) sw.recordOutcome("entities", {ok: true, latencyMs: 180})
+		for (let i = 0; i < 4; i++) sw.recordOutcome("entities", {kind: "served", latencyMs: 180})
 		expect(sw.isReverted("entities")).toBe(true)
 		expect(sw.effectiveMode("entities")).toBe("off")
 		expect(warn).toHaveBeenCalledTimes(1)
@@ -238,13 +240,22 @@ describe("readSourceSwitch", () => {
 			autoRevert: {windowMs: 60_000, minSamples: 3, maxErrorRate: 0.25, maxLatencyMs: 250},
 		})
 
-		const delegate = vi.fn(async () => new Response(JSON.stringify({data: {entity: {id: "pg"}}}), {headers: {"content-type": "application/json"}}))
+		const delegate = vi.fn(
+			async () =>
+				new Response(JSON.stringify({data: {entity: {id: "pg"}}}), {
+					headers: {"content-type": "application/json"},
+				}),
+		)
 		const shadow = vi.fn(async () => {})
 		let resolverImpl: FieldResolver = async () => ({ok: true, data: {entity: {id: "geo"}}})
 		const resolver: FieldResolver = (ctx) => resolverImpl(ctx)
 
 		const gateway = createGateway({
-			config: readGatewayConfig({GRAPHQL_GATEWAY: "on", GRAPHQL_GATEWAY_FIELDS: "entity=shadow", GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1"}),
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "entity=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+			}),
 			delegate,
 			resolvers: new Map([["entity", resolver]]),
 			shadows: new Map([["entity", shadow]]),
@@ -357,11 +368,26 @@ describe("readSourceSwitch", () => {
 		expect(r4.card.source).toBe("geodb")
 	})
 
+	it("matches GatewayServeFallbackHigh and GatewayServeLatencyHigh defaults and failure classes (#1682)", () => {
+		expect(DEFAULT_AUTO_REVERT_CONFIG).toEqual({
+			windowMs: 15 * 60_000,
+			minSamples: 20,
+			maxErrorRate: 0.1,
+			maxLatencyMs: 250,
+		})
+		for (const reason of ["timeout", "overloaded", "client_failed", "bad_request", "error", "id_map"]) {
+			expect(isGeoDbErrorReason(reason), reason).toBe(true)
+		}
+		for (const reason of ["selection", "args", "filter", "not_enabled", "legacy_id", "unmapped_space"]) {
+			expect(isGeoDbErrorReason(reason), reason).toBe(false)
+		}
+	})
+
 	it("ships every field as shadow in api/k8s/v2/api.yaml geodb-read-source ConfigMap", () => {
 		const yaml = readFileSync(path.resolve(__dirname, "../../../k8s/v2/api.yaml"), "utf8")
 		expect(yaml).toContain("name: geodb-read-source")
 		expect(yaml).toContain("GEODB_READ_SOURCE_PATH")
-		const match = yaml.match(/read-source\.json:\s*\|\n([\s\S]*?)(?:\n---|\n\S)/)
+		const match = yaml.match(/read-source\.json:\s*\|\n([\s\S]*?)(?:\n---|\n\S|$)/)
 		expect(match).not.toBeNull()
 		const body = (match?.[1] ?? "")
 			.split("\n")

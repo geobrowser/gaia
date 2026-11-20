@@ -1,0 +1,339 @@
+/**
+ * Runtime per-field read-source switch with sliding-window auto-revert back to Postgres.
+ *
+ * Reads per-field modes ("off" | "shadow" | "on") from a mounted Kubernetes ConfigMap file
+ * (`GEODB_READ_SOURCE_PATH`, e.g. `/etc/geodb/read-source/read-source.json`) without requiring a pod
+ * restart or deploy. Re-checks the file with a single `stat` at most every `refreshMs` (default 2 s)
+ * and keeps the last known good config (or startup env defaults) if the file is missing or malformed.
+ *
+ * Covers both GraphQL gateway root fields (`GRAPHQL_GATEWAY_FIELDS`) and the REST entity-card route
+ * (`ENTITY_CARDS_FIELD` / `GEODB_ENTITY_CARDS`).
+ *
+ * Auto-revert: while a field is serving from geo-db ("on"), each geo-db read outcome (ok or geo-db
+ * error, plus latency) is recorded in a per-field sliding window. If the error rate or p95 latency
+ * crosses its threshold once `minSamples` observations exist in the window, the field is latched back
+ * to Postgres (effective mode "off"), logged once, and counted once in
+ * `gaia_api_gateway_read_source_auto_revert_total{field,reason}`. It stays on Postgres until a person
+ * resets it (either by updating `reset.<field>` to a new token in the ConfigMap or calling `reset()`).
+ */
+
+import {readFile, stat} from "node:fs/promises"
+import {type FieldMode, parseFieldMode} from "./config"
+
+export const ENTITY_CARDS_FIELD = "entityCards"
+
+export const AUTO_REVERT_REASONS = ["error_rate", "latency"] as const
+export type AutoRevertReason = (typeof AUTO_REVERT_REASONS)[number]
+
+/**
+ * Failure-class fallback reasons, matching monitoring/k8s/v2/geodb-gateway-serve-alerts.yaml
+ * (GatewayServeFallbackHigh): geo-db failing a query it could have answered, or the reverse id map failing.
+ */
+export const GEO_DB_ERROR_REASONS = new Set([
+	"timeout",
+	"overloaded",
+	"client_failed",
+	"bad_request",
+	"error",
+	"id_map",
+])
+
+export function isGeoDbErrorReason(reason: string): boolean {
+	return GEO_DB_ERROR_REASONS.has(reason)
+}
+
+export type SwitchLogger = {
+	info: (message: string, data?: Record<string, unknown>) => void
+	warn: (message: string, data?: Record<string, unknown>) => void
+}
+
+export type AutoRevertConfig = {
+	/** Sliding window duration in milliseconds (default 15m, matching GatewayServeFallbackHigh / GatewayServeLatencyHigh). */
+	windowMs: number
+	/** Minimum operations in the window before auto-revert can trip (default 20). */
+	minSamples: number
+	/** Maximum allowed failure-class fallback fraction over served_total in [0, 1] (default 0.10). */
+	maxErrorRate: number
+	/** Maximum allowed served p99 latency in ms (default 250). */
+	maxLatencyMs: number
+}
+
+export const DEFAULT_AUTO_REVERT_CONFIG: AutoRevertConfig = {
+	windowMs: 15 * 60_000,
+	minSamples: 20,
+	maxErrorRate: 0.1,
+	maxLatencyMs: 250,
+}
+
+const DEFAULT_REFRESH_MS = 2_000
+const MAX_WINDOW_SAMPLES = 4_096
+
+const positiveInt = (raw: string | undefined, fallback: number, max: number): number => {
+	const n = Number(raw)
+	return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback
+}
+
+const unitFraction = (raw: string | undefined, fallback: number): number => {
+	if (raw === undefined || raw.trim() === "") return fallback
+	const n = Number(raw)
+	return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback
+}
+
+export function readAutoRevertConfig(env: Record<string, string | undefined>): AutoRevertConfig {
+	return {
+		windowMs: positiveInt(env.GEODB_READ_SOURCE_WINDOW_MS, DEFAULT_AUTO_REVERT_CONFIG.windowMs, 3_600_000),
+		minSamples: positiveInt(
+			env.GEODB_READ_SOURCE_MIN_SAMPLES,
+			DEFAULT_AUTO_REVERT_CONFIG.minSamples,
+			MAX_WINDOW_SAMPLES,
+		),
+		maxErrorRate: unitFraction(env.GEODB_READ_SOURCE_MAX_ERROR_RATE, DEFAULT_AUTO_REVERT_CONFIG.maxErrorRate),
+		maxLatencyMs: positiveInt(
+			env.GEODB_READ_SOURCE_MAX_LATENCY_MS,
+			DEFAULT_AUTO_REVERT_CONFIG.maxLatencyMs,
+			60_000,
+		),
+	}
+}
+
+export type ReadOutcomeKind = "served" | "failure" | "declined"
+
+export type ReadOutcome = {
+	/** "served" = answered by geo-db, "failure" = failure-class fallback, "declined" = translator decline (denominator only). */
+	kind: ReadOutcomeKind
+	latencyMs: number
+}
+
+export type RevertedState = {
+	reason: AutoRevertReason
+	at: number
+	errorRate: number
+	p99LatencyMs: number
+	samples: number
+}
+
+export type ReadSourceSwitch = {
+	/** Refresh from the watched ConfigMap file if at least `refreshMs` have elapsed since the last check. */
+	refreshIfDue(): Promise<void>
+	/** Effective mode for a field: "off" while auto-reverted, otherwise the configured mode. */
+	effectiveMode(field: string): FieldMode
+	/** Configured mode from the ConfigMap (or startup default), ignoring auto-revert state. */
+	configuredMode(field: string): FieldMode
+	/** True while the field is latched back to Postgres after an auto-revert. */
+	isReverted(field: string): boolean
+	/** Record a geo-db read outcome for a served field and trip auto-revert if thresholds are crossed. */
+	recordOutcome(field: string, outcome: ReadOutcome): void
+	/** Manually clear an auto-revert latch and sliding window for a field. */
+	reset(field: string): void
+}
+
+export type ReadSourceSwitchOptions = {
+	/** Path to the mounted ConfigMap JSON file; empty/undefined disables file watching and uses defaults. */
+	path?: string
+	/** Startup defaults (from GRAPHQL_GATEWAY_FIELDS and GEODB_ENTITY_CARDS). */
+	defaults?: ReadonlyMap<string, FieldMode>
+	/** Minimum interval between `stat` checks, in ms (default 2000). */
+	refreshMs?: number
+	/** Injectable clock for tests. */
+	now?: () => number
+	/** Logger for one-time auto-revert warnings. */
+	log?: SwitchLogger
+	/** Sliding-window auto-revert thresholds. */
+	autoRevert?: Partial<AutoRevertConfig>
+}
+
+type Sample = {at: number; kind: ReadOutcomeKind; latencyMs: number}
+
+type ParsedFile = {
+	fields: Map<string, FieldMode>
+	resets: Map<string, string>
+}
+
+function parseReadSourceFile(raw: string): ParsedFile {
+	const parsed = JSON.parse(raw) as unknown
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("read-source config must be a JSON object")
+	}
+	const obj = parsed as Record<string, unknown>
+	const fields = new Map<string, FieldMode>()
+	if (obj.fields && typeof obj.fields === "object" && !Array.isArray(obj.fields)) {
+		for (const [k, v] of Object.entries(obj.fields as Record<string, unknown>)) {
+			const name = k.trim()
+			if (name && /^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) {
+				fields.set(name, parseFieldMode(typeof v === "string" ? v : undefined))
+			}
+		}
+	}
+	const resets = new Map<string, string>()
+	if (obj.reset && typeof obj.reset === "object" && !Array.isArray(obj.reset)) {
+		for (const [k, v] of Object.entries(obj.reset as Record<string, unknown>)) {
+			const name = k.trim()
+			const token = typeof v === "string" ? v.trim() : ""
+			if (name && token) resets.set(name, token)
+		}
+	}
+	return {fields, resets}
+}
+
+function p99(values: number[]): number {
+	if (values.length === 0) return 0
+	const sorted = [...values].sort((a, b) => a - b)
+	const idx = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1)
+	return sorted[idx] ?? 0
+}
+
+// Module-level Prometheus metrics rendered by /health/metrics.
+const trackedFields = new Set<string>()
+const autoReverts = new Map<string, number>()
+const revertedGauge = new Map<string, number>()
+
+const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
+
+export function renderReadSourceSwitchMetrics(): string {
+	if (trackedFields.size === 0 && autoReverts.size === 0) return ""
+	const fields = new Set<string>(trackedFields)
+	for (const key of autoReverts.keys()) {
+		const field = key.split("\t")[0]
+		if (field) fields.add(field)
+	}
+	const lines = [
+		"# HELP gaia_api_gateway_read_source_auto_revert_total Times a field automatically reverted from geo-db back to Postgres, by field and reason.",
+		"# TYPE gaia_api_gateway_read_source_auto_revert_total counter",
+	]
+	for (const field of fields) {
+		for (const reason of AUTO_REVERT_REASONS) {
+			lines.push(
+				`gaia_api_gateway_read_source_auto_revert_total{field="${field}",reason="${reason}"} ${autoReverts.get(`${field}\t${reason}`) ?? 0}`,
+			)
+		}
+	}
+	lines.push(
+		"# HELP gaia_api_gateway_read_source_reverted Whether a field is currently latched on Postgres after an auto-revert (1 = reverted, 0 = normal).",
+		"# TYPE gaia_api_gateway_read_source_reverted gauge",
+	)
+	for (const field of fields) {
+		lines.push(`gaia_api_gateway_read_source_reverted{field="${field}"} ${revertedGauge.get(field) ?? 0}`)
+	}
+	return `${lines.join("\n")}\n`
+}
+
+/** Reset accumulated metrics state. Tests only. */
+export function __resetReadSourceSwitchMetricsForTests(): void {
+	trackedFields.clear()
+	autoReverts.clear()
+	revertedGauge.clear()
+}
+
+export function createReadSourceSwitch(options: ReadSourceSwitchOptions = {}): ReadSourceSwitch {
+	const filePath = options.path?.trim() ?? ""
+	const defaults = new Map<string, FieldMode>(options.defaults ?? [])
+	const refreshMs = options.refreshMs ?? DEFAULT_REFRESH_MS
+	const now = options.now ?? Date.now
+	const cfg: AutoRevertConfig = {
+		...DEFAULT_AUTO_REVERT_CONFIG,
+		...options.autoRevert,
+	}
+
+	let fileFields = new Map<string, FieldMode>()
+	let stamp: string | null = null
+	let checkedAt = Number.NEGATIVE_INFINITY
+	let inflight: Promise<void> | null = null
+
+	const acknowledgedResets = new Map<string, string>()
+	const windows = new Map<string, Sample[]>()
+	const reverted = new Map<string, RevertedState>()
+
+	const resetField = (field: string) => {
+		reverted.delete(field)
+		windows.delete(field)
+		revertedGauge.set(field, 0)
+	}
+
+	const reload = async () => {
+		const info = await stat(filePath)
+		const nextStamp = `${info.mtimeMs}:${info.size}`
+		if (stamp === nextStamp) return
+		const parsed = parseReadSourceFile(await readFile(filePath, "utf8"))
+		fileFields = parsed.fields
+		stamp = nextStamp
+		for (const [field, token] of parsed.resets) {
+			if (acknowledgedResets.get(field) !== token) {
+				acknowledgedResets.set(field, token)
+				resetField(field)
+			}
+		}
+	}
+
+	const refreshIfDue = async () => {
+		if (!filePath) return
+		if (now() - checkedAt >= refreshMs) {
+			checkedAt = now()
+			inflight ??= reload()
+				.catch(() => {
+					// Keep last known good config (or startup defaults) when the file is missing or malformed.
+				})
+				.finally(() => {
+					inflight = null
+				})
+		}
+		if (inflight) await inflight
+	}
+
+	const configuredMode = (field: string): FieldMode => fileFields.get(field) ?? defaults.get(field) ?? "off"
+
+	const isReverted = (field: string): boolean => reverted.has(field)
+
+	const effectiveMode = (field: string): FieldMode => (reverted.has(field) ? "off" : configuredMode(field))
+
+	const recordOutcome = (field: string, outcome: ReadOutcome): void => {
+		if (reverted.has(field)) return
+		trackedFields.add(field)
+		const ts = now()
+		const cutoff = ts - cfg.windowMs
+		const list = windows.get(field) ?? []
+		list.push({at: ts, kind: outcome.kind, latencyMs: outcome.latencyMs})
+		let start = 0
+		while (start < list.length && (list[start]?.at ?? 0) < cutoff) start++
+		if (start > 0) list.splice(0, start)
+		if (list.length > MAX_WINDOW_SAMPLES) list.splice(0, list.length - MAX_WINDOW_SAMPLES)
+		windows.set(field, list)
+
+		if (list.length < cfg.minSamples) return
+
+		let failures = 0
+		const servedLatencies: number[] = []
+		for (const s of list) {
+			if (s.kind === "failure") failures++
+			else if (s.kind === "served") servedLatencies.push(s.latencyMs)
+		}
+		const errorRate = failures / list.length
+		const p99LatencyMs = p99(servedLatencies)
+
+		let reason: AutoRevertReason | null = null
+		if (errorRate > cfg.maxErrorRate) reason = "error_rate"
+		else if (servedLatencies.length >= cfg.minSamples && p99LatencyMs > cfg.maxLatencyMs) reason = "latency"
+
+		if (!reason) return
+
+		reverted.set(field, {reason, at: ts, errorRate, p99LatencyMs, samples: list.length})
+		revertedGauge.set(field, 1)
+		bump(autoReverts, `${field}\t${reason}`)
+		options.log?.warn("geodb read source auto-reverted to postgres", {
+			field,
+			reason,
+			errorRate: Number(errorRate.toFixed(4)),
+			p99LatencyMs: Math.round(p99LatencyMs),
+			samples: list.length,
+			windowMs: cfg.windowMs,
+		})
+	}
+
+	return {
+		refreshIfDue,
+		effectiveMode,
+		configuredMode,
+		isReverted,
+		recordOutcome,
+		reset: resetField,
+	}
+}

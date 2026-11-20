@@ -119,6 +119,11 @@ spec:
             # Written by the geodb-feeder (space-map.json + node-id). Not shipped in these manifests.
             name: geodb-space-map
             optional: true
+        - name: geodb-read-source
+          configMap:
+            # Runtime per-field read-source switch (read-source.json); edited in place with no deploy.
+            name: geodb-read-source
+            optional: true
         - name: geodb-key
           secret:
             secretName: geodb-reader-key
@@ -238,6 +243,9 @@ spec:
             - name: geodb-space-map
               mountPath: /etc/geodb/space-map
               readOnly: true
+            - name: geodb-read-source
+              mountPath: /etc/geodb/read-source
+              readOnly: true
             - name: geodb-key
               mountPath: /etc/geodb/key
               readOnly: true
@@ -257,6 +265,9 @@ spec:
             # space = spaces' comparison on one Space; metas (indexer cursors) has no geo-db home and is only counted unsupported.
             - name: GRAPHQL_GATEWAY_FIELDS
               value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"
+            # Runtime per-field read-source switch watched from ConfigMap geodb-read-source (all fields shipped shadow).
+            - name: GEODB_READ_SOURCE_PATH
+              value: /etc/geodb/read-source/read-source.json
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
@@ -836,3 +847,33 @@ spec:
       backendRefs:
         - name: api
           port: 3000
+---
+# Runtime per-field read-source switch for GraphQL gateway root fields and entityCards (GEODB_ENTITY_CARDS).
+# Mounted into the api pods at /etc/geodb/read-source/read-source.json and re-read at runtime with no deploy.
+# Every field ships as "shadow" (unchanged from the startup env vars). To reset an auto-reverted field, set
+# "reset": {"<field>": "<new-timestamp-or-nonce>"} in read-source.json.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geodb-read-source
+  namespace: gaia
+  labels:
+    app: api
+data:
+  read-source.json: |
+    {
+      "fields": {
+        "entity": "shadow",
+        "entities": "shadow",
+        "relation": "shadow",
+        "relations": "shadow",
+        "search": "shadow",
+        "searchConnection": "shadow",
+        "entitiesConnection": "shadow",
+        "entitiesOrderedByProperty": "shadow",
+        "spaces": "shadow",
+        "space": "shadow",
+        "metas": "shadow",
+        "entityCards": "shadow"
+      }
+    }

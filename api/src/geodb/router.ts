@@ -24,7 +24,7 @@ type Database = NodePgDatabase<Record<string, unknown>>
 export function createGeoDbRouter(
 	db: Database,
 	config: GeoDbCardConfig,
-	overrides: Partial<Pick<CardDeps, "geoSpaceOf" | "log">> & {geoDb?: GeoDbCardClient} = {},
+	overrides: Partial<Pick<CardDeps, "geoSpaceOf" | "log" | "readSourceSwitch">> & {geoDb?: GeoDbCardClient} = {},
 ) {
 	const deps: CardDeps = {
 		mode: config.mode,
@@ -32,6 +32,7 @@ export function createGeoDbRouter(
 		geoSpaceOf: overrides.geoSpaceOf ?? createSpaceMap(config.spaceMapPath),
 		readPostgres: (entityId, spaceId) => getCardRows(db, entityId, spaceId),
 		log: overrides.log ?? log,
+		readSourceSwitch: overrides.readSourceSwitch,
 	}
 	const router = new Hono()
 	activateGeoDbMetrics()

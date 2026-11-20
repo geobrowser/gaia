@@ -9,6 +9,7 @@ import {
 	recordGatewayFieldRequest,
 	recordGatewayRequest,
 } from "./metrics"
+import {isGeoDbErrorReason, type ReadSourceSwitch} from "./readSourceSwitch"
 import {activateServeMetrics, observeServe, recordServeFallback, recordServeSource} from "./serveMetrics"
 
 /**
@@ -89,11 +90,13 @@ export type GatewayDeps<Ctx> = {
 	observers?: readonly ResponseObserver[]
 	/** Sampling draw in [0, 1); injectable for tests. */
 	random?: () => number
+	/** Runtime per-field read-source switch with auto-revert (overrides static config.fieldModes when set). */
+	readSourceSwitch?: ReadSourceSwitch
 	onClassified?: (classification: Classification, route: Route) => void
 }
 
-export function fieldModeOf(config: GatewayConfig, field: string): FieldMode {
-	return config.fieldModes.get(field) ?? "off"
+export function fieldModeOf(config: GatewayConfig, field: string, readSourceSwitch?: ReadSourceSwitch): FieldMode {
+	return readSourceSwitch ? readSourceSwitch.effectiveMode(field) : (config.fieldModes.get(field) ?? "off")
 }
 
 /**
@@ -104,6 +107,7 @@ export function routeOperation(
 	config: GatewayConfig,
 	resolvers: {has(field: string): boolean},
 	classification: Classification,
+	readSourceSwitch?: ReadSourceSwitch,
 ): Route {
 	if (config.mode === "off") return {kind: "delegate", reason: "gateway_off"}
 	if (classification.operationType !== "query" || classification.rootFields.length === 0) {
@@ -111,11 +115,15 @@ export function routeOperation(
 	}
 	if (!classification.rootFields.every((field) => resolvers.has(field)))
 		return {kind: "delegate", reason: "no_resolver"}
-	if (classification.rootFields.every((field) => fieldModeOf(config, field) === "off")) {
+	if (classification.rootFields.every((field) => fieldModeOf(config, field, readSourceSwitch) === "off")) {
 		return {kind: "delegate", reason: "field_off"}
 	}
 	const [field] = classification.rootFields
-	if (classification.rootFields.length === 1 && field !== undefined && fieldModeOf(config, field) === "on") {
+	if (
+		classification.rootFields.length === 1 &&
+		field !== undefined &&
+		fieldModeOf(config, field, readSourceSwitch) === "on"
+	) {
 		return {kind: "serve", field, reason: "field_on"}
 	}
 	return {kind: "delegate", reason: "not_served"}
@@ -172,7 +180,7 @@ function scheduleShadow<Ctx>(
 		// The shadowed field is the first root field in mode "shadow" with a shadow that tolerates every other root field.
 		const field = classification.rootFields.find((name) => {
 			const candidate = shadows.get(name)
-			if (!candidate || fieldModeOf(deps.config, name) !== "shadow") return false
+			if (!candidate || fieldModeOf(deps.config, name, deps.readSourceSwitch) !== "shadow") return false
 			const tolerated = candidate.tolerates ?? []
 			return classification.rootFields.every((other) => other === name || tolerated.includes(other))
 		})
@@ -229,8 +237,9 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 			}
 	return async (request, context) => {
 		if (deps.config.mode === "off") return deps.delegate(request, context)
+		if (deps.readSourceSwitch) await deps.readSourceSwitch.refreshIfDue()
 		const classified = await classifyRequestWithDocument(request)
-		const route = routeOperation(deps.config, resolvers, classified.classification)
+		const route = routeOperation(deps.config, resolvers, classified.classification, deps.readSourceSwitch)
 		try {
 			deps.onClassified?.(classified.classification, route)
 		} catch {
@@ -238,6 +247,8 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 		}
 		const resolver = route.kind === "serve" ? resolvers.get(route.field) : undefined
 		if (route.kind === "serve" && resolver && classified.params && classified.document) {
+			activateServeMetrics(route.field)
+			activateGatewayRequests(route.field)
 			recordGatewayFieldRequest(route.field)
 			const started = performance.now()
 			const result = await runResolver(
@@ -249,11 +260,16 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 			if (result.ok) {
 				observeServe(route.field, seconds, "served")
 				recordServeSource(route.field, "geodb")
+				deps.readSourceSwitch?.recordOutcome(route.field, {kind: "served", latencyMs: seconds * 1000})
 				return servedResponse(result.data)
 			}
 			observeServe(route.field, seconds, "fallback")
 			recordServeFallback(route.field, result.reason)
 			recordServeSource(route.field, "postgres")
+			deps.readSourceSwitch?.recordOutcome(route.field, {
+				kind: isGeoDbErrorReason(result.reason) ? "failure" : "declined",
+				latencyMs: seconds * 1000,
+			})
 			return deps.delegate(request, context)
 		}
 		const delegated = performance.now()
