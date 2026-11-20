@@ -192,6 +192,8 @@ async function main(config: Config): Promise<void> {
 				observeFreshness(metrics.freshness, m.timestamp)
 				metrics.lastApplied.set({}, Date.now() / 1000)
 				metrics.lastOffset.set({partition: String(batch.partition)}, offset)
+				const sentMs = Number(m.timestamp)
+				if (Number.isFinite(sentMs) && sentMs > 0) metrics.appliedMessageTimestamp.set({partition: String(batch.partition)}, sentMs / 1000)
 				resolveOffset(m.offset)
 				await heartbeat()
 				await commits.done(batch.partition, offset)

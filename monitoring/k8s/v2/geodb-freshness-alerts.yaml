@@ -1,0 +1,63 @@
+# How far geo-db is behind the source of truth, in time (plan 22 section 5 risk 3: a stalled writer
+# must not go unseen before a read cutover). NOT applied to the cluster: applying it is a separate,
+# manual step (kubectl apply -f monitoring/k8s/v2/geodb-freshness-alerts.yaml).
+#
+# Source series, both from the geodb-feeder Deployment (job "geodb-feeder"):
+#   geodb_feeder_consumer_lag                       messages on the edits topic not yet applied, per partition
+#   geodb_feeder_applied_message_timestamp_seconds  Kafka timestamp of the newest applied message, per partition
+# geodb:feeder_behind_seconds is the age of the newest applied message while anything is waiting, and 0
+# when nothing is waiting. It is an upper bound on the age of the oldest unapplied message, so a quiet
+# topic never reads as lag. The existing GeoDbFeederStalled (nothing applied for 15m) is slower and
+# does not scale with how old the data is.
+#
+#   GeoDbBehindPostgres          behind more than 2 minutes for 2m (warning)
+#   GeoDbBehindPostgresCritical  behind more than 10 minutes for 2m (critical)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-freshness
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.freshness
+      rules:
+        - record: geodb:feeder_behind_seconds
+          expr: |
+            max(
+              (
+                time() - geodb_feeder_applied_message_timestamp_seconds{namespace="gaia", job="geodb-feeder"}
+              )
+              and on (pod, partition)
+              (geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder"} > 0)
+            )
+            or vector(0)
+
+        - alert: GeoDbBehindPostgres
+          expr: geodb:feeder_behind_seconds > 120
+          for: 2m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: geo-db is more than 2 minutes behind the edits topic
+            description: >-
+              Messages are waiting on the edits topic and the newest one the feeder applied was stamped more
+              than 2 minutes ago (geodb:feeder_behind_seconds). A read cutover would serve stale data. Check
+              GeoDbFeederStalled, the feeder log for the repeating error and geodb-0.
+
+        - alert: GeoDbBehindPostgresCritical
+          expr: geodb:feeder_behind_seconds > 600
+          for: 2m
+          labels:
+            severity: critical
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: geo-db is more than 10 minutes behind the edits topic
+            description: >-
+              Messages are waiting on the edits topic and the newest one the feeder applied was stamped more
+              than 10 minutes ago (geodb:feeder_behind_seconds). Do not flip or keep any read flag on; revert
+              a flipped field first (see the read-cutover runbook), then find the stall.
