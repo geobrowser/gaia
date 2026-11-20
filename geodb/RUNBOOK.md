@@ -1698,6 +1698,14 @@ A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_
 
 Rollback: unset `GEODB_SPACE_ADDRESSES`. The records stay in the Space, unread; nothing reads them yet.
 
+**Reverse index (`GEODB_SPACE_BY_ADDRESS`, default off; needs `GEODB_SPACE_ADDRESSES`).** Beside each address record the
+consumer also writes a `spaceByAddress` record keyed by the LOWERCASE address text, one column referencing the Space (the
+gateway's `spaces(filter: {address})` reads it, then checks the Space's own address record, because an address change leaves
+the old address's record behind). Activation: run the space-addresses backfill Job with `GEODB_SPACE_BY_ADDRESS=1` and the
+feeder scaled to 0 (it rewrites every address record and writes the index), then set the flag on the feeder. Turning the flag
+on without that backfill indexes only new events; a missing index record makes the gateway decline `empty`, never answer wrong.
+Design: geo-db plan 22 note GEODB-SPACE-READ-SLICE-2. The gate does not cover the index yet.
+
 ### 2f. Derived score tables (GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads these rows. With `GEODB_DERIVED_MIRROR=1` (default off) the score writers copy the rows they

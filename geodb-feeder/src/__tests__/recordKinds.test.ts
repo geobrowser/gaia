@@ -16,6 +16,7 @@ describe("record kinds", () => {
 			spaceVotingSettings: ["7767f888a9a240b18275a7832363f4d9", "governance"],
 			spaceTopic: ["c74881c2d1d24ae5ad1e34d5c1c0535b", "governance"],
 			spaceAddress: ["44433f0b01fd46a18317285f2236fc93", "governance"],
+			spaceByAddress: ["87af51da7d7149f4abac0f58bcca4338", "governance"],
 			proposalStatus: ["cf398f45b2c74002bb13e5416fbc7027", "governance"],
 			rankingBlock: ["ce9b2464e65c450a975d3a427baaf4a2", "votes"],
 			ranking: ["ff8283aec584455a80198d6d80f0f4fc", "votes"],
@@ -179,6 +180,9 @@ describe("record columns", () => {
 			spaceAddress: {
 				space: "9c7f59c747a544fd844cbffdeb5bbc48",
 				address: "a584f4100b8d47428afd4242371c44c8",
+			},
+			spaceByAddress: {
+				space: "510ac26058a54a828ac224f97fe25220",
 			},
 			rankingBlock: {
 				block: "30a0bcf61226497ea1a9fbdb05be369e",

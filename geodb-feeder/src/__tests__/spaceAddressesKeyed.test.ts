@@ -7,7 +7,7 @@ import {cid} from "../ids.js"
 import {keyedBackfillGate} from "../membershipKeyed.js"
 import {createMetrics} from "../metrics.js"
 import {ProposalOffsets} from "../proposals.js"
-import {idPart, recordEntityId} from "../recordKey.js"
+import {idPart, recordEntityId, textPart} from "../recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "../recordKinds.js"
 import {spaceAddressesBatchHandler} from "../spaceAddressesConsumer.js"
 import {gateSpaceAddresses} from "../spaceAddressesGate.js"
@@ -20,8 +20,10 @@ import {
 	parseCreateSpaceAddress,
 	type SpaceAddressRow,
 	spaceAddressFromRow,
+	spaceAddressIndexIntents,
 	spaceAddressIntents,
 	spaceAddressRecordId,
+	spaceByAddressRecordId,
 	spaceAddressesKeyedEnabled,
 	spaceAddressesOffsetsDir,
 } from "../spaceAddressesKeyed.js"
@@ -231,7 +233,8 @@ describe("flag", () => {
 	const base = {KAFKA_BROKER: "b", KAFKA_USERNAME: "u", KAFKA_PASSWORD: "p", KAFKA_SSL_CA_PEM: "c", GEODB_KEY_PATH: "k", GEODB_BINDING_PATH: "b"}
 	it("is off by default and needs GEODB_RECORD_KEYS", () => {
 		const off = loadConfig(base)
-		expect(off.spaceAddresses).toEqual({enabled: false, topic: "testnet.space.creations", groupId: "geodb-feeder-space-addresses-keyed-v1-testnet"})
+		expect(off.spaceAddresses).toEqual({enabled: false, byAddress: false, topic: "testnet.space.creations", groupId: "geodb-feeder-space-addresses-keyed-v1-testnet"})
+		expect(loadConfig({...base, GEODB_SPACE_BY_ADDRESS: "1"}).spaceAddresses.byAddress).toBe(true)
 		expect(spaceAddressesKeyedEnabled(off)).toBe(false)
 		expect(spaceAddressesKeyedEnabled(loadConfig({...base, GEODB_SPACE_ADDRESSES: "1"}))).toBe(false)
 		expect(spaceAddressesKeyedEnabled(loadConfig({...base, GEODB_RECORD_KEYS: "1", GEODB_SPACE_ADDRESSES: "1"}))).toBe(true)
@@ -282,5 +285,66 @@ describe("space addresses gate", () => {
 		expect(gateSpaceAddresses(join(dir, "pg.tsv"), dir).valueDiffs.map((d) => [d.column, d.geo])).toEqual([["address", "<missing>"]])
 		writeFileSync(join(dir, "pg.tsv"), `${SPACE}\t${SUM1}\n${"b".repeat(32)}\t${SUM1}\n`)
 		expect(gateSpaceAddresses(join(dir, "pg.tsv"), dir).pgOnly).toHaveLength(1)
+	})
+})
+
+describe("spaceByAddress index record (the reverse lookup the gateway reads)", () => {
+	const IK = RECORD_KINDS.spaceByAddress.id
+	const IC = RECORD_COLUMNS.spaceByAddress
+	const idx = (a: string) => spaceByAddressRecordId(a)
+	const ref = (s: string) => `.{ .reference = "${cid("entity", s)}" }`
+
+	it("is keyed by the lowercase address text, so both casings are one record", () => {
+		expect(idx(SUM1)).toBe(idx(`0x${LOWER1}`))
+		expect(idx(SUM1)).toBe(recordEntityId(IK, [textPart(`0x${LOWER1}`)]))
+		expect(idx(SUM1)).not.toBe(idx(SUM2))
+		expect(RECORD_KINDS.spaceByAddress.family).toBe("governance")
+	})
+
+	it("creates the record and puts one reference to the Space, with the Space id in the statement id", () => {
+		const intents = spaceAddressIndexIntents({space: SPACE, address: SUM1})
+		expect(intents[0]).toBe(`.{ .create_entity = "${idx(SUM1)}" }`)
+		expect(intents.filter((i) => i.includes(".put = ")).length).toBe(1)
+		expect(intents.join("\n")).toContain(`.property = "${IC.space}", .value = ${ref(SPACE)}`)
+		expect(spaceAddressIndexIntents({space: SPACE2, address: SUM1}).join("\n")).not.toBe(intents.join("\n"))
+	})
+
+	it("is written beside the forward record only with byAddress on", async () => {
+		const off = new ModelStore()
+		await handleSpaceAddressMessage(sfixture({model: off}).deps, 0, crt(SPACE, LOWER1))
+		expect(off.cell(idx(SUM1), IC.space)).toEqual([])
+
+		const on = new ModelStore()
+		const f = sfixture({model: on})
+		expect(await handleSpaceAddressMessage({...f.deps, byAddress: true}, 0, crt(SPACE, LOWER1))).toBe("applied")
+		expect(on.cell(idx(SUM1), IC.space)).toEqual([ref(SPACE)])
+		expect(on.cell(spaceAddressRecordId(SPACE), COL.address)).toEqual([text(SUM1)])
+	})
+
+	it("a second Space taking the address replaces the first; a replay converges", async () => {
+		const model = new ModelStore()
+		const f = sfixture({model})
+		const deps = {...f.deps, byAddress: true}
+		const stream = [crt(SPACE, LOWER1, 0), upd(SPACE2, LOWER1, 1)]
+		for (const m of stream) await handleSpaceAddressMessage(deps, 0, m)
+		expect(model.cell(idx(SUM1), IC.space)).toEqual([ref(SPACE2)])
+		const before = model.snapshot()
+		for (const m of stream) await handleSpaceAddressMessage(deps, 0, m)
+		expect(model.snapshot()).toBe(before)
+	})
+
+	it("leaves the old address's record pointing at the Space after an update (stale; the reader checks the forward record)", async () => {
+		const model = new ModelStore()
+		const f = sfixture({model})
+		const deps = {...f.deps, byAddress: true}
+		await handleSpaceAddressMessage(deps, 0, upd(SPACE, LOWER1, 0))
+		await handleSpaceAddressMessage(deps, 0, upd(SPACE, LOWER2, 1))
+		expect(model.cell(idx(`0x${LOWER1}`), IC.space)).toEqual([ref(SPACE)])
+		expect(model.cell(spaceAddressRecordId(SPACE), COL.address)).toEqual([text(`0x${LOWER2}`)])
+	})
+
+	it("a backfill row sends the same index intents as the event that wrote it", () => {
+		const row = {space_id: SPACE, address: SUM1}
+		expect(spaceAddressIndexIntents(spaceAddressFromRow(row))).toEqual(spaceAddressIndexIntents(parseCreateSpaceAddress(created(SPACE, LOWER1))))
 	})
 })

@@ -50,7 +50,7 @@ export type Config = {
 	/** GEODB_SPACE_TOPICS (with GEODB_RECORD_KEYS): keyed `spaces.topic_id` from `space.topics` (spaceTopicsKeyed.ts). */
 	spaceTopics: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_SPACE_ADDRESSES (with GEODB_RECORD_KEYS): keyed `spaces.address` from `space.creations` (spaceAddressesKeyed.ts). */
-	spaceAddresses: {enabled: boolean; topic: string; groupId: string}
+	spaceAddresses: {enabled: boolean; topic: string; groupId: string; byAddress: boolean}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it. It also
@@ -330,6 +330,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: {kafka?: 
 			 * §2c-duodecies). Its own group (a new one: its Kafka ACL must allow it). Default off.
 			 */
 			enabled: flag(env.GEODB_SPACE_ADDRESSES),
+			/**
+			 * GEODB_SPACE_BY_ADDRESS: also write the reverse index (`spaceByAddress`, address -> Space) beside each address
+			 * record, for the gateway's `spaces(filter: {address})`. Needs GEODB_SPACE_ADDRESSES. Run the address backfill
+			 * Job with it on BEFORE the consumer first runs with it on (the stream holds only what Kafka retains). Default off.
+			 */
+			byAddress: flag(env.GEODB_SPACE_BY_ADDRESS),
 			topic: env.KAFKA_SPACE_ADDRESSES_TOPIC ?? `${environment}.space.creations`,
 			groupId: env.KAFKA_SPACE_ADDRESSES_GROUP_ID ?? `geodb-feeder-space-addresses-keyed-v1-${environment}`,
 		},

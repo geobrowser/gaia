@@ -111,14 +111,42 @@ export function spaceAddressIntents(e: SpaceAddressEvent): string[] {
 	]
 }
 
-export type KeyedSpaceAddressesDeps = KeyedRecordDeps
+const INDEX_KIND = RECORD_KINDS.spaceByAddress.id
+const INDEX_COL = RECORD_COLUMNS.spaceByAddress
+
+/** The reverse-index record of one address: keyed by its lowercase text, so the checksummed and lowercase forms are one record. */
+export const spaceByAddressRecordId = (address: string): string => recordEntityId(INDEX_KIND, [textPart(address.toLowerCase())])
+
+/**
+ * The intents of the reverse index for one event (GEODB_SPACE_BY_ADDRESS): the record and a `put` of a reference to the
+ * Space under a statement id that carries the Space id, so a replay is a no-op and a second Space taking the address
+ * replaces the first. The old address's record is not closed (the feeder reads nothing); the reader checks the forward record.
+ */
+export function spaceAddressIndexIntents(e: SpaceAddressEvent): string[] {
+	const record = spaceByAddressRecordId(e.address)
+	const space = cid("entity", e.space)
+	return [
+		`.{ .create_entity = "${record}" }`,
+		putIntent({
+			id: recordStatementId(INDEX_KIND, [idPart(record), idPart(INDEX_COL.space), idPart(space)]),
+			entity: record,
+			property: INDEX_COL.space,
+			value: `.{ .reference = "${space}" }`,
+		}),
+	]
+}
+
+export type KeyedSpaceAddressesDeps = KeyedRecordDeps & {
+	/** GEODB_SPACE_BY_ADDRESS: also write the reverse-index record. Off by default; run the backfill before turning it on. */
+	byAddress?: boolean
+}
 
 export async function applySpaceAddress(
 	deps: KeyedSpaceAddressesDeps,
 	e: SpaceAddressEvent,
 	meta: {partition: number; offset: string},
 ): Promise<KeyedOutcome> {
-	return applyKeyedRecord(deps, FAMILY, spaceAddressIntents(e), {...meta, space: e.space})
+	return applyKeyedRecord(deps, FAMILY, [...spaceAddressIntents(e), ...(deps.byAddress ? spaceAddressIndexIntents(e) : [])], {...meta, space: e.space})
 }
 
 const headerText = (h: unknown): string | undefined => {

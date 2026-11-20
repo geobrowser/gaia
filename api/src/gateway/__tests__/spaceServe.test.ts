@@ -4,7 +4,7 @@ import {parse} from "graphql"
 import {describe, expect, it, vi} from "vitest"
 import {conformingId, type GeoCardRow} from "../../geodb/card"
 import {GeoDbError} from "../../geodb/client"
-import {entityRef, idPart, recordEntityId} from "../../proposals/governance/recordKey"
+import {entityRef, idPart, recordEntityId, textPart} from "../../proposals/governance/recordKey"
 import type {ResolveContext} from "../gateway"
 import {
 	createSpaceResolver,
@@ -12,6 +12,8 @@ import {
 	planSpaceServe,
 	SPACE_ADDRESS_COLUMNS,
 	SPACE_ADDRESS_KIND,
+	SPACE_BY_ADDRESS_COLUMNS,
+	SPACE_BY_ADDRESS_KIND,
 	SPACE_TOPIC_COLUMNS,
 	SPACE_TOPIC_KIND,
 	spaceTypeOf,
@@ -59,6 +61,13 @@ describe("planSpaceServe", () => {
 		expect(reason(`{ space(id: "${A}") { id address topicId } }`)).toBe("ok")
 		expect(reason(`{ spaces(filter: {id: {in: ["${A}"]}}) { address } }`, "spaces")).toBe("ok")
 	})
+	it("accepts an address filter, equalTo or equalToInsensitive, on a 20-byte address", () => {
+		const a = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+		expect(
+			reason(`{ spaces(filter: {address: {equalToInsensitive: "${a}"}}) { id type address } }`, "spaces"),
+		).toBe("ok")
+		expect(reason(`{ spaces(filter: {address: {equalTo: "${a}"}}) { id } }`, "spaces")).toBe("ok")
+	})
 	it("names the gap for everything else", () => {
 		expect(reason(`{ space(id: "${A}") { id slug } }`)).toBe("selection")
 		expect(reason(`{ space(id: "${A}") { id page { id } } }`)).toBe("selection")
@@ -69,6 +78,13 @@ describe("planSpaceServe", () => {
 		expect(reason(`{ spaces(filter: {}) { id } }`, "spaces")).toBe("filter")
 		expect(reason(`{ spaces(first: 3) { id } }`, "spaces")).toBe("args")
 		expect(reason(`{ spaces(filter: {address: {equalToInsensitive: "0x1"}}) { id } }`, "spaces")).toBe("filter")
+		expect(reason(`{ spaces(filter: {address: {like: "0x%"}}) { id } }`, "spaces")).toBe("filter")
+		expect(
+			reason(
+				`{ spaces(filter: {address: {equalTo: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"}, id: {in: ["${A}"]}}) { id } }`,
+				"spaces",
+			),
+		).toBe("filter")
 		expect(reason(`{ spaces(filter: {id: {in: ["${A}"]}}, first: 1) { id } }`, "spaces")).toBe("args")
 		expect(reason(`{ spaces(filter: {members: {some: {memberSpaceId: {is: "${A}"}}}}) { id } }`, "spaces")).toBe(
 			"filter",
@@ -385,5 +401,79 @@ describe("unfiltered spaces from the every-Space type scan", () => {
 			ok: false,
 			reason: "selection",
 		})
+	})
+})
+
+describe("spaces filtered by address: the reverse index and its forward check", () => {
+	const GEO_GOV = "ab".repeat(16)
+	const ADDR = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+	const indexRecord = (a: string) => recordEntityId(SPACE_BY_ADDRESS_KIND, [textPart(a.toLowerCase())])
+	const indexRows = (...spaces: string[]): GeoCardRow[] =>
+		spaces.map((s) => ({prop: SPACE_BY_ADDRESS_COLUMNS.space, raw: entityRef(s)}))
+	const forward = (space: string, address: string): GeoCardRow[] => [
+		{prop: SPACE_ADDRESS_COLUMNS.space, raw: entityRef(space)},
+		{prop: SPACE_ADDRESS_COLUMNS.address, raw: address},
+	]
+	const make = (records: Record<string, GeoCardRow[]>, extra: Record<string, unknown> = {}) => {
+		const readCard = vi.fn(async ({geoSpaceId, entityId}: {geoSpaceId: string; entityId: string}) =>
+			geoSpaceId === GEO_GOV ? (records[entityId] ?? []) : card(DAO),
+		)
+		const gaiaIdsOf = vi.fn(
+			async (ids: readonly string[]) => new Map(ids.filter((i) => i === entityRef(A)).map((i) => [i, A])),
+		)
+		return {
+			readCard,
+			deps: {
+				geoDb: {readCard},
+				geoSpaceOf: async (s: string) => `geo-${s}`,
+				systemSpaceOf: async () => GEO_GOV,
+				gaiaIdsOf,
+				...extra,
+			},
+		}
+	}
+	const run = (d: ReturnType<typeof make>["deps"], query: string) => createSpaceResolver(d, "spaces")(context(query))
+	const q = (a: string, op = "equalToInsensitive") =>
+		`{ spaces(filter: {address: {${op}: "${a}"}}) { id type address } }`
+	const full = () => ({[indexRecord(ADDR)]: indexRows(A), [addressRecord]: forward(A, ADDR)})
+
+	it("pins the index kind and column to the feeder", () => {
+		const feeder = readFileSync(join(__dirname, "../../../../geodb-feeder/src/recordKinds.ts"), "utf8")
+		for (const id of [SPACE_BY_ADDRESS_KIND, ...Object.values(SPACE_BY_ADDRESS_COLUMNS)])
+			expect(feeder).toContain(id)
+	})
+	it("answers the one Space the index names when its own address record agrees, in either case", async () => {
+		const m = make(full())
+		const want = {ok: true, data: {spaces: [{id: A, type: "DAO", address: ADDR}]}}
+		expect(await run(m.deps, q(ADDR.toLowerCase()))).toEqual(want)
+		expect(await run(m.deps, q(ADDR.toUpperCase().replace("0X", "0x")))).toEqual(want)
+		expect(m.readCard).toHaveBeenCalledWith({geoSpaceId: GEO_GOV, entityId: indexRecord(ADDR)})
+		expect(m.readCard).toHaveBeenCalledWith({geoSpaceId: GEO_GOV, entityId: addressRecord})
+	})
+	it("equalTo answers only when the stored casing is exactly the asked one", async () => {
+		const m = make(full())
+		expect(await run(m.deps, q(ADDR, "equalTo"))).toMatchObject({ok: true})
+		expect(await run(m.deps, q(ADDR.toLowerCase(), "equalTo"))).toEqual({ok: false, reason: "empty"})
+	})
+	it("declines a stale index entry: the Space's own record now holds another address", async () => {
+		const other = "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
+		const m = make({[indexRecord(ADDR)]: indexRows(A), [addressRecord]: forward(A, other)})
+		expect(await run(m.deps, q(ADDR))).toEqual({ok: false, reason: "empty"})
+	})
+	it("declines rather than guesses: no index record, two Spaces, unknown Space, no forward record, no governance Space", async () => {
+		expect(await run(make({}).deps, q(ADDR))).toEqual({ok: false, reason: "empty"})
+		expect(
+			await run(make({[indexRecord(ADDR)]: indexRows(A, B), [addressRecord]: forward(A, ADDR)}).deps, q(ADDR)),
+		).toEqual({ok: false, reason: "empty"})
+		expect(await run(make({[indexRecord(ADDR)]: indexRows(B)}).deps, q(ADDR))).toEqual({
+			ok: false,
+			reason: "legacy_id",
+		})
+		expect(await run(make({[indexRecord(ADDR)]: indexRows(A)}).deps, q(ADDR))).toEqual({ok: false, reason: "empty"})
+		expect(await run(make(full(), {systemSpaceOf: async () => null}).deps, q(ADDR))).toEqual({
+			ok: false,
+			reason: "not_enabled",
+		})
+		expect(await run(make(full(), {gaiaIdsOf: undefined}).deps, q(ADDR))).toEqual({ok: false, reason: "legacy_id"})
 	})
 })
