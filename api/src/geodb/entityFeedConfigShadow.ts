@@ -16,12 +16,14 @@
  *  - match: the record holds the row's value (weights within 1e-9 relative; note / reason exactly, absent for null);
  *  - mismatch: the record holds a different value, or two values for one column;
  *  - missing: geo-db has no record for a row Postgres has (the backfill Job was not run, or the row is newer than it);
+ *  - stale: geo-db holds a record for a key Postgres no longer has (a deleted row the backfill has not cleared); counted once per
+ *    record per pass, only when the readers can list geo-db's keys (`heldKeys`);
  *  - unsupported: the `config` system Space is not in the system-space map;
  *  - failed: a geo-db read failed;
  *  - reference_timeout / reference_failed: the Postgres sample read hit its statement timeout, or failed otherwise (referenceSide.ts).
  * The timer is `createIntervalSampler` (geodb/intervalSampler.ts), shared with the other config shadows.
- * Blind spot: only rows Postgres has are sampled, so a record geo-db keeps after the row was deleted from Postgres is not
- * seen (the feeder's gate reports that). Logs counts only, never a key.
+ * Blind spot: the sample is of rows Postgres has, so a record geo-db keeps after its row was deleted is seen only through
+ * `stale` (needs `heldKeys`) or the feeder's gate. Logs counts only, never a key.
  */
 
 import {sql} from "drizzle-orm"
@@ -100,6 +102,12 @@ export type EntityFeedConfigReaders = {
 	typeExclusion(typeId: string): Promise<{note: string | null} | null>
 	/** The blocklist record of an entity, or null when it is not blocked. */
 	feedBlock(entityId: string): Promise<{reason: string | null} | null>
+	/**
+	 * The keys (type or entity ids) of every record geo-db holds in `table`, for the stale count. Absent until geo-db has a
+	 * keyed enumeration read for the config Space: records carry no type, so no GeoQL root lists them. Without it no
+	 * stale is counted.
+	 */
+	heldKeys?(table: Table): Promise<string[]>
 }
 
 export function createEntityFeedConfigReaders(deps: {
@@ -130,6 +138,7 @@ export const RESULTS = [
 	"match",
 	"mismatch",
 	"missing",
+	"stale",
 	"unsupported",
 	"failed",
 	"reference_timeout",
@@ -207,7 +216,7 @@ const bump = (table: Table, result: Result): void => {
 export function renderEntityFeedConfigShadowMetrics(): string {
 	if (active.size === 0) return ""
 	const lines = [
-		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), unsupported (no config Space) failed (a geo-db read failed), reference_timeout or reference_failed (the Postgres sample read).",
+		"# HELP gaia_api_entity_feed_config_shadow_total Sampled entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres against geo-db's config Space records, by table and result: match, mismatch, missing (no record), stale (a record for a key Postgres no longer has), unsupported (no config Space) failed (a geo-db read failed), reference_timeout or reference_failed (the Postgres sample read).",
 		"# TYPE gaia_api_entity_feed_config_shadow_total counter",
 	]
 	for (const t of TABLES)
@@ -256,6 +265,19 @@ export async function sampleConfigRows(db: Database, table: Table, limit: number
 	)
 }
 
+const hex = (k: string) => k.replaceAll("-", "").toLowerCase()
+
+/** Every key of `table` in Postgres (the tables are small and operator-edited), for the stale diff. */
+export async function listConfigKeys(db: Database, table: Table): Promise<string[]> {
+	const r =
+		table === "entity_type_weights"
+			? await db.execute(sql`SELECT type_id::text AS key FROM public.entity_type_weights`)
+			: table === "entity_type_exclusions"
+				? await db.execute(sql`SELECT type_id::text AS key FROM public.entity_type_exclusions`)
+				: await db.execute(sql`SELECT entity_id::text AS key FROM public.entity_feed_blocklist`)
+	return rowsOf(r).flatMap((x) => (text(x.key) ? [x.key as string] : []))
+}
+
 export type EntityFeedConfigShadow = IntervalSampler
 
 export function createEntityFeedConfigShadow(deps: {
@@ -264,9 +286,11 @@ export function createEntityFeedConfigShadow(deps: {
 	readers: EntityFeedConfigReaders
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
 	sampleRows?: typeof sampleConfigRows
+	listKeys?: typeof listConfigKeys
 }): EntityFeedConfigShadow {
 	const {config, db, readers, log} = deps
 	const sampleRows = deps.sampleRows ?? sampleConfigRows
+	const listKeys = deps.listKeys ?? listConfigKeys
 	active = new Set(TABLES.filter((t) => config.enabled[t]))
 	let logged = 0
 
@@ -277,7 +301,20 @@ export function createEntityFeedConfigShadow(deps: {
 				? readers.typeExclusion(row.key)
 				: readers.feedBlock(row.key)
 
+	/** Records geo-db holds whose key Postgres does not: counted stale. A failed read counts as failed, never as stale. */
+	async function stale(table: Table): Promise<void> {
+		if (!readers.heldKeys) return
+		try {
+			const pg = new Set((await viaReference(listKeys(db, table))).map(hex))
+			for (const k of new Set((await readers.heldKeys(table)).map(hex))) if (!pg.has(k)) bump(table, "stale")
+		} catch (error) {
+			if (error instanceof ConfigSpaceMissing) return
+			bump(table, error instanceof GeoDbError ? "failed" : failureResult(error))
+		}
+	}
+
 	async function pass(table: Table): Promise<void> {
+		await stale(table)
 		let sampled: ConfigRow[]
 		try {
 			sampled = await viaReference(sampleRows(db, table, config.sample))

@@ -9,7 +9,8 @@
  *   - one TSV per record column from geo-db GQL, `record<TAB>value<TAB>count` per line, named `etw-<column>.tsv`
  *     (type_id, weight, note), `etx-<column>.tsv` (type_id, note) and `efb-<column>.tsv` (entity_id, reason).
  *
- * A row deleted from Postgres shows as geo-db-only (not a failure); a null note or reason compares as empty.
+ * A row deleted from Postgres shows as geo-db-only. That is stale, and fails the gate: the backfill clears such a record, so one that
+ * remains means the clear did not run or the row predates the held-key manifest (entityFeedConfigKeyed.ts). A null note or reason compares as empty.
  */
 import {readFileSync} from "node:fs"
 import {entityFeedBlockRecordId, entityTypeExclusionRecordId, entityTypeWeightRecordId} from "./entityFeedConfigKeyed.js"
@@ -53,6 +54,12 @@ export const gateEntityTypeExclusions = (pgTsv: string, dir: string) =>
 export const gateEntityFeedBlocks = (pgTsv: string, dir: string) =>
 	gate({family: "entity_feed_blocklist", prefix: "efb", key: "entity_id", mutable: ["reason"], recordId: entityFeedBlockRecordId}, pgTsv, dir)
 
+/** Stale = a record geo-db holds for a row Postgres no longer has. Any of it, or any other difference, fails the gate. */
+export const entityFeedConfigVerdict = (r: GateResult): {stale: number; ok: boolean} => ({
+	stale: r.geoOnly.length,
+	ok: r.geoOnly.length === 0 && r.pgOnly.length === 0 && r.valueDiffs.length === 0 && r.refCountViolations.length === 0,
+})
+
 if (import.meta.main) {
 	const [which, pgTsv, dir] = process.argv.slice(2) as [string, string, string]
 	const gates = {weights: gateEntityTypeWeights, exclusions: gateEntityTypeExclusions, blocklist: gateEntityFeedBlocks} as const
@@ -64,10 +71,10 @@ if (import.meta.main) {
 	const r = g(pgTsv, dir)
 	console.log(
 		JSON.stringify(
-			{...r, counts: {geoOnly: r.geoOnly.length, pgOnly: r.pgOnly.length, valueDiffs: r.valueDiffs.length, refCountViolations: r.refCountViolations.length}},
+			{...r, counts: {stale: r.geoOnly.length, geoOnly: r.geoOnly.length, pgOnly: r.pgOnly.length, valueDiffs: r.valueDiffs.length, refCountViolations: r.refCountViolations.length}},
 			null,
 			2,
 		),
 	)
-	process.exit(r.pgOnly.length === 0 && r.valueDiffs.length === 0 && r.refCountViolations.length === 0 ? 0 : 1)
+	process.exit(entityFeedConfigVerdict(r).ok ? 0 : 1)
 }

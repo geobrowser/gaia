@@ -3,7 +3,7 @@ import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {loadConfig} from "../config.js"
-import {gateEntityTypeWeights} from "../entityFeedConfigGate.js"
+import {entityFeedConfigVerdict, gateEntityTypeWeights} from "../entityFeedConfigGate.js"
 import {
 	applyEntityFeedBlock,
 	applyEntityTypeExclusion,
@@ -17,6 +17,8 @@ import {
 	entityTypeWeightFromRow,
 	entityTypeWeightRecordId,
 	entityTypeWeightIntents,
+	type KeyedEntityFeedConfigDeps,
+	memoryHeldKeys,
 } from "../entityFeedConfigKeyed.js"
 import {makePacer} from "../keyedBackfillJob.js"
 import {countEntityFeedConfigRows, type ReadOnlyPg} from "../pgSource.js"
@@ -167,5 +169,74 @@ describe("weights gate", () => {
 		const r = gateEntityTypeWeights(join(d, "pg.tsv"), d)
 		expect(r.valueDiffs.map((x) => x.column)).toEqual(["weight"])
 		expect(r.geoOnly).toEqual([entityTypeWeightRecordId(T2)])
+	})
+})
+
+describe("delete and null propagation (a rerun clears what Postgres no longer holds)", () => {
+	const BC = RECORD_COLUMNS.entityFeedBlock
+	const XC = RECORD_COLUMNS.entityTypeExclusion
+	const run = (d: ReturnType<typeof f>, rows: {w?: {type_id: string; weight: string; note: string | null}[]; x?: {type_id: string; note: string | null}[]; b?: {entity_id: string; reason: string | null}[]}) =>
+		backfillEntityFeedConfig(d.deps as KeyedEntityFeedConfigDeps, {weights: rows.w ?? [], exclusions: rows.x ?? [], blocks: rows.b ?? []})
+	const setup = () => {
+		const model = new ModelStore()
+		const held = memoryHeldKeys()
+		const d = fixture({model, offsetsDir: (x) => `${x}/x`})
+		Object.assign(d.deps, {held})
+		return {model, d}
+	}
+	it("a note or reason changed to null is cleared, and a later value is written again", async () => {
+		const {model, d} = setup()
+		await run(d, {w: [{type_id: T1, weight: "2", note: "news"}], x: [{type_id: T1, note: "why"}], b: [{entity_id: T1, reason: "spam"}]})
+		await run(d, {w: [{type_id: T1, weight: "2", note: null}], x: [{type_id: T1, note: null}], b: [{entity_id: T1, reason: null}]})
+		expect(model.cell(entityTypeWeightRecordId(T1), WC.note)).toEqual([])
+		expect(model.cell(entityTypeExclusionRecordId(T1), XC.note)).toEqual([])
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.reason)).toEqual([])
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.entityId)).toEqual([`.{ .text = "${T1}" }`])
+		await run(d, {b: [{entity_id: T1, reason: "spam"}]})
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.reason)).toEqual(['.{ .text = "spam" }'])
+	})
+	it("a row deleted from Postgres is cleared on the next run (key and fields), the others stay", async () => {
+		const {model, d} = setup()
+		await run(d, {w: [{type_id: T1, weight: "2", note: "n"}, {type_id: T2, weight: "3", note: null}], x: [{type_id: T1, note: null}], b: [{entity_id: T1, reason: "spam"}, {entity_id: T2, reason: null}]})
+		await run(d, {w: [{type_id: T2, weight: "3", note: null}], x: [], b: [{entity_id: T2, reason: null}]})
+		const w1 = entityTypeWeightRecordId(T1)
+		expect([WC.typeId, WC.weight, WC.note].map((c) => model.cell(w1, c))).toEqual([[], [], []])
+		expect(model.cell(entityTypeExclusionRecordId(T1), XC.typeId)).toEqual([])
+		expect([BC.entityId, BC.reason].map((c) => model.cell(entityFeedBlockRecordId(T1), c))).toEqual([[], []])
+		expect(model.cell(entityTypeWeightRecordId(T2), WC.weight)).toEqual(['.{ .decimal = "3,0" }'])
+		expect(model.cell(entityFeedBlockRecordId(T2), BC.entityId)).toEqual([`.{ .text = "${T2}" }`])
+	})
+	it("a deleted row that comes back is live again", async () => {
+		const {model, d} = setup()
+		await run(d, {b: [{entity_id: T1, reason: "spam"}]})
+		await run(d, {})
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.entityId)).toEqual([])
+		await run(d, {b: [{entity_id: T1, reason: "spam"}]})
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.entityId)).toEqual([`.{ .text = "${T1}" }`])
+	})
+	it("clears nothing when the Postgres read fails part way (a partial list is not a deletion)", async () => {
+		const {model, d} = setup()
+		await run(d, {b: [{entity_id: T1, reason: "spam"}, {entity_id: T2, reason: null}]})
+		async function* broken() {
+			yield {entity_id: T2, reason: null}
+			throw new Error("read failed")
+		}
+		await expect(backfillEntityFeedConfig(d.deps as KeyedEntityFeedConfigDeps, {weights: [], exclusions: [], blocks: broken()})).rejects.toThrow("read failed")
+		expect(model.cell(entityFeedBlockRecordId(T1), BC.entityId)).toEqual([`.{ .text = "${T1}" }`])
+	})
+	it("a row that fails to decode is not treated as deleted", async () => {
+		const {model, d} = setup()
+		await run(d, {w: [{type_id: T1, weight: "2", note: null}]})
+		await run(d, {w: [{type_id: T1, weight: "99", note: null}]})
+		expect(model.cell(entityTypeWeightRecordId(T1), WC.typeId)).toEqual([`.{ .text = "${T1}" }`])
+	})
+})
+
+describe("gate verdict", () => {
+	const base = {family: "x", pgRows: 0, geoRecords: 0, pgChecksum: "", geoChecksum: "", matched: 0, geoOnly: [], pgOnly: [], valueDiffs: [], refCountViolations: []}
+	it("counts a geo-db-only record as stale and fails on it", () => {
+		expect(entityFeedConfigVerdict(base)).toEqual({stale: 0, ok: true})
+		expect(entityFeedConfigVerdict({...base, geoOnly: ["a", "b"]})).toEqual({stale: 2, ok: false})
+		expect(entityFeedConfigVerdict({...base, pgOnly: ["a"]}).ok).toBe(false)
 	})
 })

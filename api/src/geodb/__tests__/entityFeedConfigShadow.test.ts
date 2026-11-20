@@ -260,6 +260,37 @@ describe("shadow", () => {
 		expect(metric('table="entity_type_weights",result="failed"')).toBe("0")
 		expect(readers.typeWeight).not.toHaveBeenCalled()
 	})
+	it("counts a record geo-db holds for a key Postgres no longer has as stale, per table", async () => {
+		const T2 = "1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+		const held = vi.fn(async () => [T, T2])
+		const readers = {
+			typeWeight: async () => ({weight: 1.5, note: null}),
+			typeExclusion: async () => ({note: null}),
+			feedBlock: async () => ({reason: "r"}),
+			heldKeys: held,
+		}
+		const shadow = createEntityFeedConfigShadow({
+			config: allOn,
+			db: {} as Database,
+			readers,
+			log: {warn: vi.fn()},
+			sampleRows: async (_db, table) => rows[table] as ConfigRow[],
+			listKeys: async () => [T],
+		})
+		await shadow.runOnce()
+		for (const t of ["entity_type_weights", "entity_type_exclusions", "entity_feed_blocklist"])
+			expect(metric(`table="${t}",result="stale"`)).toBe("1")
+		expect(held).toHaveBeenCalledTimes(3)
+	})
+	it("counts nothing stale when the readers cannot list geo-db's keys", async () => {
+		const {shadow} = make({
+			typeWeight: async () => null,
+			typeExclusion: async () => null,
+			feedBlock: async () => null,
+		})
+		await shadow.runOnce()
+		expect(metric('table="entity_type_weights",result="stale"')).toBe("0")
+	})
 	it("does nothing when every flag is off", async () => {
 		const typeWeight = vi.fn()
 		const off = {

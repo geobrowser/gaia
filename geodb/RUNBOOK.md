@@ -1412,8 +1412,11 @@ section 6 sketched exclusions and the blocklist as edge rows; they are presence 
 Job serve all three. A mirror, not a move: Postgres stays the source and its ranking and feed functions are unchanged.
 
 The operator edit path: operator SQL edits the Postgres row, then the Job is rerun (it is the only writer, there is no
-consumer, and a rerun writes the same ids; a changed weight closes the old value). A row deleted from Postgres, or a note
-or reason set to null, is not cleared in geo-db; the gate reports it. `updated_at` and `created_at` are not mirrored. The
+consumer, and a rerun writes the same ids; a changed weight closes the old value). A note or reason set to null is
+unset by the rerun. A row deleted from Postgres is cleared too (its key column and fields are unset, so an unblock reaches
+geo-db), but only a key the previous complete run held: the Job keeps a manifest `held-<table>.json` per table under
+`<DATA_DIR>/feeder/entity-feed-config-keyed/`, replaced only after all three tables were read, never after a read that
+failed. A row deleted before the first run of this version has no manifest entry; the gate finds it as stale. `updated_at` and `created_at` are not mirrored. The
 weight must satisfy the table's check (0.1 < weight <= 10), else the row is dead-lettered.
 
 Enable, each step only after the one before it is live:
@@ -1426,17 +1429,18 @@ Enable, each step only after the one before it is live:
    apply command is in the file's header). It reads three small tables READ ONLY, is paced by `BACKFILL_MAX_ROWS_PER_S`
    (20), has a one hour `activeDeadlineSeconds` and is rerunnable.
 4. The gate, once per table: `bun src/entityFeedConfigGate.ts <weights|exclusions|blocklist> <postgres.tsv> <dump dir>`
-   (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key
-   or a value difference.
+   (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key,
+   a value difference or a stale record (geo-db holds a key Postgres no longer does; `counts.stale`).
 
 5. The api reader twins (api/src/geodb/entityFeedConfigShadow.ts), one flag per table, all `0` in `api/k8s/v2/api.yaml`:
    `GEODB_ENTITY_TYPE_WEIGHTS_SHADOW`, `GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW`
    (`_SAMPLE`, default 20, and `GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS`, default 60 s, are shared; all config shadows run on the one helper in api/src/geodb/intervalSampler.ts, and a Postgres sample failure counts as `reference_timeout` or `reference_failed`). Each samples rows of
    its table from Postgres and reads the record back from the `config` Space:
-   `gaia_api_entity_feed_config_shadow_total{table,result=match|mismatch|missing|unsupported|failed}`. `missing` means the
-   backfill Job was not run (or the row is newer); `unsupported` means the `config` Space is not in the system-space map. The
+   `gaia_api_entity_feed_config_shadow_total{table,result=match|mismatch|missing|stale|unsupported|failed}`. `missing` means the
+   backfill Job was not run (or the row is newer); `stale` counts a record geo-db holds for a key Postgres dropped, and stays 0 until
+   the readers can list geo-db's keys (no keyed enumeration read exists yet); `unsupported` means the `config` Space is not in the system-space map. The
    twins serve nothing: the plpgsql functions and `rankedReadsShadow` still read Postgres. Blind spot: a record geo-db keeps
-   after Postgres dropped the row is not sampled (the gate reports it).
+   after Postgres dropped the row is not sampled; the gate reports it, and `stale` will once keys can be listed.
 
 Rollback: set the flags back to 0. The records stay in the Space, unread.
 
