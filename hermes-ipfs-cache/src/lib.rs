@@ -980,7 +980,7 @@ mod tests {
         let mut data = HashMap::new();
         // Not valid GRC-20, so the item is stored as an errored row; the write path is
         // identical to the valid case.
-        data.insert(URI.to_string(), vec![1u8, 2, 3]);
+        data.insert(CACHE_WRITE_URI.to_string(), vec![1u8, 2, 3]);
         let sink = IpfsCacheSink::new(
             Cache::with_storage(Box::new(storage)),
             IpfsSource::mock_bytes(data),
@@ -992,7 +992,7 @@ mod tests {
     fn block(n: u64) -> hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData {
         let list = IpfsUriList {
             uris: vec![IpfsUri {
-                uri: URI.to_string(),
+                uri: CACHE_WRITE_URI.to_string(),
                 space_id: vec![7; 16],
                 source: "edit".to_string(),
             }],
@@ -1025,7 +1025,15 @@ mod tests {
         assert_eq!(inserts.load(Ordering::SeqCst), 3);
         assert!(sink.pending.lock().await.blocks.contains_key(&100));
         assert_eq!(sink.load_persisted_cursor().await.unwrap(), None);
-        assert!(sink.cache.lock().await.get(URI).await.unwrap().is_none());
+        assert!(
+            sink.cache
+                .lock()
+                .await
+                .get(CACHE_WRITE_URI)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         // A later block must not carry the cursor past the held one.
         sink.held_block.store(u64::MAX, Ordering::SeqCst);
@@ -1053,7 +1061,15 @@ mod tests {
         drain(&sink).await;
 
         assert_eq!(inserts.load(Ordering::SeqCst), 3);
-        assert!(sink.cache.lock().await.get(URI).await.unwrap().is_some());
+        assert!(
+            sink.cache
+                .lock()
+                .await
+                .get(CACHE_WRITE_URI)
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(sink.pending.lock().await.blocks.is_empty());
         assert_eq!(
             sink.load_persisted_cursor().await.unwrap().as_deref(),
