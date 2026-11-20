@@ -283,7 +283,11 @@ describe("shadow", () => {
 		expect(held).toHaveBeenCalledTimes(3)
 	})
 	it("counts nothing stale when the readers cannot list geo-db's keys", async () => {
-		const {shadow} = make({typeWeight: async () => null, typeExclusion: async () => null, feedBlock: async () => null})
+		const {shadow} = make({
+			typeWeight: async () => null,
+			typeExclusion: async () => null,
+			feedBlock: async () => null,
+		})
 		await shadow.runOnce()
 		expect(metric('table="entity_type_weights",result="stale"')).toBe("0")
 	})

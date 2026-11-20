@@ -17,6 +17,7 @@ import {
 	entityTypeWeightFromRow,
 	entityTypeWeightRecordId,
 	entityTypeWeightIntents,
+	type KeyedEntityFeedConfigDeps,
 	memoryHeldKeys,
 } from "../entityFeedConfigKeyed.js"
 import {makePacer} from "../keyedBackfillJob.js"
@@ -175,12 +176,12 @@ describe("delete and null propagation (a rerun clears what Postgres no longer ho
 	const BC = RECORD_COLUMNS.entityFeedBlock
 	const XC = RECORD_COLUMNS.entityTypeExclusion
 	const run = (d: ReturnType<typeof f>, rows: {w?: {type_id: string; weight: string; note: string | null}[]; x?: {type_id: string; note: string | null}[]; b?: {entity_id: string; reason: string | null}[]}) =>
-		backfillEntityFeedConfig(d.deps, {weights: rows.w ?? [], exclusions: rows.x ?? [], blocks: rows.b ?? []})
+		backfillEntityFeedConfig(d.deps as KeyedEntityFeedConfigDeps, {weights: rows.w ?? [], exclusions: rows.x ?? [], blocks: rows.b ?? []})
 	const setup = () => {
 		const model = new ModelStore()
 		const held = memoryHeldKeys()
 		const d = fixture({model, offsetsDir: (x) => `${x}/x`})
-		d.deps.held = held
+		Object.assign(d.deps, {held})
 		return {model, d}
 	}
 	it("a note or reason changed to null is cleared, and a later value is written again", async () => {
@@ -220,7 +221,7 @@ describe("delete and null propagation (a rerun clears what Postgres no longer ho
 			yield {entity_id: T2, reason: null}
 			throw new Error("read failed")
 		}
-		await expect(backfillEntityFeedConfig(d.deps, {weights: [], exclusions: [], blocks: broken()})).rejects.toThrow("read failed")
+		await expect(backfillEntityFeedConfig(d.deps as KeyedEntityFeedConfigDeps, {weights: [], exclusions: [], blocks: broken()})).rejects.toThrow("read failed")
 		expect(model.cell(entityFeedBlockRecordId(T1), BC.entityId)).toEqual([`.{ .text = "${T1}" }`])
 	})
 	it("a row that fails to decode is not treated as deleted", async () => {

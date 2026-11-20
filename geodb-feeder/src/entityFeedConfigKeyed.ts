@@ -15,8 +15,14 @@
  * api/drizzle/0073-0075) are unchanged. Only operator SQL writes these tables, so there is no consumer: the operator
  * edit path is "edit the row in Postgres, rerun the backfill Job" (`entity-feed-config-backfill-main.ts`), which is
  * the only writer, rerunnable, and writes the same ids again. `updated_at` / `created_at` are not mirrored. A row
- * deleted from Postgres, or a note changed to null, is not cleared in geo-db; the gate (entityFeedConfigGate.ts) reports it.
+ * deleted from Postgres, or a note changed to null, is cleared by the next backfill run: a null note or reason is
+ * `unset`, and a key that the previous run held and this run's complete read did not return has its key column and
+ * fields `unset` (the record entity stays, empty, and a returning row writes it live again). "Held" is a manifest of
+ * keys per table under the offsets directory (HeldKeys), written only after a run read all of Postgres; geo-db cannot
+ * be enumerated by key from the Job. The first run after this lands has no manifest, so a row already deleted before
+ * it is found only by the gate (entityFeedConfigGate.ts), which counts it as stale.
  */
+import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from "node:fs"
 import {applyKeyedRecord, backfillKeyedRows, type KeyedBackfillResult, type KeyedOutcome, type KeyedRecordDeps, keyColumn} from "./keyedRecord.js"
 import {idPart, intPart, recordEntityId, recordStatementId, textPart} from "./recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "./recordKinds.js"
@@ -59,6 +65,9 @@ const textPut = (kind: Kind, record: string, property: string, v: string) =>
 		value: `.{ .text = ${zigString(v)} }`,
 	})
 
+/** Closes every active statement of one cell; a no-op on a cell that holds none. */
+const unset = (record: string, property: string): string => `.{ .unset = .{ .entity = "${record}", .property = "${property}" } }`
+
 export function entityTypeWeightIntents(w: EntityTypeWeight): string[] {
 	const record = entityTypeWeightRecordId(w.type)
 	const d = floatToDecimal(w.weight)
@@ -73,7 +82,7 @@ export function entityTypeWeightIntents(w: EntityTypeWeight): string[] {
 			property: WC.weight,
 			value: `.{ .decimal = "${dec}" }`,
 		}),
-		...(w.note === null ? [] : [textPut(W, record, WC.note, w.note)]),
+		...(w.note === null ? [unset(record, WC.note)] : [textPut(W, record, WC.note, w.note)]),
 	]
 }
 
@@ -82,7 +91,7 @@ export function entityTypeExclusionIntents(x: EntityTypeExclusion): string[] {
 	return [
 		`.{ .create_entity = "${record}" }`,
 		...keyIntents(X, record, XC.typeId, dashed(x.type)),
-		...(x.note === null ? [] : [textPut(X, record, XC.note, x.note)]),
+		...(x.note === null ? [unset(record, XC.note)] : [textPut(X, record, XC.note, x.note)]),
 	]
 }
 
@@ -91,11 +100,34 @@ export function entityFeedBlockIntents(b: EntityFeedBlock): string[] {
 	return [
 		`.{ .create_entity = "${record}" }`,
 		...keyIntents(B, record, BC.entityId, dashed(b.entity)),
-		...(b.reason === null ? [] : [textPut(B, record, BC.reason, b.reason)]),
+		...(b.reason === null ? [unset(record, BC.reason)] : [textPut(B, record, BC.reason, b.reason)]),
 	]
 }
 
-export type KeyedEntityFeedConfigDeps = KeyedRecordDeps
+/** The keys (dashed uuids) each table held after the last complete run: what a later run may clear. */
+export type HeldKeys = {
+	load(table: string): Set<string>
+	save(table: string, keys: Set<string>): void
+}
+export type KeyedEntityFeedConfigDeps = KeyedRecordDeps & {held?: HeldKeys}
+
+export const memoryHeldKeys = (): HeldKeys => {
+	const m = new Map<string, Set<string>>()
+	return {load: (t) => new Set(m.get(t) ?? []), save: (t, k) => void m.set(t, new Set(k))}
+}
+
+/** One JSON file a table under `dir`, replaced by rename so a crash leaves the old manifest. */
+export function fileHeldKeys(dir: string): HeldKeys {
+	const path = (t: string) => `${dir}/held-${t}.json`
+	return {
+		load: (t) => (existsSync(path(t)) ? new Set(JSON.parse(readFileSync(path(t), "utf8")) as string[]) : new Set()),
+		save(t, keys) {
+			mkdirSync(dir, {recursive: true})
+			writeFileSync(`${path(t)}.tmp`, JSON.stringify([...keys].sort()))
+			renameSync(`${path(t)}.tmp`, path(t))
+		},
+	}
+}
 
 const meta = {partition: -1, offset: "backfill"}
 export const applyEntityTypeWeight = (deps: KeyedEntityFeedConfigDeps, w: EntityTypeWeight): Promise<KeyedOutcome> =>
@@ -151,14 +183,58 @@ export const backfillEntityTypeExclusions = (deps: KeyedEntityFeedConfigDeps, ro
 export const backfillEntityFeedBlocks = (deps: KeyedEntityFeedConfigDeps, rows: Rows<EntityFeedBlockRow>, progress?: (done: number) => void) =>
 	backfillKeyedRows(deps, rows, {topic: "entity_feed_blocklist", fromRow: entityFeedBlockFromRow, apply: applyEntityFeedBlock}, progress)
 
-/** All three tables, weights first; the totals are summed. */
+type Clearing = {table: string; family: Parameters<typeof applyKeyedRecord>[1]; cells: (key: string) => [string, string[]]}
+const clearing: Clearing[] = [
+	{table: "entity_type_weights", family: W.family, cells: (k) => [entityTypeWeightRecordId(k), [WC.typeId, WC.weight, WC.note]]},
+	{table: "entity_type_exclusions", family: X.family, cells: (k) => [entityTypeExclusionRecordId(k), [XC.typeId, XC.note]]},
+	{table: "entity_feed_blocklist", family: B.family, cells: (k) => [entityFeedBlockRecordId(k), [BC.entityId, BC.reason]]},
+]
+
+/** The dashed key of a row's first column, or null when it is not a uuid (such a row dead-letters, and is not a deletion). */
+const rowKey = (r: unknown, col: string): string | null => {
+	const v = (r as Record<string, unknown>)[col]
+	return typeof v === "string" && UUID.test(v) ? dashed(v) : null
+}
+
+/** Pass the rows through, noting every key Postgres returned. */
+async function* noting<R>(rows: Rows<R>, col: string, into: Set<string>): AsyncGenerator<R> {
+	for await (const r of rows) {
+		const k = rowKey(r, col)
+		if (k) into.add(k)
+		yield r
+	}
+}
+
+/** Unset every cell of the record a deleted row held: the key column too, so the gate and the readers see it gone. */
+async function clearRecord(deps: KeyedEntityFeedConfigDeps, c: Clearing, key: string): Promise<KeyedOutcome> {
+	const [record, props] = c.cells(key)
+	return applyKeyedRecord(deps, c.family, props.map((p) => unset(record, p)), {...meta, space: c.table})
+}
+
+/**
+ * All three tables, weights first; the totals are summed. With `deps.held`, a key the last complete run held and this
+ * complete read did not return is cleared, then the manifest is replaced. A read that throws part way skips both.
+ */
 export async function backfillEntityFeedConfig(
 	deps: KeyedEntityFeedConfigDeps,
 	rows: {weights: Rows<EntityTypeWeightRow>; exclusions: Rows<EntityTypeExclusionRow>; blocks: Rows<EntityFeedBlockRow>},
 	progress?: (done: number) => void,
 ): Promise<KeyedBackfillResult> {
-	const a = await backfillEntityTypeWeights(deps, rows.weights, progress)
-	const b = await backfillEntityTypeExclusions(deps, rows.exclusions, progress)
-	const c = await backfillEntityFeedBlocks(deps, rows.blocks, progress)
-	return {rows: a.rows + b.rows + c.rows, applied: a.applied + b.applied + c.applied, deadLetter: a.deadLetter + b.deadLetter + c.deadLetter}
+	const seen = [new Set<string>(), new Set<string>(), new Set<string>()]
+	const a = await backfillEntityTypeWeights(deps, noting(rows.weights, "type_id", seen[0] as Set<string>), progress)
+	const b = await backfillEntityTypeExclusions(deps, noting(rows.exclusions, "type_id", seen[1] as Set<string>), progress)
+	const c = await backfillEntityFeedBlocks(deps, noting(rows.blocks, "entity_id", seen[2] as Set<string>), progress)
+	const dead = {n: 0}
+	if (deps.held) {
+		for (const [i, cl] of clearing.entries()) {
+			const now = seen[i] as Set<string>
+			for (const key of deps.held.load(cl.table)) {
+				if (now.has(key)) continue
+				if ((await clearRecord(deps, cl, key)) === "dead_letter") dead.n++
+				await deps.pace?.()
+			}
+			deps.held.save(cl.table, now)
+		}
+	}
+	return {rows: a.rows + b.rows + c.rows, applied: a.applied + b.applied + c.applied, deadLetter: a.deadLetter + b.deadLetter + c.deadLetter + dead.n}
 }
