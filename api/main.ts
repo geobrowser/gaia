@@ -38,6 +38,7 @@ import {createReadBudget} from "./src/gateway/readBudget"
 import {createRelationsResolver} from "./src/gateway/relationsServe"
 import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
+import {createSpaceResolver, SPACE_ROOT, SPACES_ROOT} from "./src/gateway/spaceServe"
 import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
@@ -334,6 +335,9 @@ const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gateway
 const gatewayServeSearchFields = SEARCH_FIELDS.filter(
 	(field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "on",
 )
+// `space=on` / `spaces=on` serve the Space's id and type from its system entity's card (gateway/spaceServe.ts), else PostGraphile.
+const gatewayServeSpace = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, SPACE_ROOT) === "on"
+const gatewayServeSpaces = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, SPACES_ROOT) === "on"
 // The ranked reads that GEODB_RANKED_READS_SERVE lists are served at the gateway only when their field is also "on" in
 // GRAPHQL_GATEWAY_FIELDS: two opt-ins, both off by default (gateway/rankedReadsServe.ts). The listing itself is read below, where
 // the serve layer is built, so the env is read here once for the two names.
@@ -360,6 +364,8 @@ const sharedGeoDb =
 	gatewayServeEntities ||
 	gatewayServeRelations ||
 	gatewayServeSearchFields.length > 0 ||
+	gatewayServeSpace ||
+	gatewayServeSpaces ||
 	gatewayServeBestOrder ||
 	gatewayServeTypeCounts
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
@@ -852,6 +858,8 @@ if (sharedGeoDb) {
 				}),
 			)
 	}
+	if (gatewayServeSpace) gatewayResolvers.set(SPACE_ROOT, createSpaceResolver(sharedGeoDb, SPACE_ROOT))
+	if (gatewayServeSpaces) gatewayResolvers.set(SPACES_ROOT, createSpaceResolver(sharedGeoDb, SPACES_ROOT))
 	if (gatewayServeBestOrder) {
 		gatewayResolvers.set(
 			ENTITIES_IN_BEST_ORDER_FIELD,
