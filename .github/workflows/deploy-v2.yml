@@ -50,6 +50,11 @@ on:
         options:
           - geo-testnet-k8s
           - k8s-geo-testnet
+      freeze_override:
+        description: "Named reason to override the 24 h geodb roll freeze after a read flip or revert (leave empty normally)."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: deploy-v2-${{ inputs.cluster }}-${{ inputs.service }}
@@ -76,6 +81,16 @@ jobs:
 
       - name: Configure kubectl for DigitalOcean
         run: doctl kubernetes cluster kubeconfig save ${{ inputs.cluster }}
+
+      - name: Preflight 24 h geodb read-flip freeze
+        env:
+          SERVICE: ${{ inputs.service }}
+          FREEZE_OVERRIDE: ${{ inputs.freeze_override }}
+        run: |
+          cm_file="$(mktemp)"
+          trap 'rm -f "$cm_file"' EXIT
+          kubectl -n "$NAMESPACE" get configmap geodb-read-source --ignore-not-found=true -o json > "$cm_file"
+          python3 scripts/check-geodb-freeze.py --service "$SERVICE" --configmap-json "$cm_file" --override "$FREEZE_OVERRIDE"
 
       - name: Resolve service mapping
         id: map
