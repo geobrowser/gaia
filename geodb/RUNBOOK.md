@@ -696,7 +696,7 @@ reverse. It also refuses a Space not yet in geo-db (it founds none). Resolve a r
 
 ```bash
 TAG=<the feeder tag deployed now, built from a main that contains this mode>
-# dry run: the feeder may keep running.
+# dry run: the feeder may keep running; the Job prefers the feeder's node (podAffinity) because the state volume is RWO.
 sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
     -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__MODE__|--dry-run|" \
     geodb/k8s/v2/geodb-replay-edit-job.yaml | $K apply -f -
