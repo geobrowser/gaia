@@ -285,7 +285,14 @@ impl CacheStorage for PostgresStorage {
     }
 
     async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
-        let row: Option<(Option<Vec<u8>>, String, String, bool, Option<String>)> = sqlx::query_as(
+        // `space` is a uuid column.
+        let row: Option<(
+            Option<Vec<u8>>,
+            String,
+            sqlx::types::Uuid,
+            bool,
+            Option<String>,
+        )> = sqlx::query_as(
             "SELECT data, block, space, is_errored, name FROM ipfs_cache WHERE uri = $1",
         )
         .bind(uri)
@@ -293,11 +300,11 @@ impl CacheStorage for PostgresStorage {
         .await?;
 
         match row {
-            Some((data, block, space_id, is_errored, name)) => Ok(Some(CacheItem {
+            Some((data, block, space, is_errored, name)) => Ok(Some(CacheItem {
                 uri: uri.to_string(),
                 data,
                 block,
-                space_id,
+                space_id: space_id_from_db(space),
                 is_errored,
                 name,
             })),
@@ -331,6 +338,12 @@ impl CacheStorage for PostgresStorage {
 
         Ok(())
     }
+}
+
+/// The `space` column as [`CacheItem::space_id`] holds it: 32 lowercase hex digits, no
+/// dashes, the same spelling the warmer writes (`hex::encode` of the 16 space-id bytes).
+fn space_id_from_db(space: sqlx::types::Uuid) -> String {
+    space.simple().to_string()
 }
 
 // =============================================================================
@@ -572,6 +585,60 @@ mod tests {
         assert_eq!(row.data, Some(vec![1]));
         assert_eq!(row.block, "7");
         assert_eq!(row.name.as_deref(), Some("n"));
+    }
+
+    /// What `get` hands back for `space` is the spelling the warmer writes in `put`.
+    #[test]
+    fn space_id_from_db_matches_the_warmer_spelling() {
+        let bytes = [
+            0x0a, 0xaa, 0xaa, 0xaa, 0xbb, 0xbb, 0xcc, 0xcc, 0xdd, 0xdd, 0xee, 0xee, 0xee, 0xee,
+            0xee, 0xee,
+        ];
+        let from_db = space_id_from_db(sqlx::types::Uuid::from_bytes(bytes));
+        assert_eq!(from_db, hex::encode(bytes));
+        assert_eq!(from_db, "0aaaaaaabbbbccccddddeeeeeeeeeeee");
+    }
+
+    /// Regression, against a real Postgres: `space` is a uuid column and `get` must still
+    /// read the row back. Ignored by default because it
+    /// needs a database; it creates `ipfs_cache` if missing and uses a unique uri:
+    ///   DATABASE_URL=postgres://… cargo test -p hermes-ipfs-cache -- --ignored pg_get_reads
+    #[tokio::test]
+    #[ignore = "needs DATABASE_URL pointing at a scratch Postgres"]
+    async fn pg_get_reads_back_what_put_wrote() {
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let pool = PgPoolOptions::new().connect(&url).await.expect("connect");
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ipfs_cache (id serial NOT NULL, data bytea, \
+             uri text NOT NULL UNIQUE, is_errored boolean DEFAULT false NOT NULL, \
+             block text NOT NULL, space uuid NOT NULL, name text)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let storage = PostgresStorage::from_pool(pool.clone()).with_pg_writes(true);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let uri = format!("ipfs://QmGetTest{nanos}");
+        let written = item(&uri, 9);
+
+        assert!(storage.get(&uri).await.unwrap().is_none());
+        storage.insert(&written).await.unwrap();
+        let read = storage.get(&uri).await;
+        sqlx::query("DELETE FROM ipfs_cache WHERE uri = $1")
+            .bind(&uri)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let read = read.unwrap().expect("row is found");
+        assert_eq!(read.uri, uri);
+        assert_eq!(read.data, Some(vec![9]));
+        assert_eq!(read.block, "7");
+        assert_eq!(read.space_id, written.space_id);
+        assert!(!read.is_errored);
+        assert_eq!(read.name.as_deref(), Some("n"));
     }
 
     #[test]
