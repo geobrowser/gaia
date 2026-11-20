@@ -11,6 +11,15 @@ export const RESULT_COUNT_BUCKETS = ["0", "1-4", "5-9", "10-19", "20+"] as const
 /** What a completed comparison found: both sides had results (`compared`) or one or both were empty. */
 export const SEARCH_OUTCOMES = ["compared", "both_empty", "postgres_empty", "geodb_empty"] as const
 export const TOP1_RESULTS = ["same", "different"] as const
+/**
+ * The judged verdict of a compared search. Top1 and overlap buckets alone call a ranking difference a miss, and
+ * geo-db's lexical search differs from gaia's on six counted points (geo-db ISS-565-842), most of them ranking:
+ * a recorded difference must not read as degraded.
+ */
+export const SEARCH_VERDICTS = ["ok", "degraded"] as const
+export type SearchVerdict = (typeof SEARCH_VERDICTS)[number]
+/** Fewest of PostGraphile's top ten that geo-db's top twenty must hold for the answer to be judged ok without the first result. */
+export const OK_MIN_RECALL = 0.3
 /** The shadow's window: how many of PostGraphile's results are checked, and how deep geo-db is asked. */
 export const OVERLAP_K = 10
 export const GEODB_LIMIT = 20
@@ -50,6 +59,20 @@ export const resultCountBucket = (n: number): ResultCountBucket =>
 	n === 0 ? "0" : n < 5 ? "1-4" : n < 10 ? "5-9" : n < 20 ? "10-19" : "20+"
 
 /** Both lists best first, in one id space. `ratio`s are over PostGraphile's first OVERLAP_K ids. */
+/**
+ * The rule, over a compared search (both sides had results). ok when PostGraphile's first result is inside geo-db's
+ * top twenty, or at least OK_MIN_RECALL (3 of 10) of PostGraphile's top ten are. degraded otherwise.
+ *
+ * Why: ISS-565-842 attributes 212 of 509 missed top-ten entities to ranking (the name has the query tokens but lost
+ * on score: no entity or Space prior, point 6; exact-name and coverage boosts, point 3) and the rest to fuzzy,
+ * prefix, stem and description matches. A different top1 that is still inside the top twenty, or a partial overlap,
+ * is that known ranking difference, so it is ok. Degraded is a disagreement the ranking difference cannot explain:
+ * PostGraphile's first result absent from geo-db's top twenty and fewer than three of its top ten present.
+ */
+export function judgeCompared(input: {top1Present: boolean; recall: number}): SearchVerdict {
+	return input.top1Present || input.recall >= OK_MIN_RECALL ? "ok" : "degraded"
+}
+
 export function compareRanked(
 	postgres: readonly string[],
 	geodb: readonly string[],
@@ -58,14 +81,17 @@ export function compareRanked(
 	top10Overlap?: number
 	recallInGeoDb?: number
 	top1Same?: boolean
+	verdict?: SearchVerdict
 } {
 	if (postgres.length === 0) return {outcome: geodb.length === 0 ? "both_empty" : "postgres_empty"}
 	if (geodb.length === 0) return {outcome: "geodb_empty"}
 	const top = postgres.slice(0, OVERLAP_K)
 	const geoTop = new Set(geodb.slice(0, OVERLAP_K))
 	const geoAll = new Set(geodb.slice(0, GEODB_LIMIT))
+	const recall = top.filter((id) => geoAll.has(id)).length / top.length
 	return {
 		outcome: "compared",
+		verdict: judgeCompared({top1Present: geoAll.has(postgres[0] as string), recall}),
 		top10Overlap: top.filter((id) => geoTop.has(id)).length / top.length,
 		recallInGeoDb: top.filter((id) => geoAll.has(id)).length / top.length,
 		top1Same: postgres[0] === geodb[0],
@@ -85,6 +111,7 @@ export function recordSearchComparison(
 		bump(`overlap\t${field}\ttop10\t${overlapBucket(verdict.top10Overlap ?? 0)}`)
 		bump(`overlap\t${field}\trecall_top20\t${overlapBucket(verdict.recallInGeoDb ?? 0)}`)
 		bump(`top1\t${field}\t${verdict.top1Same ? "same" : "different"}`)
+		bump(`judged\t${field}\t${verdict.verdict ?? "degraded"}`)
 	}
 	return verdict
 }
@@ -119,6 +146,15 @@ export function renderSearchMetrics(): string {
 		for (const r of TOP1_RESULTS)
 			lines.push(
 				`gaia_api_gateway_shadow_search_top1_total{field="${f}",result="${r}"} ${get(`top1\t${f}\t${r}`)}`,
+			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_search_judged_total Compared searches judged ok or degraded: ok when PostGraphile's first result is in geo-db's top twenty or at least 3 of its top ten are; degraded otherwise (a known ranking difference, geo-db ISS-565-842, is ok). Empty sides are not judged.",
+		"# TYPE gaia_api_gateway_shadow_search_judged_total counter",
+	)
+	for (const f of fields)
+		for (const v of SEARCH_VERDICTS)
+			lines.push(
+				`gaia_api_gateway_shadow_search_judged_total{field="${f}",verdict="${v}"} ${get(`judged\t${f}\t${v}`)}`,
 			)
 	lines.push(
 		"# HELP gaia_api_gateway_shadow_search_results_total Result counts per completed search comparison, by source (postgres, geodb) and count bucket.",
