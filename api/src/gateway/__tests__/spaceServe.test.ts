@@ -66,7 +66,7 @@ describe("planSpaceServe", () => {
 		expect(reason(`{ space { id } }`)).toBe("args")
 		expect(reason(`{ space(id: "nope") { id } }`)).toBe("args")
 		expect(reason(`{ space(id: "${A}") @skip(if: false) { id } }`)).toBe("directives")
-		expect(reason(`{ spaces { id } }`, "spaces")).toBe("filter")
+		expect(reason(`{ spaces(filter: {}) { id } }`, "spaces")).toBe("filter")
 		expect(reason(`{ spaces(first: 3) { id } }`, "spaces")).toBe("args")
 		expect(reason(`{ spaces(filter: {address: {equalToInsensitive: "0x1"}}) { id } }`, "spaces")).toBe("filter")
 		expect(reason(`{ spaces(filter: {id: {in: ["${A}"]}}, first: 1) { id } }`, "spaces")).toBe("args")
@@ -262,5 +262,128 @@ describe("keyed records: address and topicId", () => {
 		const m = make({})
 		await run(m.deps, `{ space(id: "${A}") { id type } }`)
 		expect(m.readCard).toHaveBeenCalledTimes(1)
+	})
+})
+
+describe("unfiltered spaces from the every-Space type scan", () => {
+	const GEO_EOA = conformingId("entity", "09d28123-178f-5828-b85a-81979389c746")
+	const GEO_DAO = conformingId("entity", "afd76215-db11-5cba-81b9-e7f77f865805")
+	const C = "ffe0a1b2c3d44e5f8a6b7c8d9e0f1a2b"
+	// geo-db entity id of each Space's system entity, as the scan returns it; the reverse map names the gaia Space.
+	const entityOf = (s: string) => conformingId("entity", s)
+	const GOV = conformingId("entity", "5f2f9d2b1c3a5c7e9d0b1a2c3d4e5f60")
+	const HELD = ["geo-a", "geo-b", "geo-c"]
+
+	const make = (
+		scan: {eoa?: string[]; dao?: string[]},
+		extra: Record<string, unknown> = {},
+		known: string[] = [A, B, C],
+	) => {
+		const readTypeScan = vi.fn(async ({typeIds}: {typeIds: string[]}) =>
+			typeIds[0] === GEO_EOA ? (scan.eoa ?? []).map(entityOf) : (scan.dao ?? []).map(entityOf),
+		)
+		const readCard = vi.fn(async () => [] as GeoCardRow[])
+		const gaiaIdsOf = vi.fn(
+			async (ids: readonly string[]) =>
+				new Map([...known, A, B, C].filter((k) => ids.includes(entityOf(k))).map((k) => [entityOf(k), k])),
+		)
+		return {
+			readTypeScan,
+			readCard,
+			gaiaIdsOf,
+			deps: {
+				geoDb: {readTypeScan, readCard},
+				geoSpaceOf: async (s: string) => (known.includes(s) ? `geo-${s}` : null),
+				systemSpaceOf: async () => GOV,
+				gaiaIdsOf,
+				typeScan: true,
+				multiSpace: true,
+				allGeoSpaces: async () => HELD,
+				...extra,
+			},
+		}
+	}
+	const run = (d: ReturnType<typeof make>["deps"], query: string) =>
+		createSpaceResolver(d as never, "spaces")(context(query))
+	const q = "{ spaces { id type } }"
+
+	it("is a plain unfiltered selection", () => {
+		expect(planSpaceServe(parse(q), null, {}, "spaces").ids).toBeNull()
+		expect(() => planSpaceServe(parse("{ spaces { id } }"), null, {}, "spaces")).not.toThrow()
+	})
+	it("answers every Space in primary-key order, the type from which type scan holds it", async () => {
+		const m = make({eoa: [C, A], dao: [B]})
+		const out = await run(m.deps, q)
+		expect(out).toEqual({
+			ok: true,
+			data: {
+				spaces: [
+					{id: B, type: "DAO"},
+					{id: A, type: "PERSONAL"},
+					{id: C, type: "PERSONAL"},
+				],
+			},
+		})
+		// Each type is scanned once across the held Spaces; no card is read for an id and type selection.
+		expect(m.readTypeScan).toHaveBeenCalledTimes(2)
+		expect(m.readTypeScan.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: HELD, typeIds: [GEO_EOA]})
+		expect(m.readCard).not.toHaveBeenCalled()
+	})
+	it("serves address and topicId from the keyed records for a small page", async () => {
+		const m = make({eoa: [A]})
+		m.readCard.mockImplementation((async ({entityId}: {entityId: string}) =>
+			entityId === recordEntityId(SPACE_ADDRESS_KIND, [idPart(A)])
+				? [
+						{prop: SPACE_ADDRESS_COLUMNS.space, raw: entityRef(A)},
+						{prop: SPACE_ADDRESS_COLUMNS.address, raw: "0xAbC"},
+					]
+				: []) as never)
+		expect(await run(m.deps, "{ spaces { id address } }")).toEqual({
+			ok: true,
+			data: {spaces: [{id: A, address: "0xAbC"}]},
+		})
+	})
+	it("declines a page too big for the per-Space record reads, but not an id and type page", async () => {
+		const many = Array.from({length: MAX_SPACES_PER_PAGE + 1}, (_, i) => i.toString(16).padStart(32, "0"))
+		const m = make({eoa: many}, {}, many)
+		expect(await run(m.deps, "{ spaces { id address } }")).toEqual({ok: false, reason: "truncated"})
+		const ok = await run(m.deps, q)
+		expect(ok.ok).toBe(true)
+	})
+	it("declines rather than guesses", async () => {
+		// Unmapped reverse id: a legacy entity typed as a Space kind.
+		expect(await run(make({eoa: [A]}, {gaiaIdsOf: async () => new Map()}).deps, q)).toEqual({
+			ok: false,
+			reason: "legacy_id",
+		})
+		// A typed entity that is not a Space geo-db holds.
+		expect(await run(make({eoa: [A, C]}, {}, [A]).deps, q)).toEqual({ok: false, reason: "unmapped_space"})
+		// One entity in both kinds.
+		expect(await run(make({eoa: [A], dao: [A]}).deps, q)).toEqual({ok: false, reason: "empty"})
+		// Nothing found: PostgreSQL may hold Spaces geo-db does not.
+		expect(await run(make({}).deps, q)).toEqual({ok: false, reason: "empty"})
+		// A scan that fills its window may have more.
+		const full = {
+			readCard: vi.fn(),
+			readTypeScan: async ({first}: {first: number}) => Array(first).fill(entityOf(A)),
+		}
+		expect(await run(make({eoa: [A]}, {geoDb: full}).deps, q)).toEqual({ok: false, reason: "truncated"})
+		// Reads not switched on, or no way to name the Spaces.
+		expect(await run(make({eoa: [A]}, {typeScan: false}).deps, q)).toEqual({ok: false, reason: "not_enabled"})
+		expect(await run(make({eoa: [A]}, {allGeoSpaces: undefined}).deps, q)).toEqual({
+			ok: false,
+			reason: "no_space",
+		})
+		expect(await run(make({eoa: [A]}, {multiSpace: false}).deps, q)).toEqual({ok: false, reason: "no_space"})
+		const wide = Array.from({length: 1025}, (_, i) => i.toString(16).padStart(32, "0"))
+		expect(await run(make({eoa: [A]}, {allGeoSpaces: async () => wide}).deps, q)).toEqual({
+			ok: false,
+			reason: "many_spaces",
+		})
+		// Members, page and the rest stay declined.
+		expect(await run(make({eoa: [A]}).deps, "{ spaces { id page { id } } }")).toEqual({
+			ok: false,
+			reason: "selection",
+		})
 	})
 })

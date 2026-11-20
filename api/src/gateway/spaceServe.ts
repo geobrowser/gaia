@@ -1,6 +1,7 @@
 import type {FieldNode} from "graphql"
 import type {GeoCardRow} from "../geodb/card"
 import {conformingId} from "../geodb/card"
+import {MAX_LINE_SPACES, MAX_TYPE_SCAN} from "../geodb/client"
 import type {GaiaIdsOf} from "../geodb/idMap"
 import {askGeoDb, type CardDeps} from "../geodb/service"
 import {entityRef, idPart, recordEntityId} from "../proposals/governance/recordKey"
@@ -28,6 +29,14 @@ import type {FieldResolver, ResolveResult} from "./gateway"
  * not being founded in this process declines `not_enabled`. No record for a topic Postgres holds as null is told from a
  * Space the feeder has not reached, so only a record that exists and holds no topic answers null. Everything else declines with the reason
  * PostGraphile then answers it for (gaia_api_gateway_serve_fallback_total):
+ * - `spaces` with no argument (the every-Space list) is read as two type scans across every Space geo-db holds
+ *   (`allGeoSpaces`), one for EoaSpace (`PERSONAL`) and one for DaoSpace (`DAO`), each mapped back through the reverse id
+ *   map, and served in PostGraphile's primary-key order. It answers only when it is certain to be the whole list: neither
+ *   scan filled its window (`truncated`), the Spaces fit one line (`many_spaces`, past `MAX_LINE_SPACES`), the reads are
+ *   switched on (`not_enabled`, `no_space`), every typed entity maps back to a gaia id (`legacy_id`) that is a Space
+ *   geo-db holds (`unmapped_space`), no Space is typed as both kinds, and at least one Space is found (`empty`: PostgreSQL
+ *   may hold Spaces geo-db has not been fed). `address` and `topicId` need one record read each per Space, so they are served
+ *   only for a page of `MAX_SPACES_PER_PAGE` or fewer (else `truncated`); `id` and `type` come from the scans alone.
  * - `page`, `topic`, members, voting settings and the rest decline `selection`: joins and keyed records not read here.
  *   A filter other than the id list (address, `members some`) or any paging declines `filter` / `args`:
  *   geo-db has no Space index to enumerate or reverse-look-up.
@@ -67,13 +76,20 @@ export type SpaceServeDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	systemSpaceOf?: AnySystemSpaceLookup
 	/** geo-db id -> gaia id, for the topic a record references; without it `topicId` declines. */
 	gaiaIdsOf?: GaiaIdsOf
+	/** Unfiltered `spaces`: the type scan read is switched on (GEODB_TYPE_SCAN_SHADOW=on). */
+	typeScan?: boolean
+	/** Unfiltered `spaces`: a scan may name several Spaces (GEODB_MULTI_SPACE_READS=on). */
+	multiSpace?: boolean
+	/** Unfiltered `spaces`: every geo-db Space id the space map holds (the Spaces the scans read). */
+	allGeoSpaces?: () => Promise<string[]>
 }
 
 type Plan = {
 	root: typeof SPACE_ROOT | typeof SPACES_ROOT
 	key: string
 	fields: {key: string; name: "id" | "type" | "__typename" | "address" | "topicId"}[]
-	ids: string[]
+	/** The Spaces asked for, sorted; null for the unfiltered list. */
+	ids: string[] | null
 }
 
 const decline = (reason: string): ResolveResult => ({ok: false, reason})
@@ -90,13 +106,15 @@ export function planSpaceServe(
 	if (parsed.roots.length !== 1 || !node || node.name.value !== root) throw new Unsupported("not_single_root")
 	if (node.directives?.length) throw new Unsupported("directives")
 	const args = argsOf(node, parsed.variables)
-	let ids: string[]
-	if (root === SPACE_ROOT) {
+	let ids: string[] | null
+	if (root === SPACES_ROOT && Object.keys(args).length === 0) {
+		ids = null
+	} else if (root === SPACE_ROOT) {
 		if (Object.keys(args).length !== 1 || !("id" in args)) throw new Unsupported("args")
 		ids = [uuidArg(args.id)]
 	} else {
 		const keys = Object.keys(args)
-		if (keys.length !== 1 || keys[0] !== "filter") throw new Unsupported(keys.length === 0 ? "filter" : "args")
+		if (keys.length !== 1 || keys[0] !== "filter") throw new Unsupported("args")
 		const filter = args.filter as {id?: {in?: unknown}} | null
 		const clause = filter && typeof filter === "object" && Object.keys(filter).length === 1 ? filter.id : undefined
 		if (!clause || typeof clause !== "object" || Object.keys(clause).length !== 1 || !Array.isArray(clause.in))
@@ -151,6 +169,50 @@ function recordColumn(
 	return held[0] ?? null
 }
 
+/**
+ * Every Space and its kind, sorted by id, from one type scan a kind across the Spaces geo-db holds; or the decline.
+ * The scan returns each Space's system entity (geo-db ids): it is named back through the reverse id map and must be a
+ * Space geo-db holds, which also drops a stray entity typed with a Space kind in some other Space.
+ */
+async function listSpaces(
+	deps: SpaceServeDeps,
+	signal: AbortSignal,
+): Promise<ResolveResult | [string, "PERSONAL" | "DAO"][]> {
+	const readTypeScan = deps.geoDb.readTypeScan?.bind(deps.geoDb)
+	if (!deps.typeScan || !readTypeScan) return decline("not_enabled")
+	if (!deps.allGeoSpaces || !deps.multiSpace) return decline("no_space")
+	if (!deps.gaiaIdsOf) return decline("legacy_id")
+	const spaces = [...new Set(await deps.allGeoSpaces())]
+	if (spaces.length === 0) return decline("empty")
+	if (spaces.length > MAX_LINE_SPACES) return decline("many_spaces")
+	const [personal, dao] = await Promise.all(
+		[EOA, DAO].map((typeId) => readTypeScan({geoSpaceIds: spaces, typeIds: [typeId], first: MAX_TYPE_SCAN})),
+	)
+	if (signal.aborted) return decline("timeout")
+	// A scan that filled its window may have more, and the page would no longer be the whole list.
+	if (!personal || !dao || personal.length >= MAX_TYPE_SCAN || dao.length >= MAX_TYPE_SCAN)
+		return decline("truncated")
+	const named = await deps.gaiaIdsOf([...new Set([...personal, ...dao])])
+	if (signal.aborted) return decline("timeout")
+	const kinds = new Map<string, "PERSONAL" | "DAO">()
+	for (const [list, kind] of [
+		[personal, "PERSONAL"],
+		[dao, "DAO"],
+	] as const)
+		for (const entity of list) {
+			const id = named.get(entity)
+			if (!id) return decline("legacy_id")
+			if (!(await deps.geoSpaceOf(id))) return decline("unmapped_space")
+			// One Space typed as both kinds is not an answer (spaceTypeOf declines the same card).
+			if (kinds.has(id) && kinds.get(id) !== kind) return decline("empty")
+			kinds.set(id, kind)
+		}
+	// No Space found at all means geo-db has not been fed them, not that PostgreSQL holds none.
+	if (kinds.size === 0) return decline("empty")
+	// PostGraphile's order with no orderBy is the primary key, the id's bytes: undashed lowercase hex sorts the same.
+	return [...kinds].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+}
+
 export function createSpaceResolver(deps: SpaceServeDeps, root: typeof SPACE_ROOT | typeof SPACES_ROOT): FieldResolver {
 	return async ({params, document, signal}) => {
 		let plan: Plan
@@ -168,11 +230,22 @@ export function createSpaceResolver(deps: SpaceServeDeps, root: typeof SPACE_ROO
 			if (!governance) return decline("not_enabled")
 		}
 		const items: Record<string, unknown>[] = []
-		for (const id of plan.ids) {
-			// A Space geo-db has not founded throws GeoDbError("unmapped_space"); the gateway names it as the reason.
-			const rows = await askGeoDb(deps, conformingId("entity", id), id)
-			if (signal.aborted) return decline("timeout")
-			const type = spaceTypeOf(rows)
+		let known: Map<string, "PERSONAL" | "DAO"> | null = null
+		if (plan.ids === null) {
+			const listed = await listSpaces(deps, signal)
+			if (!Array.isArray(listed)) return listed
+			if ((wantAddress || wantTopic) && listed.length > MAX_SPACES_PER_PAGE) return decline("truncated")
+			known = new Map(listed)
+		}
+		for (const id of plan.ids ?? [...(known?.keys() ?? [])]) {
+			let type: "PERSONAL" | "DAO" | null
+			if (known) type = known.get(id) ?? null
+			else {
+				// A Space geo-db has not founded throws GeoDbError("unmapped_space"); the gateway names it as the reason.
+				const rows = await askGeoDb(deps, conformingId("entity", id), id)
+				if (signal.aborted) return decline("timeout")
+				type = spaceTypeOf(rows)
+			}
 			if (type === null) return decline("empty")
 			let address: string | null | undefined
 			let topic: string | null | undefined
