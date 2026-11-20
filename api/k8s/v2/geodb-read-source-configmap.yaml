@@ -1,0 +1,35 @@
+# Create-once ConfigMap for the runtime per-field read-source switch (GraphQL gateway fields + entityCards).
+#
+# Deliberately NOT in api/k8s/v2/api.yaml: deploy-v2 applies api.yaml on every api deploy, which would
+# overwrite runtime flips and auto-revert latches back to all-shadow. Create once in the cluster:
+#
+#   kubectl apply -f api/k8s/v2/geodb-read-source-configmap.yaml
+#
+# Every field ships as "shadow" (unchanged from the startup env vars). When a pod trips auto-revert it
+# patches `"reverted": {"<field>": "<iso-ts> <reason>"}` into `read-source.json`; every replica honours
+# that latch across restarts. A person resets by deleting the field's key under `"reverted"`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geodb-read-source
+  namespace: gaia
+  labels:
+    app: api
+data:
+  read-source.json: |
+    {
+      "fields": {
+        "entity": "shadow",
+        "entities": "shadow",
+        "relation": "shadow",
+        "relations": "shadow",
+        "search": "shadow",
+        "searchConnection": "shadow",
+        "entitiesConnection": "shadow",
+        "entitiesOrderedByProperty": "shadow",
+        "spaces": "shadow",
+        "space": "shadow",
+        "metas": "shadow",
+        "entityCards": "shadow"
+      }
+    }

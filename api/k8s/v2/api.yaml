@@ -1,3 +1,35 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api
+  namespace: gaia
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-read-source-reverter
+  namespace: gaia
+rules:
+  # Scoped solely to geodb-read-source so a pod that trips auto-revert can persist the latch across replicas/restarts.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["geodb-read-source"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-read-source-reverter
+  namespace: gaia
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: api-read-source-reverter
+subjects:
+  - kind: ServiceAccount
+    name: api
+    namespace: gaia
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +84,7 @@ spec:
         geodb-client: "true"
         app: api
     spec:
+      serviceAccountName: api
       # Spread replicas across nodes instead of leaving placement to the scheduler.
       #
       # Without this the api packed unevenly — 7/5/7/5 across four nodes at 22
@@ -265,9 +298,22 @@ spec:
             # space = spaces' comparison on one Space; metas (indexer cursors) has no geo-db home and is only counted unsupported.
             - name: GRAPHQL_GATEWAY_FIELDS
               value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"
-            # Runtime per-field read-source switch watched from ConfigMap geodb-read-source (all fields shipped shadow).
+            # Runtime per-field read-source switch watched from ConfigMap geodb-read-source (create-once in
+            # api/k8s/v2/geodb-read-source-configmap.yaml, all fields shipped shadow; optional volume so pods
+            # without it use the startup env defaults). Auto-revert thresholds match GatewayServeFallbackHigh
+            # and GatewayServeLatencyHigh (15m, min 20 ops, >10% failure-class fallbacks, served p99 > 250 ms).
             - name: GEODB_READ_SOURCE_PATH
               value: /etc/geodb/read-source/read-source.json
+            - name: GEODB_READ_SOURCE_CONFIGMAP
+              value: geodb-read-source
+            - name: GEODB_READ_SOURCE_WINDOW_MS
+              value: "900000"
+            - name: GEODB_READ_SOURCE_MIN_SAMPLES
+              value: "20"
+            - name: GEODB_READ_SOURCE_MAX_ERROR_RATE
+              value: "0.1"
+            - name: GEODB_READ_SOURCE_MAX_LATENCY_MS
+              value: "250"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
@@ -847,33 +893,3 @@ spec:
       backendRefs:
         - name: api
           port: 3000
----
-# Runtime per-field read-source switch for GraphQL gateway root fields and entityCards (GEODB_ENTITY_CARDS).
-# Mounted into the api pods at /etc/geodb/read-source/read-source.json and re-read at runtime with no deploy.
-# Every field ships as "shadow" (unchanged from the startup env vars). To reset an auto-reverted field, set
-# "reset": {"<field>": "<new-timestamp-or-nonce>"} in read-source.json.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: geodb-read-source
-  namespace: gaia
-  labels:
-    app: api
-data:
-  read-source.json: |
-    {
-      "fields": {
-        "entity": "shadow",
-        "entities": "shadow",
-        "relation": "shadow",
-        "relations": "shadow",
-        "search": "shadow",
-        "searchConnection": "shadow",
-        "entitiesConnection": "shadow",
-        "entitiesOrderedByProperty": "shadow",
-        "spaces": "shadow",
-        "space": "shadow",
-        "metas": "shadow",
-        "entityCards": "shadow"
-      }
-    }

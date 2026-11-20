@@ -84,6 +84,12 @@ export type GatewayDeps<Ctx> = {
 	delegate: Delegate<Ctx>
 	/** Root fields with a geo-db resolver, used when the field's mode is "on". */
 	resolvers?: ReadonlyMap<string, FieldResolver>
+	/**
+	 * Resolvers pre-wired for runtime ConfigMap flips. Unlike `resolvers`, these are only visible to
+	 * `routeOperation` while the field's effective mode is "on", so fields in "shadow" or "off" keep
+	 * their existing `no_resolver` delegate reason label.
+	 */
+	runtimeResolvers?: ReadonlyMap<string, FieldResolver>
 	/** Root fields with a shadow comparison, run when the field's mode is "shadow". */
 	shadows?: ReadonlyMap<string, FieldShadow>
 	/** Observers of delegated operations (see `ResponseObserver`); they never change or delay a response. */
@@ -108,13 +114,16 @@ export function routeOperation(
 	resolvers: {has(field: string): boolean},
 	classification: Classification,
 	readSourceSwitch?: ReadSourceSwitch,
+	runtimeResolvers?: {has(field: string): boolean},
 ): Route {
 	if (config.mode === "off") return {kind: "delegate", reason: "gateway_off"}
 	if (classification.operationType !== "query" || classification.rootFields.length === 0) {
 		return {kind: "delegate", reason: "unclassified"}
 	}
-	if (!classification.rootFields.every((field) => resolvers.has(field)))
-		return {kind: "delegate", reason: "no_resolver"}
+	const hasResolver = (field: string) =>
+		resolvers.has(field) ||
+		(runtimeResolvers?.has(field) === true && fieldModeOf(config, field, readSourceSwitch) === "on")
+	if (!classification.rootFields.every(hasResolver)) return {kind: "delegate", reason: "no_resolver"}
 	if (classification.rootFields.every((field) => fieldModeOf(config, field, readSourceSwitch) === "off")) {
 		return {kind: "delegate", reason: "field_off"}
 	}
@@ -239,13 +248,20 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 		if (deps.config.mode === "off") return deps.delegate(request, context)
 		if (deps.readSourceSwitch) await deps.readSourceSwitch.refreshIfDue()
 		const classified = await classifyRequestWithDocument(request)
-		const route = routeOperation(deps.config, resolvers, classified.classification, deps.readSourceSwitch)
+		const route = routeOperation(
+			deps.config,
+			resolvers,
+			classified.classification,
+			deps.readSourceSwitch,
+			deps.runtimeResolvers,
+		)
 		try {
 			deps.onClassified?.(classified.classification, route)
 		} catch {
 			// Observability must not fail a read.
 		}
-		const resolver = route.kind === "serve" ? resolvers.get(route.field) : undefined
+		const resolver =
+			route.kind === "serve" ? (resolvers.get(route.field) ?? deps.runtimeResolvers?.get(route.field)) : undefined
 		if (route.kind === "serve" && resolver && classified.params && classified.document) {
 			activateServeMetrics(route.field)
 			activateGatewayRequests(route.field)

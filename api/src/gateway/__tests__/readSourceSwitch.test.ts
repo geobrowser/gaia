@@ -6,7 +6,7 @@ import {GeoDbError} from "../../geodb/client"
 import {__resetGeoDbMetricsForTests} from "../../geodb/metrics"
 import {type CardDeps, resolveCard} from "../../geodb/service"
 import {readGatewayConfig} from "../config"
-import {createGateway, type FieldResolver} from "../gateway"
+import {createGateway, type FieldResolver, routeOperation} from "../gateway"
 import {
 	__resetReadSourceSwitchMetricsForTests,
 	createReadSourceSwitch,
@@ -15,6 +15,7 @@ import {
 	isGeoDbErrorReason,
 	renderReadSourceSwitchMetrics,
 } from "../readSourceSwitch"
+import {createSearchResolver} from "../searchServe"
 import {__resetServeMetricsForTests} from "../serveMetrics"
 
 const json = (body: unknown) =>
@@ -383,11 +384,133 @@ describe("readSourceSwitch", () => {
 		}
 	})
 
-	it("ships every field as shadow in api/k8s/v2/api.yaml geodb-read-source ConfigMap", () => {
-		const yaml = readFileSync(path.resolve(__dirname, "../../../k8s/v2/api.yaml"), "utf8")
-		expect(yaml).toContain("name: geodb-read-source")
-		expect(yaml).toContain("GEODB_READ_SOURCE_PATH")
-		const match = yaml.match(/read-source\.json:\s*\|\n([\s\S]*?)(?:\n---|\n\S|$)/)
+	it("persists auto-revert latch to ConfigMap so every replica honours it across restarts and deleting the key resets it", async () => {
+		let now = 10_000
+		let bump = 1_000
+		writeConfig({fields: {entity: "on"}})
+
+		// Simulated ConfigMap patcher: writes `reverted.<field>` into the shared file
+		const persistRevert = vi.fn(async (field: string, entry: string) => {
+			const doc = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>
+			const reverted = {...((doc.reverted as Record<string, string> | undefined) ?? {}), [field]: entry}
+			bump += 5_000
+			writeConfig({...doc, reverted}, bump)
+		})
+
+		const pod1 = createReadSourceSwitch({
+			path: filePath,
+			defaults: new Map([["entity", "shadow"]]),
+			refreshMs: 1_000,
+			now: () => now,
+			autoRevert: {windowMs: 60_000, minSamples: 3, maxErrorRate: 0.25, maxLatencyMs: 250},
+			persistRevert,
+		})
+		await pod1.refreshIfDue()
+		expect(pod1.effectiveMode("entity")).toBe("on")
+
+		// Pod 1 trips -> persists `reverted.entity` into the ConfigMap
+		for (let i = 0; i < 3; i++) pod1.recordOutcome("entity", {kind: "failure", latencyMs: 10})
+		await new Promise((r) => setTimeout(r, 10))
+		expect(persistRevert).toHaveBeenCalledTimes(1)
+		expect(pod1.effectiveMode("entity")).toBe("off")
+
+		// Pod 2 (a sibling replica or restarted pod) reads the ConfigMap and immediately honours the latch
+		const pod2 = createReadSourceSwitch({
+			path: filePath,
+			defaults: new Map([["entity", "shadow"]]),
+			refreshMs: 1_000,
+			now: () => now,
+		})
+		await pod2.refreshIfDue()
+		expect(pod2.isReverted("entity")).toBe(true)
+		expect(pod2.effectiveMode("entity")).toBe("off")
+
+		// Pod 1 observes its own persisted latch in the ConfigMap
+		now += 2_000
+		await pod1.refreshIfDue()
+		expect(pod1.isReverted("entity")).toBe(true)
+
+		// A person resets by deleting `reverted.entity` from the ConfigMap -> both pods resume serving
+		bump += 5_000
+		writeConfig({fields: {entity: "on"}, reverted: {}}, bump)
+		now += 2_000
+		await pod1.refreshIfDue()
+		await pod2.refreshIfDue()
+		expect(pod1.isReverted("entity")).toBe(false)
+		expect(pod1.effectiveMode("entity")).toBe("on")
+		expect(pod2.isReverted("entity")).toBe(false)
+		expect(pod2.effectiveMode("entity")).toBe("on")
+	})
+
+	it("preserves no_resolver delegate reason for runtimeResolvers until a field flips to on, and enables searchServe via switch", async () => {
+		let now = 1_000
+		writeConfig({fields: {search: "shadow"}})
+		const sw = createReadSourceSwitch({
+			path: filePath,
+			defaults: new Map([["search", "shadow"]]),
+			refreshMs: 1_000,
+			now: () => now,
+		})
+		await sw.refreshIfDue()
+
+		const searchResolver = createSearchResolver("search", {
+			geoSpaceOf: Object.assign(async () => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {
+				all: async () => ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+			}),
+			search: {
+				searchLexical: async () => ["11111111111141118111111111111111"],
+			},
+			readCards: async () => [],
+			gaiaIdsOf: async (ids) => new Map(ids.map((id) => [id, id])),
+			enabled: () => sw.effectiveMode("search") === "on",
+		})
+		const runtimeResolvers = new Map<string, FieldResolver>([["search", searchResolver]])
+		const cfg = readGatewayConfig({GRAPHQL_GATEWAY: "on", GRAPHQL_GATEWAY_FIELDS: "search=shadow"})
+		const classification = {operationName: "S", operationType: "query" as const, rootFields: ["search"]}
+
+		// While shadow: routeOperation keeps `no_resolver` (does not shift scorecard labels to `not_served`)
+		expect(routeOperation(cfg, new Set(), classification, sw, runtimeResolvers)).toEqual({
+			kind: "delegate",
+			reason: "no_resolver",
+		})
+
+		// Flip search to on: routeOperation serves and searchResolver answers even with GEODB_SEARCH_SERVE off
+		writeConfig({fields: {search: "on"}}, 3_000)
+		now += 2_000
+		await sw.refreshIfDue()
+		expect(routeOperation(cfg, new Set(), classification, sw, runtimeResolvers)).toEqual({
+			kind: "serve",
+			field: "search",
+			reason: "field_on",
+		})
+		const gateway = createGateway({
+			config: cfg,
+			delegate: vi.fn(async () => new Response("pg")),
+			runtimeResolvers,
+			readSourceSwitch: sw,
+		})
+		const res = await gateway(
+			json({query: 'query S { search(query: "earth", first: 5) { id } }', operationName: "S"}),
+			{},
+		)
+		expect(res.headers.get("x-gaia-source")).toBe("geodb")
+		expect(await res.json()).toEqual({data: {search: [{id: "11111111111141118111111111111111"}]}})
+	})
+
+	it("ships create-once all-shadow ConfigMap outside api.yaml and scoped Role in api.yaml", () => {
+		const apiYaml = readFileSync(path.resolve(__dirname, "../../../k8s/v2/api.yaml"), "utf8")
+		// deploy-v2 applies api.yaml on every deploy, so the ConfigMap must NOT live in api.yaml
+		expect(apiYaml).not.toContain("kind: ConfigMap")
+		expect(apiYaml).toContain("name: geodb-read-source")
+		expect(apiYaml).toContain("GEODB_READ_SOURCE_PATH")
+		expect(apiYaml).toContain("GEODB_READ_SOURCE_CONFIGMAP")
+		expect(apiYaml).toContain('resourceNames: ["geodb-read-source"]')
+		expect(apiYaml).toContain('verbs: ["get", "patch"]')
+
+		const cmYaml = readFileSync(path.resolve(__dirname, "../../../k8s/v2/geodb-read-source-configmap.yaml"), "utf8")
+		expect(cmYaml).toContain("kind: ConfigMap")
+		expect(cmYaml).toContain("name: geodb-read-source")
+		const match = cmYaml.match(/read-source\.json:\s*\|\n([\s\S]*?)(?:\n---|\n\S|$)/)
 		expect(match).not.toBeNull()
 		const body = (match?.[1] ?? "")
 			.split("\n")
