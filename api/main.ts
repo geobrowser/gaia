@@ -17,6 +17,7 @@ import {
 	ENTITIES_CONNECTION_FIELD,
 	ENTITIES_ORDERED_FIELD,
 } from "./src/gateway/entitiesConnectionShadow"
+import {createEntitiesOrderedByPropertyResolver} from "./src/gateway/entitiesOrderedByPropertyServe"
 import {createEntitiesResolver} from "./src/gateway/entitiesServe"
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway/entityShadow"
@@ -335,6 +336,9 @@ const gatewayShadowsAny = gatewayShadowFields.size > 0
 const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
 // `entities=on` has its own resolver (gateway/entitiesServe.ts): the type-scan page that selects only id, else PostGraphile.
 const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "entities") === "on"
+// `entitiesOrderedByProperty=on` has its own resolver (gateway/entitiesOrderedByPropertyServe.ts): a single-Space, single-Type, exact-order page selecting only id, else PostGraphile.
+const gatewayServeEntitiesOrderedByProperty =
+	gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITIES_ORDERED_FIELD) === "on"
 // `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
 const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
 // `search` / `searchConnection` =on have their own resolver (gateway/searchServe.ts); it also needs GEODB_SEARCH_SERVE=on (off by default).
@@ -379,6 +383,7 @@ const sharedGeoDb =
 	gatewayShadowsAny ||
 	gatewayServeEntity ||
 	gatewayServeEntities ||
+	gatewayServeEntitiesOrderedByProperty ||
 	gatewayServeRelations ||
 	gatewayServeSearchFields.length > 0 ||
 	gatewayServeSpace ||
@@ -846,6 +851,16 @@ if (sharedGeoDb) {
 		})
 		if (gatewayServeEntities) gatewayResolvers.set("entities", entitiesResolver)
 		else runtimeGatewayResolvers.set("entities", entitiesResolver)
+	}
+	if (gatewayServeEntitiesOrderedByProperty || wireForRuntime) {
+		const entitiesOrderedByPropertyResolver = createEntitiesOrderedByPropertyResolver({
+			...sharedGeoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+			orderPick: geoDbCardConfig.orderPick === true,
+		})
+		if (gatewayServeEntitiesOrderedByProperty)
+			gatewayResolvers.set(ENTITIES_ORDERED_FIELD, entitiesOrderedByPropertyResolver)
+		else runtimeGatewayResolvers.set(ENTITIES_ORDERED_FIELD, entitiesOrderedByPropertyResolver)
 	}
 	if (gatewayServeRelations || wireForRuntime) {
 		const relationsResolver = createRelationsResolver({
