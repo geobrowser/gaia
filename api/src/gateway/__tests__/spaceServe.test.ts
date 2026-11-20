@@ -94,6 +94,9 @@ describe("createSpaceResolver", () => {
 			},
 		})
 		expect(readCard).toHaveBeenCalledTimes(2)
+		// Each Space is read in its own Space: a page that read every Space in the first one's would still pass the shape above.
+		expect(readCard).toHaveBeenCalledWith({geoSpaceId: `geo-${A}`, entityId: conformingId("entity", A)})
+		expect(readCard).toHaveBeenCalledWith({geoSpaceId: `geo-${B}`, entityId: conformingId("entity", B)})
 	})
 	it("declines a Space geo-db has not founded, naming unmapped_space through the thrown reason", async () => {
 		const {deps: d} = deps(
