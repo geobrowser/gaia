@@ -15,7 +15,7 @@
  */
 import type {DocumentNode, FieldNode} from "graphql"
 import {conformingId, DERIVED_PROPERTIES, type GeoBacklinkRow, MEMBERSHIP_PROPERTIES} from "../geodb/card"
-import {GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
+import {GeoDbError, type GeoSpaceScope, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {defaultLimitForDepth} from "../kg/paginationCapPlugin"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
@@ -26,6 +26,7 @@ import {
 	fieldsOf,
 	parseOperation,
 	responseKeyOf,
+	scopeOfSpaces,
 	Unsupported,
 	uuidArg,
 } from "./entityShadow"
@@ -320,7 +321,7 @@ export function extractBacklinks(body: unknown, plan: BacklinksPlan): PostgresBa
 async function readBacklinks(
 	deps: EntityShadowDeps,
 	entityId: string,
-	geoSpaceIds: string[],
+	geoSpaceIds: GeoSpaceScope,
 ): Promise<GeoBacklinkRow[]> {
 	const read = deps.geoDb.readBacklinks?.bind(deps.geoDb)
 	if (!read) throw new GeoDbError("client_failed", "the geo-db client cannot read backlinks")
@@ -397,6 +398,10 @@ export async function compareBacklinks(
 	// The Spaces to read, in geo-db ids.
 	let geoSpaces: string[]
 	let oneSpace: string | null = null
+	// Whether the read means "every Space" (no Space argument): past one line it asks for the `every_space` scope, one
+	// read with one claim. A list of Spaces the caller named is split into lines of at most 1024, read one after the
+	// other (geo-db DR-177-583).
+	let everySpace = false
 	if (input.spaces && input.spaces.length === 1) {
 		const geo = await deps.geoSpaceOf(input.spaces[0] as string)
 		if (!geo) return {result: "unsupported", reason: "unmapped_space"}
@@ -427,7 +432,8 @@ export async function compareBacklinks(
 		if (geoSpaces.length === 0) return {result: "unsupported", reason: "no_space"}
 		if (geoSpaces.length > MAX_LINE_SPACES && deps.everySpaceChunks !== true)
 			return {result: "unsupported", reason: "many_spaces"}
-		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(Math.ceil(geoSpaces.length / MAX_LINE_SPACES)))
+		everySpace = true
+		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
 			return {result: "unsupported", reason: "throttled"}
 	}
 
@@ -454,20 +460,21 @@ export async function compareBacklinks(
 	const geoRows: GeoBacklinkRow[] = []
 	let geoTruncated = false
 	try {
-		// More Spaces than one line names are read in lines, all at once (each holds a token of `everySpaceBudget`,
-		// taken above); a backlink lives in one Space, so the union is exact, and `Promise.all` keeps the lines'
-		// order.
-		const lines: string[][] = []
-		for (let at = 0; at < geoSpaces.length; at += MAX_LINE_SPACES)
-			lines.push(geoSpaces.slice(at, at + MAX_LINE_SPACES))
-		const answers = await Promise.all(lines.map((line) => readBacklinks(deps, entityId, line)))
-		lines.forEach((line, i) => {
-			const got = answers[i] ?? []
+		// More Spaces than one line names: an every-Space read asks for the `every_space` scope; a list the caller
+		// named is read in lines, one after the other so that two lines never hold their claims together (each holds a
+		// token of `everySpaceBudget`, taken above). A backlink lives in one Space, so the union is exact.
+		const lines: GeoSpaceScope[] = []
+		if (everySpace) lines.push(scopeOfSpaces(geoSpaces))
+		else
+			for (let at = 0; at < geoSpaces.length; at += MAX_LINE_SPACES)
+				lines.push(geoSpaces.slice(at, at + MAX_LINE_SPACES))
+		for (const line of lines) {
+			const got = await readBacklinks(deps, entityId, line)
 			if (got.length >= BACKLINKS_LIMIT) geoTruncated = true
 			// A one-Space line prints bare rows, so a lone last Space names itself.
-			const only = line.length === 1 && geoSpaces.length > 1 ? line[0] : undefined
+			const only = Array.isArray(line) && line.length === 1 && geoSpaces.length > 1 ? line[0] : undefined
 			for (const row of got) geoRows.push(only && row.space === undefined ? {...row, space: only} : row)
-		})
+		}
 	} catch (error) {
 		const reason = error instanceof GeoDbError ? error.reason : "error"
 		if (reason === "unmapped_space") return {result: "unsupported", reason: "unmapped_space"}

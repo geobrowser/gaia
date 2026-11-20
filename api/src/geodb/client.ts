@@ -100,7 +100,7 @@ export type GeoDbCardClient = {
 	 */
 	readRelationClaims?(args: {geoSpaceId: string; entityId: string; timeoutMs?: number}): Promise<GeoCardRow[]>
 	readCardSpaces?(args: {
-		geoSpaceIds: string[]
+		geoSpaceIds: GeoSpaceScope
 		entityId: string
 		names?: boolean
 		/** This read's timeout in ms, in place of the pool's: a shadow read wider than the serving path's budget. */
@@ -114,7 +114,7 @@ export type GeoDbCardClient = {
 	 * more are read as several, in parallel. Needs a store from geo-db 8df213cbac or later, which an older one refuses.
 	 * Absent on a client that cannot do it.
 	 */
-	readCards?(args: {geoSpaceIds: string[]; entityIds: string[]; names?: boolean}): Promise<GeoCardRow[]>
+	readCards?(args: {geoSpaceIds: GeoSpaceScope; entityIds: string[]; names?: boolean}): Promise<GeoCardRow[]>
 	/**
 	 * The Spaces among `geoSpaceIds` that hold at least one active statement of `entityId` (`.args.holders = true`, geo-db
 	 * ISS-581-803), ascending by Space id, one read in place of a card read a Space. At most 4096 are answered, else the
@@ -122,7 +122,7 @@ export type GeoDbCardClient = {
 	 * with `client_failed`). Absent on a client that cannot do it.
 	 */
 	readHolders?(args: {
-		geoSpaceIds: string[]
+		geoSpaceIds: GeoSpaceScope
 		entityId: string
 		timeoutMs?: number
 		/**
@@ -145,7 +145,7 @@ export type GeoDbCardClient = {
 	 * Spaces, one row a referring statement. At most `limit` rows come back, so `limit` rows means there may be
 	 * more. Absent on a client that cannot do it.
 	 */
-	readBacklinks?(args: {geoSpaceIds: string[]; entityId: string; limit: number}): Promise<GeoBacklinkRow[]>
+	readBacklinks?(args: {geoSpaceIds: GeoSpaceScope; entityId: string; limit: number}): Promise<GeoBacklinkRow[]>
 	/**
 	 * One page of the entities of a type ordered by a property (`entities` root, `.order` with `.pick` and `.ties = .entity`),
 	 * across the Spaces named: the rows of the order's property, the page's entities in order, `first` of them at most.
@@ -216,7 +216,7 @@ export const MAX_TYPE_SCAN = 4096
 export const MAX_TYPE_SCAN_TYPES = 32
 
 export type EntitiesPageRequest = {
-	geoSpaceIds: string[]
+	geoSpaceIds: GeoSpaceScope
 	typeId: string
 	/** The property the page is ordered by (32 hex digits). */
 	field: string
@@ -235,6 +235,23 @@ export const MAX_BACKLINKS = 4096
 
 /** Most Spaces one multi-Space line may name (geo-db's vector bound). */
 export const MAX_LINE_SPACES = 1024
+
+/**
+ * The Spaces a line reads: a list (1 to `MAX_LINE_SPACES`), or `"every"` for the `*` line, geo-db's `every_space` scope
+ * (plan 10.13): every Space the serve holds in one read with one pin, one claim and no vector bound. A read that means
+ * "every Space" sends `"every"` rather than splitting the list into lines (geo-db DR-177-583).
+ */
+export type GeoSpaceScope = string[] | "every"
+
+/** The line's scope cell and whether its rows name their Space, or a `bad_request` for a list geo-db would refuse. */
+function scopeCell(geoSpaceIds: GeoSpaceScope): {cell: string; multi: boolean} | GeoDbError {
+	if (geoSpaceIds === "every") return {cell: "*", multi: true}
+	if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+		return new GeoDbError("bad_request", "1 to 1024 space ids")
+	if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+		return new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+	return {cell: geoSpaceIds.join(","), multi: geoSpaceIds.length > 1}
+}
 
 /** The most rows one `entity-versions` pipe line may ask for (geo-db `tools/client.zig`). */
 export const MAX_ENTITY_VERSIONS = 4096
@@ -1005,18 +1022,17 @@ export function createPipeGeoDbClient(
 			)
 		},
 		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs, relations = false}) {
-			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+			const scope = scopeCell(geoSpaceIds)
+			if (!HEX32.test(entityId))
 				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
-			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
-				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			if (scope instanceof GeoDbError) return Promise.reject(scope)
 			// One Space prints a bare statement id, several print `<space>:<statement>`: only a list of two or
-			// more is the multi-Space form.
-			const spaces = geoSpaceIds.length > 1
+			// more (or the `*` line) is the multi-Space form.
 			return submit(
-				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names, relations})}\n`,
+				`${scope.cell}\t${cardDocument(entityId, {names, relations})}\n`,
 				entityId,
 				names,
-				spaces,
+				scope.multi,
 				false,
 				false,
 				false,
@@ -1024,24 +1040,22 @@ export function createPipeGeoDbClient(
 			)
 		},
 		async readCards({geoSpaceIds, entityIds, names = false}) {
-			if (entityIds.length === 0 || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
-				throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
-			if (!entityIds.every((id) => HEX32.test(id)) || !geoSpaceIds.every((id) => HEX32.test(id)))
+			const scope = scopeCell(geoSpaceIds)
+			if (entityIds.length === 0) throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
+			if (scope instanceof GeoDbError) throw scope
+			if (!entityIds.every((id) => HEX32.test(id)))
 				throw new GeoDbError("bad_request", "ids must be 32 hex digits")
-			if (new Set(geoSpaceIds).size !== geoSpaceIds.length)
-				throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
 			const distinct = [...new Set(entityIds)]
 			const chunks: string[][] = []
 			for (let at = 0; at < distinct.length; at += MAX_CARD_IDS)
 				chunks.push(distinct.slice(at, at + MAX_CARD_IDS))
-			const spaces = geoSpaceIds.length > 1
 			const answers = await Promise.all(
 				chunks.map((chunk) =>
 					submit(
-						`${geoSpaceIds.join(",")}\t${cardsDocument(chunk, {names})}\n`,
+						`${scope.cell}\t${cardsDocument(chunk, {names})}\n`,
 						NO_ENTITY,
 						names,
-						spaces,
+						scope.multi,
 						false,
 						false,
 						true,
@@ -1051,15 +1065,14 @@ export function createPipeGeoDbClient(
 			return answers.flat()
 		},
 		async readHolders({geoSpaceIds, entityId, timeoutMs, ignoreTimeOnly = false}) {
-			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
-				throw new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids")
-			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
-				throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			const scope = scopeCell(geoSpaceIds)
+			if (!HEX32.test(entityId)) throw new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids")
+			if (scope instanceof GeoDbError) throw scope
 			const rows = await submit(
-				`${geoSpaceIds.join(",")}\t${holdersDocument(entityId)}\n`,
+				`${scope.cell}\t${holdersDocument(entityId)}\n`,
 				entityId,
 				false,
-				geoSpaceIds.length > 1,
+				scope.multi,
 				false,
 				false,
 				false,
@@ -1105,29 +1118,24 @@ export function createPipeGeoDbClient(
 			return rows as unknown as GeoVersionRow[]
 		},
 		readBacklinks({geoSpaceIds, entityId, limit}) {
-			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+			const scope = scopeCell(geoSpaceIds)
+			if (!HEX32.test(entityId))
 				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
-			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
-				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			if (scope instanceof GeoDbError) return Promise.reject(scope)
 			if (!Number.isInteger(limit) || limit < 1 || limit > MAX_BACKLINKS)
 				return Promise.reject(new GeoDbError("bad_request", `backlinks limit must be 1 to ${MAX_BACKLINKS}`))
-			const spaces = geoSpaceIds.length > 1
-			const line = `${geoSpaceIds.join(",")}\t${cardDocument(entityId, {backlinks: limit})}\n`
-			return submit(line, entityId, false, spaces, true) as Promise<GeoBacklinkRow[]>
+			const line = `${scope.cell}\t${cardDocument(entityId, {backlinks: limit})}\n`
+			return submit(line, entityId, false, scope.multi, true) as Promise<GeoBacklinkRow[]>
 		},
 		readEntitiesPage({geoSpaceIds, ...request}) {
-			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
-				return Promise.reject(new GeoDbError("bad_request", "1 to 1024 space ids"))
-			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
-				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			const scope = scopeCell(geoSpaceIds)
+			if (scope instanceof GeoDbError) return Promise.reject(scope)
 			if (!HEX32.test(request.typeId) || !HEX32.test(request.field))
 				return Promise.reject(new GeoDbError("bad_request", "type and field ids must be 32 hex digits"))
 			if (!Number.isInteger(request.first) || request.first < 1 || request.first > MAX_PAGE)
 				return Promise.reject(new GeoDbError("bad_request", `a page asks for 1 to ${MAX_PAGE} entities`))
-			const line = `${geoSpaceIds.join(",")}\t${entitiesPageDocument(request)}\n`
-			return submit(line, NO_ENTITY, false, geoSpaceIds.length > 1, false, true) as unknown as Promise<
-				GeoPageRow[]
-			>
+			const line = `${scope.cell}\t${entitiesPageDocument(request)}\n`
+			return submit(line, NO_ENTITY, false, scope.multi, false, true) as unknown as Promise<GeoPageRow[]>
 		},
 		readTypeScan({geoSpaceIds, ...request}) {
 			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

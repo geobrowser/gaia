@@ -64,7 +64,7 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
-import {GeoDbError, isHoldersUnknownArgument, MAX_LINE_SPACES} from "../geodb/client"
+import {GeoDbError, type GeoSpaceScope, isHoldersUnknownArgument, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbRelationClaims, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
@@ -1317,7 +1317,7 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	entitiesBatch?: boolean
 	/** Accept the Postgres-computed vote scores (`upvotes` ..) in the light `entities` shadow, uncompared (`GEODB_DERIVED_FIELDS_SHADOW`). */
 	derivedFields?: boolean
-	/** Split an every-Space read over more than MAX_EVERY_SPACES loaded Spaces into several lines (`GEODB_EVERY_SPACE_CHUNKS`). */
+	/** Read every Space in the `every_space` scope when more than MAX_EVERY_SPACES are loaded (`GEODB_EVERY_SPACE_CHUNKS`). */
 	everySpaceChunks?: boolean
 	/** Timeout in ms of an every-Space read, in place of the pool's (`GEODB_EVERY_SPACE_TIMEOUT_MS`). */
 	everySpaceTimeoutMs?: number
@@ -1494,21 +1494,23 @@ export function createHoldersGate(options: {cooldownMs?: number; now?: () => num
  * is not retried every read). Every other failure (a dead pipe, a timeout, an overloaded pool, a malformed row,
  * another refusal) throws, as the card read it replaces would, and the caller counts it as failed.
  */
-async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines: string[][], label: string) {
+async function readHolderSpaces(
+	deps: EntityShadowDeps,
+	entityId: string,
+	scope: GeoSpaceScope,
+	spaces: string[],
+	label: string,
+) {
 	const readHolders = deps.geoDb.readHolders?.bind(deps.geoDb)
 	const gate = deps.holders
 	if (!gate || !readHolders || !gate.allowed()) return null
-	let answers: string[][]
+	let holders: string[]
 	try {
-		answers = await Promise.all(
-			lines.map((line) =>
-				readHolders({
-					geoSpaceIds: line,
-					entityId: conformingId("entity", entityId),
-					...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
-				}),
-			),
-		)
+		holders = await readHolders({
+			geoSpaceIds: scope,
+			entityId: conformingId("entity", entityId),
+			...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
+		})
 	} catch (error) {
 		// Only the old serve's refusal of the argument means "read without it". A dead pipe, a timeout, an overload,
 		// a malformed row or any other refusal is a failed read, and the caller counts it so.
@@ -1517,8 +1519,7 @@ async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines:
 		deps.log.warn(`${label} serve does not know holders; reading every Space`, {entityId, error: String(error)})
 		return null
 	}
-	const asked = new Set(lines.flat())
-	const holders = answers.flat()
+	const asked = new Set(spaces)
 	if (holders.some((space) => !asked.has(space))) {
 		gate.refused()
 		deps.log.warn(`${label} holders lookup answered an unrequested space; reading every Space`, {entityId})
@@ -1529,6 +1530,15 @@ async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines:
 
 /** Most Spaces one every-Space read names: geo-db's `MAX_SOURCES`, past which it refuses the request. */
 export const MAX_EVERY_SPACES = 1024
+
+/**
+ * The scope of a read that means "every Space geo-db has loaded": the list while it fits one line, else the
+ * `every_space` scope (`"every"`), which is one read with one pin and one claim where the list would be two lines
+ * holding two claims (geo-db DR-177-583). An explicit vector that is not "every Space" is split by its caller instead.
+ */
+export function scopeOfSpaces(spaces: string[]): GeoSpaceScope {
+	return spaces.length > MAX_EVERY_SPACES ? "every" : spaces
+}
 
 /**
  * Reads the card of `entityId` across every Space geo-db has loaded, in one pipe line, for an answer that does
@@ -1550,20 +1560,17 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
 	if (spaces.length > MAX_EVERY_SPACES && deps.everySpaceChunks !== true)
 		return {ok: false, result: "unsupported", reason: "many_spaces"}
-	const chunked = (all: string[]): string[][] => {
-		const out: string[][] = []
-		for (let at = 0; at < all.length; at += MAX_EVERY_SPACES) out.push(all.slice(at, at + MAX_EVERY_SPACES))
-		return out
-	}
-	let lines = chunked(spaces)
-	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(lines.length))
+	// Past one line's Spaces the read means "every Space", so it asks for the `every_space` scope: one read with one
+	// pin and one claim, not two lines holding two (geo-db DR-177-583). Up to one line it names the Spaces as before.
+	let scope = scopeOfSpaces(spaces)
+	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
 	const rows: GeoCardRow[] = []
 	try {
-		// With the holders lookup, the card is read only in the Spaces that hold the entity (at most as many lines as
-		// the full read, so the budget taken above covers both reads).
-		const holders = await readHolderSpaces(deps, entityId, lines, label)
+		// With the holders lookup, the card is read only in the Spaces that hold the entity (the budget taken above
+		// covers both reads).
+		const holders = await readHolderSpaces(deps, entityId, scope, spaces, label)
 		if (holders) {
 			if (holders.length === 0) {
 				observeGeoDbRead((performance.now() - started) / 1000, "ok")
@@ -1575,26 +1582,17 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 					ms: Math.round(performance.now() - started),
 				}
 			}
-			lines = chunked(holders)
+			scope = scopeOfSpaces(holders)
 		}
-		// The lines go out together: every one holds a token of `everySpaceBudget`, taken above, so the read's
-		// width is the budget's, and the whole read waits for its slowest line (each line's own timeout bounds it).
-		// `Promise.all` keeps the lines' order, so the rows concatenate as the serial walk's did.
-		const answers = await Promise.all(
-			lines.map((line) =>
-				readCardSpaces({
-					geoSpaceIds: line,
-					entityId: conformingId("entity", entityId),
-					names: true,
-					...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
-				}),
-			),
-		)
-		lines.forEach((line, i) => {
-			// A one-Space line prints bare statement ids, so its rows name no Space.
-			const only = line.length === 1 ? line[0] : undefined
-			for (const row of answers[i] ?? []) rows.push(only && row.space === undefined ? {...row, space: only} : row)
+		const answer = await readCardSpaces({
+			geoSpaceIds: scope,
+			entityId: conformingId("entity", entityId),
+			names: true,
+			...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
 		})
+		// A one-Space line prints bare statement ids, so its rows name no Space.
+		const only = Array.isArray(scope) && scope.length === 1 ? scope[0] : undefined
+		for (const row of answer) rows.push(only && row.space === undefined ? {...row, space: only} : row)
 		observeGeoDbRead((performance.now() - started) / 1000, "ok")
 	} catch (error) {
 		observeGeoDbRead((performance.now() - started) / 1000, "error")
@@ -1665,12 +1663,12 @@ export async function readNames(
 	if (!deps.allGeoSpaces || !readCards || ids.length === 0 || ids.length > MAX_NAME_IDS) return null
 	try {
 		const spaces = await deps.allGeoSpaces()
-		if (spaces.length === 0 || spaces.length > MAX_EVERY_SPACES) return null
+		if (spaces.length === 0) return null
 		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1)) return null
 		const started = performance.now()
 		let rows: GeoCardRow[]
 		try {
-			rows = await readCards({geoSpaceIds: spaces, entityIds: ids})
+			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids})
 			observeGeoDbRead((performance.now() - started) / 1000, "ok")
 		} catch (error) {
 			observeGeoDbRead((performance.now() - started) / 1000, "error")

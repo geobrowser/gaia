@@ -61,8 +61,8 @@ export type GeoDbCardConfig = {
 	 */
 	derivedFields?: boolean
 	/**
-	 * Read an every-Space card in lines of at most MAX_LINE_SPACES Spaces when geo-db has loaded more than that, and
-	 * concatenate the rows. Without it such a read is refused `many_spaces`. GEODB_EVERY_SPACE_CHUNKS=on.
+	 * Read "every Space" in geo-db's `every_space` scope (a `*` line, one read) when geo-db has loaded more Spaces than one
+	 * line can name (MAX_LINE_SPACES). Without it such a read is refused `many_spaces`. GEODB_EVERY_SPACE_CHUNKS=on.
 	 */
 	everySpaceChunks?: boolean
 	/**
