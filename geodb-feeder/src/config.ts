@@ -141,17 +141,23 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 	return v
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+/**
+ * `kafka: false` is for one-shot Jobs that never open a Kafka connection (replay-edit): the KAFKA_* variables are then
+ * optional and `config.kafka` carries empty connection fields, which nothing in such a Job reads.
+ */
+export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: {kafka?: boolean} = {}): Config {
+	const needKafka = opts.kafka ?? true
+	const kafkaVar = (name: string): string => (needKafka ? required(env, name) : (env[name] ?? ""))
 	const environment = env.ENVIRONMENT ?? "testnet"
 	const dataDir = env.DATA_DIR ?? "/data"
 	const chunk = Number(env.CHUNK ?? 200)
 	if (!Number.isInteger(chunk) || chunk < 1) throw new Error("CHUNK must be a positive integer")
 	return {
 		kafka: {
-			broker: required(env, "KAFKA_BROKER"),
-			username: required(env, "KAFKA_USERNAME"),
-			password: required(env, "KAFKA_PASSWORD"),
-			caPem: required(env, "KAFKA_SSL_CA_PEM"),
+			broker: kafkaVar("KAFKA_BROKER"),
+			username: kafkaVar("KAFKA_USERNAME"),
+			password: kafkaVar("KAFKA_PASSWORD"),
+			caPem: kafkaVar("KAFKA_SSL_CA_PEM"),
 			topic: env.KAFKA_TOPIC ?? `${environment}.knowledge.edits`,
 			groupId: env.KAFKA_GROUP_ID ?? `geodb-feeder-v1-${environment}`,
 		},

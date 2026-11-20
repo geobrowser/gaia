@@ -7,7 +7,7 @@
  * Dry run unless --apply. Exit 0: dry-run ok or applied. Exit 2: refused (older than the target's newer state, or a
  * chunk that already applied holds an ISS-679-318 pair). `--edit` keys the feeder's dead-letter record
  * (DATA_DIR/feeder/errors.jsonl, read only), which says which chunks never applied; see replayHazard.ts.
- * Env, beyond the feeder's own (geodb-client, DATA_DIR): REPLAY_EDIT_IPFS_GATEWAY (https URL, default
+ * No KAFKA_* variables are needed (loadConfig is called with kafka: false). Env, beyond the feeder's own (geodb-client, DATA_DIR): REPLAY_EDIT_IPFS_GATEWAY (https URL, default
  * https://gateway.mesh3.network/ipfs), GEODB_READER_KEY_PATH (the api's read-only key, used for the safety reads).
  * With --apply the feeder must be scaled to 0: the Job shares its state volume and journals.
  */
@@ -26,7 +26,7 @@ import {Store} from "./state.js"
 async function main(): Promise<void> {
 	const env = process.env
 	const args = parseArgs(process.argv.slice(2))
-	const config = loadConfig(env)
+	const config = loadConfig(env, {kafka: false})
 	const store = new Store(`${config.dataDir}/feeder`)
 	const errorsPath = `${config.dataDir}/feeder/errors.jsonl`
 	const deadLetters = existsSync(errorsPath) ? readFileSync(errorsPath, "utf8") : ""

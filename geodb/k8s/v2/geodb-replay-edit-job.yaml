@@ -5,10 +5,12 @@
 # `updatedAt` newer than the edit's block time, or holds none it can read; and when a chunk that already applied holds
 # one of geo-db ISS-679-318's six non-idempotent intent pairs (applied = not in the feeder's errors.jsonl for `--edit`;
 # see geodb-feeder/src/replayHazard.ts). It reads and writes no Postgres and needs
-# no Kafka. See geodb/RUNBOOK.md §2b-quater and geodb-feeder/src/replayEdit.ts.
+# no Kafka (the entrypoint does not require the KAFKA_* variables). See geodb/RUNBOOK.md §2b-quater and geodb-feeder/src/replayEdit.ts.
 #
 # NOT in deploy-v2: it runs by hand. The first run is a dry run (it needs no stopped feeder); `--apply` needs the
-# feeder scaled to 0, because the Job mounts the feeder's RWO state volume and writes its journals. Placeholders are
+# feeder scaled to 0, because the Job mounts the feeder's RWO state volume and writes its journals. While the feeder
+# runs (the dry run), a preferred podAffinity puts the Job on the feeder's node, since a RWO volume can attach to one
+# node only; with the feeder at 0 the volume is detached and the Job may land on any node. Placeholders are
 # replaced at run time and the Job refuses to start if one is left in:
 #   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__URI__|ipfs://<cid>|" -e "s|__SPACE__|<gaia space id>|" \
 #       -e "s|__BLOCK__|<n>|" -e "s|__CREATED_AT__|<unix seconds>|" -e "s|__EDIT__|<edit id>|" -e "s|__MODE__|--dry-run|" \
@@ -41,6 +43,18 @@ spec:
         runAsUser: 1001
         runAsGroup: 1001
         fsGroup: 1001
+      # The state PVC is ReadWriteOnce. While the feeder pod exists, follow it to its node or the Job hangs in Init
+      # (FailedAttachVolume). Preferred, not required: after `scale --replicas=0` (needed for --apply) no feeder pod
+      # exists and a required term would leave the Job Pending forever.
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: geodb-feeder
       imagePullSecrets:
         - name: geo
       volumes:
@@ -112,6 +126,10 @@ spec:
               containerPort: 9090
               protocol: TCP
           env:
+            # Loading the feeder's journals needs a heap well past node's default: same sizing as geodb-feeder.yaml
+            # (6144 MiB heap under the 7Gi limit below). The default 3Gi limit ran out of memory loading the store.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=6144"
             # The feeder's deployed values (geodb-feeder.yaml, checked live 2026-11-13); the translation must match what the live consumer would write.
             - name: GEODB_ENTITY_TIMES
               value: "1"
@@ -163,7 +181,7 @@ spec:
               memory: "512Mi"
               cpu: "200m"
             limits:
-              memory: "3Gi"
+              memory: "7Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
