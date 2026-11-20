@@ -152,6 +152,13 @@ const uncompared = new Map<string, number>()
 const shapes = new Map<string, number>()
 const mismatchParts = new Map<string, number>()
 const requests = new Map<string, number>()
+const postgresLatency = new Map<string, Histogram>()
+const geodbLatency = new Map<string, Histogram>()
+
+/** Upper bounds in seconds of a shadowed field's PostgreSQL answer and of its geo-db shadow run. */
+export const SHADOW_LATENCY_BUCKETS_SECONDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5] as const
+
+type Histogram = {counts: number[]; sum: number}
 
 /** Most distinct (field, reason, shape) series one process exports; later shapes count as `other`. */
 export const MAX_UNSUPPORTED_SHAPES = 100
@@ -179,6 +186,28 @@ export function recordGatewayMismatchParts(field: string, parts: Iterable<Mismat
 /** Counts a shadowable operation for `field` as it arrives, before the sample decides whether to compare it. */
 export function recordGatewayRequest(field: string): void {
 	bump(requests, field)
+}
+
+function observe(map: Map<string, Histogram>, field: string, seconds: number): void {
+	const histogram = map.get(field) ?? {
+		counts: new Array<number>(SHADOW_LATENCY_BUCKETS_SECONDS.length + 1).fill(0),
+		sum: 0,
+	}
+	const index = SHADOW_LATENCY_BUCKETS_SECONDS.findIndex((edge) => seconds <= edge)
+	const slot = index === -1 ? SHADOW_LATENCY_BUCKETS_SECONDS.length : index
+	histogram.counts[slot] = (histogram.counts[slot] ?? 0) + 1
+	histogram.sum += seconds
+	map.set(field, histogram)
+}
+
+/** Time PostgreSQL (PostGraphile) took to answer one shadowable operation, sampled or not. */
+export function observeGatewayPostgres(field: string, seconds: number): void {
+	observe(postgresLatency, field, seconds)
+}
+
+/** Time one sampled shadow run took: the geo-db read plus the comparison. Observed even when the shadow throws. */
+export function observeGatewayGeoDb(field: string, seconds: number): void {
+	observe(geodbLatency, field, seconds)
 }
 
 export function recordGatewayUnsupported(field: string, reason: UnsupportedReason): void {
@@ -226,6 +255,35 @@ export function renderGatewayMetrics(): string {
 	)
 	for (const field of fields)
 		lines.push(`gaia_api_gateway_shadow_requests_total{field="${field}"} ${requests.get(field) ?? 0}`)
+	for (const [name, help, map] of [
+		[
+			"gaia_api_gateway_shadow_postgres_seconds",
+			"Time PostgreSQL took to answer an operation whose root field has a shadow mounted, by root field. Counted for every such operation, before the sample rate decides whether one is compared.",
+			postgresLatency,
+		],
+		[
+			"gaia_api_gateway_shadow_geodb_seconds",
+			"Time a sampled shadow run took (the geo-db read plus the comparison, a failed or timed-out read included), by root field. Compare with the PostgreSQL series of the same field for the p99 within 2x test.",
+			geodbLatency,
+		],
+	] as const) {
+		lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} histogram`)
+		for (const field of fields) {
+			const histogram = map.get(field) ?? {
+				counts: new Array<number>(SHADOW_LATENCY_BUCKETS_SECONDS.length + 1).fill(0),
+				sum: 0,
+			}
+			let cumulative = 0
+			SHADOW_LATENCY_BUCKETS_SECONDS.forEach((edge, i) => {
+				cumulative += histogram.counts[i] ?? 0
+				lines.push(`${name}_bucket{field="${field}",le="${edge}"} ${cumulative}`)
+			})
+			cumulative += histogram.counts[SHADOW_LATENCY_BUCKETS_SECONDS.length] ?? 0
+			lines.push(`${name}_bucket{field="${field}",le="+Inf"} ${cumulative}`)
+			lines.push(`${name}_sum{field="${field}"} ${histogram.sum}`)
+			lines.push(`${name}_count{field="${field}"} ${cumulative}`)
+		}
+	}
 	lines.push(
 		"# HELP gaia_api_gateway_shadow_failed_total Gateway shadow comparisons whose geo-db read failed (the failed result above), by root field and reason: timeout, client_failed, cooling_down or other.",
 		"# TYPE gaia_api_gateway_shadow_failed_total counter",
@@ -276,5 +334,7 @@ export function __resetGatewayMetricsForTests(): void {
 	shapes.clear()
 	mismatchParts.clear()
 	requests.clear()
+	postgresLatency.clear()
+	geodbLatency.clear()
 	__resetSearchMetricsForTests()
 }
