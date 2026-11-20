@@ -369,6 +369,14 @@ impl Cache {
         }
     }
 
+    /// Create a cache over a caller-supplied storage backend (tests, fault injection).
+    pub fn with_storage(storage: Box<dyn CacheStorage>) -> Self {
+        Cache {
+            storage,
+            blob: None,
+        }
+    }
+
     /// Attach an object-store mirror (tests, or callers that build the store themselves).
     pub fn with_blob_mirror(mut self, mirror: blob_store::Mirror) -> Self {
         self.blob = Some(mirror);
