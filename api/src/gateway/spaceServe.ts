@@ -4,7 +4,7 @@ import {conformingId} from "../geodb/card"
 import {MAX_LINE_SPACES, MAX_TYPE_SCAN} from "../geodb/client"
 import type {GaiaIdsOf} from "../geodb/idMap"
 import {askGeoDb, type CardDeps} from "../geodb/service"
-import {entityRef, idPart, recordEntityId} from "../proposals/governance/recordKey"
+import {entityRef, idPart, recordEntityId, textPart} from "../proposals/governance/recordKey"
 import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
 import {argsOf, fieldsOf, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
 import type {FieldResolver, ResolveResult} from "./gateway"
@@ -38,13 +38,19 @@ import type {FieldResolver, ResolveResult} from "./gateway"
  *   may hold Spaces geo-db has not been fed). `address` and `topicId` need one record read each per Space, so they are served
  *   only for a page of `MAX_SPACES_PER_PAGE` or fewer (else `truncated`); `id` and `type` come from the scans alone.
  * - `page`, `topic`, members, voting settings and the rest decline `selection`: joins and keyed records not read here.
- *   A filter other than the id list (address, `members some`) or any paging declines `filter` / `args`:
- *   geo-db has no Space index to enumerate or reverse-look-up.
+ *   A filter other than the id list or an address (`members some`) or any paging declines `filter` / `args`.
+ * - `spaces(filter: {address: {equalTo | equalToInsensitive: "0x<40 hex>"}})` reads the feeder's reverse index (spaceByAddress,
+ *   keyed by the lowercase address, GEODB_SPACE_BY_ADDRESS) for the one Space it names, then that Space's own address record,
+ *   and answers only when the two agree (`spaceOfAddress`): the index can be stale after an address change. No index record,
+ *   two Spaces, a Space the reverse map does not know or a disagreeing forward record decline `empty` / `legacy_id`.
+ *   PostgreSQL may hold a second Space with the same address; the shadow, not this resolver, would show that.
  * - A Space geo-db has not founded declines `unmapped_space`, and a Space whose system entity is not loaded yet (or
  *   whose kind relation is absent) declines `empty`: PostgreSQL may hold either, so "no such Space" is never inferred.
  *   Because every asked Space must be held, a `spaces` page is the whole answer, in PostGraphile's primary-key order
  *   (undashed lowercase hex sorts like the id's bytes).
  */
+
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 
 export const SPACE_ROOT = "space"
 export const SPACES_ROOT = "spaces"
@@ -71,6 +77,10 @@ export const SPACE_TOPIC_COLUMNS = {
 	topic: "02b0149f64744e4d9ba1574e36e066ad",
 } as const
 
+/** The reverse index (feeder spaceByAddress): keyed by the lowercase address, one column referencing the Space. */
+export const SPACE_BY_ADDRESS_KIND = "87af51da7d7149f4abac0f58bcca4338"
+export const SPACE_BY_ADDRESS_COLUMNS = {space: "510ac26058a54a828ac224f97fe25220"} as const
+
 export type SpaceServeDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	/** The geo-db id of the feeder's `governance` system Space, where the address and topic records live. */
 	systemSpaceOf?: AnySystemSpaceLookup
@@ -88,8 +98,10 @@ type Plan = {
 	root: typeof SPACE_ROOT | typeof SPACES_ROOT
 	key: string
 	fields: {key: string; name: "id" | "type" | "__typename" | "address" | "topicId"}[]
-	/** The Spaces asked for, sorted; null for the unfiltered list. */
+	/** The Spaces asked for, sorted; null for the unfiltered list and for an address lookup. */
 	ids: string[] | null
+	/** `spaces(filter: {address})`: the address asked for and whether the match ignores case. */
+	address?: {value: string; insensitive: boolean}
 }
 
 const decline = (reason: string): ResolveResult => ({ok: false, reason})
@@ -107,6 +119,7 @@ export function planSpaceServe(
 	if (node.directives?.length) throw new Unsupported("directives")
 	const args = argsOf(node, parsed.variables)
 	let ids: string[] | null
+	let address: Plan["address"]
 	if (root === SPACES_ROOT && Object.keys(args).length === 0) {
 		ids = null
 	} else if (root === SPACE_ROOT) {
@@ -116,12 +129,39 @@ export function planSpaceServe(
 		const keys = Object.keys(args)
 		if (keys.length !== 1 || keys[0] !== "filter") throw new Unsupported("args")
 		const filter = args.filter as {id?: {in?: unknown}} | null
-		const clause = filter && typeof filter === "object" && Object.keys(filter).length === 1 ? filter.id : undefined
-		if (!clause || typeof clause !== "object" || Object.keys(clause).length !== 1 || !Array.isArray(clause.in))
+		const byAddress =
+			filter && typeof filter === "object" && Object.keys(filter).length === 1
+				? (filter as {address?: unknown}).address
+				: undefined
+		if (byAddress !== undefined) {
+			const a = byAddress as Record<string, unknown> | null
+			const op = a && typeof a === "object" && Object.keys(a).length === 1 ? Object.keys(a)[0] : undefined
+			const value = op ? a?.[op] : undefined
+			if (
+				(op !== "equalTo" && op !== "equalToInsensitive") ||
+				typeof value !== "string" ||
+				!ADDRESS_RE.test(value)
+			)
+				throw new Unsupported("filter")
+			address = {value, insensitive: op === "equalToInsensitive"}
+		}
+		const clause = address
+			? undefined
+			: filter && typeof filter === "object" && Object.keys(filter).length === 1
+				? filter.id
+				: undefined
+		if (
+			!address &&
+			(!clause || typeof clause !== "object" || Object.keys(clause).length !== 1 || !Array.isArray(clause.in))
+		)
 			throw new Unsupported("filter")
-		if (clause.in.length === 0) throw new Unsupported("filter")
-		ids = [...new Set(clause.in.map(uuidArg))].sort()
-		if (ids.length > MAX_SPACES_PER_PAGE) throw new Unsupported("truncated")
+		if (address) ids = null
+		else {
+			const list = (clause as {in: unknown[]}).in
+			if (list.length === 0) throw new Unsupported("filter")
+			ids = [...new Set(list.map(uuidArg))].sort()
+			if (ids.length > MAX_SPACES_PER_PAGE) throw new Unsupported("truncated")
+		}
 	}
 	if (!node.selectionSet) throw new Unsupported("selection")
 	const fields: Plan["fields"] = []
@@ -136,7 +176,7 @@ export function planSpaceServe(
 			fields.push({key: responseKeyOf(field), name})
 		else throw new Unsupported("selection")
 	}
-	return {root, key: responseKeyOf(node), fields, ids}
+	return {root, key: responseKeyOf(node), fields, ids, ...(address ? {address} : {})}
 }
 
 /** `Personal` / `DAO` from the card of a Space's system entity, or null when the kind relation is absent or ambiguous. */
@@ -213,6 +253,42 @@ async function listSpaces(
 	return [...kinds].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
+/**
+ * The Space whose address is asked, from the reverse index and the Space's own address record, or the decline. The index
+ * is never answered from alone: an address that changed leaves the old address's record pointing at the Space, and a
+ * second Space taking an address replaces the first's entry, so the Space's own (forward) record must hold the address
+ * asked for (case-insensitively, or exactly for `equalTo`). Anything else declines `empty`: PostgreSQL may hold it.
+ */
+async function spaceOfAddress(
+	deps: SpaceServeDeps,
+	governance: string,
+	ask: {value: string; insensitive: boolean},
+): Promise<ResolveResult | string> {
+	const index = await deps.geoDb.readCard({
+		geoSpaceId: governance,
+		entityId: recordEntityId(SPACE_BY_ADDRESS_KIND, [textPart(ask.value.toLowerCase())]),
+	})
+	const refs = [...new Set(index.filter((r) => r.prop === SPACE_BY_ADDRESS_COLUMNS.space).map((r) => r.raw))]
+	if (refs.length !== 1) return decline("empty")
+	if (!deps.gaiaIdsOf) return decline("legacy_id")
+	const space = (await deps.gaiaIdsOf(refs))?.get(refs[0] as string)
+	if (!space) return decline("legacy_id")
+	const forward = await deps.geoDb.readCard({
+		geoSpaceId: governance,
+		entityId: recordEntityId(SPACE_ADDRESS_KIND, [idPart(space)]),
+	})
+	let held: string | null | undefined
+	try {
+		held = recordColumn(forward, SPACE_ADDRESS_COLUMNS.space, space, SPACE_ADDRESS_COLUMNS.address)
+	} catch (error) {
+		if (error instanceof Ambiguous) return decline("empty")
+		throw error
+	}
+	if (!held) return decline("empty")
+	if (ask.insensitive ? held.toLowerCase() !== ask.value.toLowerCase() : held !== ask.value) return decline("empty")
+	return space
+}
+
 export function createSpaceResolver(deps: SpaceServeDeps, root: typeof SPACE_ROOT | typeof SPACES_ROOT): FieldResolver {
 	return async ({params, document, signal}) => {
 		let plan: Plan
@@ -225,19 +301,25 @@ export function createSpaceResolver(deps: SpaceServeDeps, root: typeof SPACE_ROO
 		const wantAddress = plan.fields.some((f) => f.name === "address")
 		const wantTopic = plan.fields.some((f) => f.name === "topicId")
 		let governance: string | null = null
-		if (wantAddress || wantTopic) {
+		if (wantAddress || wantTopic || plan.address) {
 			governance = (await deps.systemSpaceOf?.("governance")) ?? null
 			if (!governance) return decline("not_enabled")
 		}
+		let asked: string[] | null = plan.ids
+		if (plan.address && governance) {
+			const found = await spaceOfAddress(deps, governance, plan.address)
+			if (typeof found !== "string") return found
+			asked = [found]
+		}
 		const items: Record<string, unknown>[] = []
 		let known: Map<string, "PERSONAL" | "DAO"> | null = null
-		if (plan.ids === null) {
+		if (asked === null) {
 			const listed = await listSpaces(deps, signal)
 			if (!Array.isArray(listed)) return listed
 			if ((wantAddress || wantTopic) && listed.length > MAX_SPACES_PER_PAGE) return decline("truncated")
 			known = new Map(listed)
 		}
-		for (const id of plan.ids ?? [...(known?.keys() ?? [])]) {
+		for (const id of asked ?? [...(known?.keys() ?? [])]) {
 			let type: "PERSONAL" | "DAO" | null
 			if (known) type = known.get(id) ?? null
 			else {

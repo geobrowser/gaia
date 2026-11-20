@@ -112,6 +112,9 @@ spec:
               value: "1"
             - name: GEODB_SPACE_ADDRESSES
               value: "1"
+            # Set "1" to write the reverse index (spaceByAddress) with the address records; see geodb-feeder.yaml.
+            - name: GEODB_SPACE_BY_ADDRESS
+              value: "0"
             - name: ENVIRONMENT
               value: testnet
             - name: KAFKA_GROUP_ID

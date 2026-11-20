@@ -15,5 +15,5 @@ mainKeyedBackfill({
 	name: "space_addresses",
 	refuse: (config) => (spaceAddressesKeyedEnabled(config) ? null : "GEODB_RECORD_KEYS=1 and GEODB_SPACE_ADDRESSES=1 are both required"),
 	offsetsDir: spaceAddressesOffsetsDir,
-	run: (deps, pg, progress) => backfillSpaceAddresses(deps, readSpaceAddressRows(pg), progress),
+	run: (deps, pg, progress, config) => backfillSpaceAddresses({...deps, byAddress: config.spaceAddresses.byAddress}, readSpaceAddressRows(pg), progress),
 })

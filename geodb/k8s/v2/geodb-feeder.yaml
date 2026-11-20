@@ -216,6 +216,11 @@ spec:
             # backfill Job (geodb-space-addresses-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_ADDRESSES
               value: "1"
+            # Also write the address -> Space reverse index (spaceByAddress) for the gateway's spaces(filter: {address}).
+            # Needs GEODB_SPACE_ADDRESSES. OFF until the space-addresses backfill Job has run with it on, feeder at 0
+            # (RUNBOOK §2c-duodecies).
+            - name: GEODB_SPACE_BY_ADDRESS
+              value: "0"
             # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
             # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.

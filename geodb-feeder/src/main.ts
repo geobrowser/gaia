@@ -445,6 +445,7 @@ async function main(config: Config): Promise<void> {
 					lock,
 					beat: async () => {},
 					allowPut: true,
+					byAddress: config.spaceAddresses.byAddress,
 					systemSpaces,
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(spaceAddressesOffsetsDir(config.dataDir)),
