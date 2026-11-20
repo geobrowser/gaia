@@ -107,6 +107,7 @@ import {createReplayPairsRouter} from "./src/geodb/replayPairs"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
+import {createSearchRelationShadow, readSearchRelationShadowConfig} from "./src/geodb/searchRelationShadow"
 import {readServeGateConfig} from "./src/geodb/serveGate"
 import {
 	createPostgresTypeCountsSource,
@@ -1097,7 +1098,11 @@ const graphqlHandler = createGateway(gatewayDeps)
 // the same shadows with the sample rate forced to 1, so their gaia_api_gateway_shadow_total series fill without client traffic.
 // It never touches a request and never serves: no resolvers or observers, only the shadows.
 const gatewayProbeConfig = readGatewayProbeConfig(process.env)
-if (gatewayProbeConfig.enabled && gatewayConfig.mode === "on") {
+// GEODB_SEARCH_RELATION_SHADOW (default ON; 0 / off / false disables) does the same for `search`, `searchConnection` and `relation`
+// on a timer: a few real entity names and relation ids from Postgres, sent through the same probe gateway, so the existing shadows
+// count them into gaia_api_gateway_shadow_total. Background only; reads stay on Postgres (see geodb/searchRelationShadow.ts).
+const searchRelationShadowConfig = readSearchRelationShadowConfig(process.env)
+if ((gatewayProbeConfig.enabled || searchRelationShadowConfig.enabled) && gatewayConfig.mode === "on") {
 	const probeGateway = createGateway({
 		...gatewayDeps,
 		config: {...gatewayConfig, shadowSampleRate: 1},
@@ -1105,12 +1110,10 @@ if (gatewayProbeConfig.enabled && gatewayConfig.mode === "on") {
 		observers: undefined,
 		random: () => 0,
 	})
-	createGatewayProbe({
-		config: gatewayProbeConfig,
-		db,
-		send: (request) => probeGateway(request, {requestId: "gateway-probe"}),
-		log,
-	}).start()
+	const probeSend = (request: Request) => probeGateway(request, {requestId: "gateway-probe"})
+	createGatewayProbe({config: gatewayProbeConfig, db, send: probeSend, log}).start()
+	if (searchRelationShadowConfig.enabled)
+		createSearchRelationShadow({config: searchRelationShadowConfig, db, send: probeSend, log}).start()
 }
 if (gatewayConfig.mode === "on")
 	log.info("GraphQL gateway enabled", {fields: Object.fromEntries(gatewayConfig.fieldModes)})

@@ -25,6 +25,8 @@ GEODB_FEEDER_TEST_PG_URL  test-only variable, no workload reads it
 GEODB_FEED_EXPERIMENT_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_FEED_RUNS_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_META_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SEARCH_RELATION_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_SEARCH_RELATION_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_FOR_YOU_CONFIG_SHADOW_INTERVAL_MS  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_GOVERNANCE_QUERIES_SHADOW_LIST_MAX  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_GOVERNANCE_QUERIES_SHADOW_MAX_IN_FLIGHT  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
