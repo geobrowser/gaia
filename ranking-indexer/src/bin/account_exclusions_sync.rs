@@ -175,6 +175,15 @@ async fn voters(
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
+    let job_metrics = ranking_indexer::job_metrics::JobMetrics::install(
+        "ranking-indexer-account-exclusions-sync",
+    );
+    let result = job_main().await;
+    job_metrics.push_at_exit().await;
+    result
+}
+
+async fn job_main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
