@@ -1,0 +1,143 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  # Series exist only once a field is served (mode on). With every field off or in shadow nothing is exported.
+  - name: silent when no gateway serve series exist
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="gaia", job="api"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
+
+  # Registered at zero when the field is switched on, before any traffic.
+  - name: silent at zero
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="geodb"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="postgres"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="entity", reason="timeout"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
+
+  # search: 10 operations a minute, 3 of them fall back on a geo-db timeout, 7 are answered by geo-db.
+  # entity: 10 a minute, 5 of them decline because the query is not one geo-db answers (args): not a failure.
+  # relations: healthy.
+  - name: failure-class fallback over 10 percent fires for that field only
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="geodb"}'
+        values: '0+7x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="postgres"}'
+        values: '0+3x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="timeout"}'
+        values: '0+3x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="geodb"}'
+        values: '0+5x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="postgres"}'
+        values: '0+5x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="entity", reason="args"}'
+        values: '0+5x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="relations", source="geodb"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="relations", source="postgres"}'
+        values: '0+0x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="relations", reason="error"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - {eval_time: 4m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GatewayServeFallbackHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+              field: search
+            exp_annotations:
+              summary: More than 10% of served search operations are falling back to Postgres on a geo-db failure
+              description: >-
+                The field is in mode on but geo-db is failing queries it could have answered (timeout,
+                overloaded, client_failed, bad_request, error, id_map). Break it down with
+                sum by (reason) (increase(gaia_api_gateway_serve_fallback_total{field="search"}[15m])).
+                RUNBOOK section 13.
+
+  # Under 20 operations in the window the ratio is noise: 1 a minute, all failing.
+  - name: failure-class fallback under 20 operations stays silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="postgres"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="geodb"}'
+        values: '0+0x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="error"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+
+  # entities: 10 served a minute, every one in the 0.25 to 0.5 s bucket, so p99 is over the 250 ms serve timeout.
+  # search: 10 a minute, all under 10 ms. relations: slow but 1 a minute, under the floor of 20.
+  # entity: slow, but only the fallback outcome (the PostgreSQL hand-off is not a served latency).
+  - name: served p99 over the serve timeout fires for that field only
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entities", outcome="served", le="0.01"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entities", outcome="served", le="0.25"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entities", outcome="served", le="0.5"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entities", outcome="served", le="+Inf"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="search", outcome="served", le="0.01"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="search", outcome="served", le="0.25"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="search", outcome="served", le="0.5"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="search", outcome="served", le="+Inf"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="relations", outcome="served", le="0.25"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="relations", outcome="served", le="0.5"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="relations", outcome="served", le="+Inf"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entity", outcome="fallback", le="0.25"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entity", outcome="fallback", le="0.5"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", field="entity", outcome="fallback", le="+Inf"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_count{namespace="gaia", job="api", field="entities", outcome="served"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_count{namespace="gaia", job="api", field="search", outcome="served"}'
+        values: '0+10x60'
+      - series: 'gaia_api_gateway_serve_seconds_count{namespace="gaia", job="api", field="relations", outcome="served"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_serve_seconds_count{namespace="gaia", job="api", field="entity", outcome="fallback"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - {eval_time: 4m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GatewayServeLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+              field: entities
+            exp_annotations:
+              summary: Served entities p99 is over the 250 ms serve timeout
+              description: >-
+                The gateway's time on the field before answering from geo-db has a p99 above the serve
+                timeout (GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS, default 250), so operations are near the point
+                where they hand over to Postgres. See histogram_quantile(0.99, sum by (le)
+                (rate(gaia_api_gateway_serve_seconds_bucket{field="entities", outcome="served"}[15m]))).
+                RUNBOOK section 13.

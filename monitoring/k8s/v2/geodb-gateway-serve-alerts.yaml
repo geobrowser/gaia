@@ -1,0 +1,70 @@
+# Alerts for GraphQL root fields the gateway serves from geo-db (GRAPHQL_GATEWAY_FIELDS field=on).
+# geodb-serve-fallback-alerts.yaml covers gaia_api_geodb_serve_* families only; the gateway's own
+# series are gaia_api_gateway_served_total, gaia_api_gateway_serve_fallback_total{field,reason} and
+# gaia_api_gateway_serve_seconds{field,outcome} (api/src/gateway/serveMetrics.ts).
+#
+# The series exist only once a field is served, so both rules stay silent with every field off or in
+# shadow: no samples, and the floor of 20 operations needs real traffic.
+#
+#   GatewayServeFallbackHigh  failure-class fallbacks over 10% of at least 20 operations in 15m, per field
+#   GatewayServeLatencyHigh   served p99 over the 250 ms serve timeout, at least 20 served in 15m, per field
+#
+# Failure-class reasons are geo-db failing a query it could have answered: timeout, overloaded,
+# client_failed, bad_request, error, and id_map (the reverse id map could not be read). The other
+# reasons (args, selection, filter and so on) are the translator declining a query shape by design and
+# are not alerted here; ranked_read_fallback has its own counters (GeoDbRankedReadsServeFallbackHigh).
+# The denominator is served_total over both sources: every operation of a served field lands in
+# exactly one of them.
+#
+# Tests: monitoring/k8s/v2/tests/run.sh.
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-gateway-serve-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-gateway-serve
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.gateway-serve
+      rules:
+        - alert: GatewayServeFallbackHigh
+          expr: |
+            sum by (field) (increase(gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", reason=~"timeout|overloaded|client_failed|bad_request|error|id_map"}[15m]))
+              / sum by (field) (increase(gaia_api_gateway_served_total{namespace="gaia", job="api"}[15m]))
+              > 0.1
+            and
+            sum by (field) (increase(gaia_api_gateway_served_total{namespace="gaia", job="api"}[15m])) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: More than 10% of served {{ $labels.field }} operations are falling back to Postgres on a geo-db failure
+            description: >-
+              The field is in mode on but geo-db is failing queries it could have answered (timeout,
+              overloaded, client_failed, bad_request, error, id_map). Break it down with
+              sum by (reason) (increase(gaia_api_gateway_serve_fallback_total{field="{{ $labels.field }}"}[15m])).
+              RUNBOOK section 13.
+
+        - alert: GatewayServeLatencyHigh
+          expr: |
+            histogram_quantile(0.99, sum by (field, le) (rate(gaia_api_gateway_serve_seconds_bucket{namespace="gaia", job="api", outcome="served"}[15m]))) > 0.25
+            and
+            sum by (field) (increase(gaia_api_gateway_serve_seconds_count{namespace="gaia", job="api", outcome="served"}[15m])) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: Served {{ $labels.field }} p99 is over the 250 ms serve timeout
+            description: >-
+              The gateway's time on the field before answering from geo-db has a p99 above the serve
+              timeout (GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS, default 250), so operations are near the point
+              where they hand over to Postgres. See histogram_quantile(0.99, sum by (le)
+              (rate(gaia_api_gateway_serve_seconds_bucket{field="{{ $labels.field }}", outcome="served"}[15m]))).
+              RUNBOOK section 13.
