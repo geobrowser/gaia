@@ -1,0 +1,23 @@
+name: geodb supervisor tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'geodb/supervisor.sh'
+      - 'geodb/test-supervisor.sh'
+      - '.github/workflows/geodb-supervisor-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'geodb/supervisor.sh'
+      - 'geodb/test-supervisor.sh'
+      - '.github/workflows/geodb-supervisor-test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck geodb/supervisor.sh geodb/test-supervisor.sh
+      - run: bash geodb/test-supervisor.sh
