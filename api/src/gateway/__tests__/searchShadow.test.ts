@@ -8,7 +8,7 @@ import {readGatewayConfig} from "../config"
 import {TYPES_PROPERTY} from "../entityShadow"
 import {createGateway} from "../gateway"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
-import {compareRanked, overlapBucket, resultCountBucket} from "../searchMetrics"
+import {compareRanked, judgeCompared, overlapBucket, resultCountBucket} from "../searchMetrics"
 import {
 	analyzeSearchOperation,
 	createSearchShadows,
@@ -143,6 +143,36 @@ describe("ranking metrics", () => {
 	})
 })
 
+describe("judged verdict (ok or degraded) of a compared search", () => {
+	// The rule, from ISS-565-842: a top result that differs but is still inside geo-db's top twenty is the recorded
+	// ranking difference (points 3 and 6), and so is a partial top-ten overlap; only a disagreement the ranking
+	// differences cannot explain is degraded.
+	const pg = ids(10)
+	const other = ids(60).slice(40)
+	it("is ok when the lists agree", () => {
+		expect(compareRanked(pg, pg).verdict).toBe("ok")
+	})
+	it("is ok when top1 differs but PostGraphile's first result is inside geo-db's top twenty (recorded ranking difference)", () => {
+		const geoList = [...other.slice(0, 5), ...pg.slice(0, 1), ...other.slice(5, 14)]
+		const v = compareRanked(pg, geoList)
+		expect(v.top1Same).toBe(false)
+		expect(v.verdict).toBe("ok")
+	})
+	it("is ok when at least three of PostGraphile's top ten are in geo-db's top twenty, even without its first result", () => {
+		const geoList = [...other.slice(0, 10), ...pg.slice(5, 8)]
+		expect(compareRanked(pg, geoList).verdict).toBe("ok")
+	})
+	it("is degraded when PostGraphile's first result is missing and fewer than three of its top ten are present", () => {
+		expect(compareRanked(pg, [...other.slice(0, 10), ...pg.slice(5, 7)]).verdict).toBe("degraded")
+		expect(compareRanked(pg, other.slice(0, 10)).verdict).toBe("degraded")
+	})
+	it("judges only compared searches", () => {
+		expect(compareRanked([], ["a"]).verdict).toBeUndefined()
+		expect(compareRanked(["a"], []).verdict).toBeUndefined()
+		expect(judgeCompared({top1Present: true, recall: 0})).toBe("ok")
+	})
+})
+
 describe("extractRankedIds", () => {
 	it("reads a list and a connection in rank order, conformed, distinct", () => {
 		const plan = {field: "search", key: "search", query: "ada", spaceId: SPACE} as const
@@ -178,6 +208,34 @@ describe("search shadow", () => {
 			"field=search,source=geodb,bucket=10-19": 1,
 		})
 		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
+	})
+
+	it("registers every series for both root fields as soon as the shadows are mounted, before any traffic", () => {
+		setup([])
+		const text = renderGatewayMetrics()
+		for (const field of ["search", "searchConnection"])
+			for (const verdict of ["ok", "degraded"])
+				expect(text).toContain(
+					`gaia_api_gateway_shadow_search_judged_total{field="${field}",verdict="${verdict}"} 0`,
+				)
+		expect(text).toContain('gaia_api_gateway_shadow_search_total{field="searchConnection",outcome="compared"} 0')
+	})
+
+	it("counts a compared search ok or degraded, and an empty side as neither", async () => {
+		const pg = ids(10)
+		const bad = setup(ids(60).slice(40, 50).map(geo))
+		await run(bad.shadows, "search", SEARCH, {data: {search: pg.map((id) => ({id}))}})
+		expect(metric("gaia_api_gateway_shadow_search_judged_total")).toEqual({"field=search,verdict=degraded": 1})
+		const good = setup(pg.map(geo))
+		await run(good.shadows, "searchConnection", CONNECTION, {
+			data: {searchConnection: {nodes: pg.map((id) => ({id}))}},
+		})
+		expect(metric("gaia_api_gateway_shadow_search_judged_total")).toMatchObject({
+			"field=searchConnection,verdict=ok": 1,
+		})
+		const empty = setup([])
+		await run(empty.shadows, "search", SEARCH, {data: {search: [{id: pg[0]}]}})
+		expect(metric("gaia_api_gateway_shadow_search_judged_total")).not.toHaveProperty("field=search,verdict=ok")
 	})
 
 	it("compares a connection through nodes", async () => {
