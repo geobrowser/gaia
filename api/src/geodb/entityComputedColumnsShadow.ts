@@ -15,6 +15,14 @@
  *  - reference_timeout / reference_failed: the Postgres reference query failed (statement timeout, SQLSTATE 57014, or any other
  *    error), which says nothing about geo-db.
  *
+ * `gaia_api_entity_columns_shadow_reason_total{column,reason}` splits each mismatch by cause (one series per mismatching column):
+ *  - near: a numeric value within 1e-6 relative, so a float/numeric rounding artefact and not a different value;
+ *  - counts_differ: one of the five engagement counts differs from Postgres, so geo-db read the entity as un-engaged (or at other
+ *    counts) while Postgres holds votes: the overlay mirror lags or dropped the row. Quality, participation and ranking follow;
+ *  - card_drift: the counts agree and intrinsic_score or ranking_score differs, which only the card terms (property and relation
+ *    counts, created_at) can move: Postgres holds a snapshot older than the card (nothing re-scores on a card edit);
+ *  - unexplained: any other column with equal counts. This is the series to alert on: no known benign cause covers it.
+ *
  * Not shadowed: `last_listed_on`, `listed_on_agenda_id` and `trending_topic_listed_on`. They are live reads over the trending
  * listings, whose twin (`rankedReads/trending.ts`) is already held to the SQL by GEODB_RANKED_READS_SHADOW; geo-db has no
  * Postgres-free source for the rows yet. Entities with no `entity_ranking_scores` row are not sampled either (the SQL returns
@@ -60,6 +68,24 @@ export function compareColumns(
 	) as Record<ScoreColumn, "match" | "mismatch">
 }
 
+export const REASONS = ["near", "counts_differ", "card_drift", "unexplained"] as const
+export type Reason = (typeof REASONS)[number]
+
+const COUNT_COLUMNS = ["agrees", "disagrees", "upvotes", "downvotes", "commenters"] as const
+const CARD_COLUMNS: readonly ScoreColumn[] = ["intrinsic_score", "ranking_score"]
+/** Numeric differences below this are a rounding artefact of the float/numeric text round trip, not a different value. */
+const NEAR = 1e-6
+
+/** Why `column` mismatches for one entity: the cause the evidence in hand supports. Pure; call only for a mismatching column. */
+export function mismatchReason(column: ScoreColumn, pg: Record<ScoreColumn, string | null>, served: ScoreRow): Reason {
+	const twin = scoreColumns(served) as Record<ScoreColumn, ColumnValue>
+	const a = pg[column] === null ? Number.NaN : Number(pg[column])
+	const b = twin[column]
+	if (typeof b === "number" && Number.isFinite(a) && Math.abs(a - b) <= NEAR * Math.max(1, Math.abs(a))) return "near"
+	if (COUNT_COLUMNS.some((c) => !sameColumn(c, pg[c], twin[c]))) return "counts_differ"
+	return CARD_COLUMNS.includes(column) ? "card_drift" : "unexplained"
+}
+
 const hex = (uuid: string) => uuid.replace(/-/g, "").toLowerCase()
 const uuidOfHex = (h: string) =>
 	`${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
@@ -71,9 +97,34 @@ const bump = (column: ScoreColumn, r: Result): void => {
 	counts.set(key, (counts.get(key) ?? 0) + 1)
 }
 
+const reasonCounts = new Map<string, number>()
+const bumpReason = (column: ScoreColumn, r: Reason): void => {
+	const key = `${column}\u0000${r}`
+	reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1)
+}
+
+/** The mismatch cause family; empty until mounted. */
+export function renderEntityColumnsShadowReasonMetrics(): string {
+	if (!active) return ""
+	const lines = [
+		"# HELP gaia_api_entity_columns_shadow_reason_total Mismatching Entity computed columns by column and cause: near (rounding), counts_differ (engagement counts differ: overlay gap), card_drift (stale Postgres snapshot of the card terms), unexplained.",
+		"# TYPE gaia_api_entity_columns_shadow_reason_total counter",
+	]
+	for (const c of SCORE_COLUMNS)
+		for (const r of REASONS)
+			lines.push(
+				`gaia_api_entity_columns_shadow_reason_total{column="${c}",reason="${r}"} ${reasonCounts.get(`${c}\u0000${r}`) ?? 0}`,
+			)
+	return lines.join("\n")
+}
+
 /** Empty until mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
 export function renderEntityColumnsShadowMetrics(): string {
 	if (!active) return ""
+	return `${renderColumnMetrics()}\n${renderEntityColumnsShadowReasonMetrics()}`
+}
+
+function renderColumnMetrics(): string {
 	const lines = [
 		"# HELP gaia_api_entity_columns_shadow_total Sampled Entity computed columns (the entities_* SQL functions over entity_ranking_scores) against the row geo-db serves (DerivedScores), by column and result: match, mismatch (a stale Postgres snapshot is benign), failed (geo-db) or reference_timeout / reference_failed (the Postgres side).",
 		"# TYPE gaia_api_entity_columns_shadow_total counter",
@@ -89,6 +140,7 @@ export function renderEntityColumnsShadowMetrics(): string {
 export function __resetEntityColumnsShadowMetricsForTests(): void {
 	active = false
 	counts.clear()
+	reasonCounts.clear()
 }
 
 const FUNCTION_COLUMNS = sql.raw(SCORE_COLUMNS.map((c) => `public.entities_${c}(e)::text AS ${c}`).join(", "))
@@ -172,6 +224,7 @@ export function createEntityColumnsShadow(deps: {
 				let differs = false
 				for (const c of SCORE_COLUMNS) {
 					bump(c, verdicts[c])
+					if (verdicts[c] === "mismatch") bumpReason(c, mismatchReason(c, expected, row))
 					differs ||= verdicts[c] === "mismatch"
 				}
 				// Counts only: never which entity.

@@ -1923,7 +1923,9 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   from the card and config) and compares column by column: `gaia_api_entity_columns_shadow_total{column,result}` (absent until the
   flag is on): match, mismatch, failed (geo-db side only), reference_timeout (Postgres statement timeout, SQLSTATE 57014) and
   reference_failed (any other Postgres error). A mismatch is benign when the Postgres row is a stale snapshot of a changed card; read
-  the rate. The three listing columns (`last_listed_on`, `listed_on_agenda_id`, `trending_topic_listed_on`) are live reads over
+  the rate. `gaia_api_entity_columns_shadow_reason_total{column,reason}` splits each mismatch: `near` (rounding, under 1e-6
+  relative), `counts_differ` (an engagement count differs: overlay gap), `card_drift` (intrinsic or ranking score with equal counts: stale
+  snapshot) and `unexplained` (alert on this one). The three listing columns (`last_listed_on`, `listed_on_agenda_id`, `trending_topic_listed_on`) are live reads over
   the trending listings: their twin is `rankedReads/trending.ts`, held to the SQL by `GEODB_RANKED_READS_SHADOW`, and geo-db has
   no Postgres-free source for the rows yet, so this shadow does not cover them. An entity with no score row is not sampled (SQL
   gives NULL, geo-db serves a default). The pure mapping is pinned to real plpgsql output by
