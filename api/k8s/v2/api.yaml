@@ -293,6 +293,10 @@ spec:
               value: "engine"
             - name: GEODB_SEARCH_TIMEOUT_MS
               value: "6000"
+            # Serve `search` / `searchConnection` from geo-db (gateway/searchServe.ts) once their GRAPHQL_GATEWAY_FIELDS mode is
+            # "on" too. Explicitly off; the resolver declines not_enabled and PostGraphile answers.
+            - name: GEODB_SEARCH_SERVE
+              value: "off"
             # Shadow a light `entities` page (one Space, one type, no orderBy) with geo-db's `.args.types` scan and compare the ids
             # in order (gaia#1324). Needs serve at c2f9d09cfa or later. Shadow only.
             - name: GEODB_TYPE_SCAN_SHADOW
