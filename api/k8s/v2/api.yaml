@@ -603,6 +603,11 @@ spec:
             # (_INTERVAL_MS, default 5 min): gaia_api_feed_runs_shadow_total{result}. ON; `absent` until the feed-signals-sync mirror has run.
             - name: GEODB_FEED_RUNS_SHADOW
               value: "1"
+            # The meta (indexer cursors) table shadow: Postgres' meta rows against geo-db's cursors collection 10, off the request
+            # path (_INTERVAL_MS, default 5 min; one SELECT over a two-row table plus at most a few derived gets), counted in
+            # gaia_api_gateway_shadow_total{field="metas"}, which no client request ever fed. Code default is on; reads stay on Postgres.
+            - name: GEODB_META_SHADOW
+              value: "1"
             # The per-user readers' twins: one sampled user's group in restricted collection 28 (with collection 23 and the
             # config Space's interest records) against user_topic_weights, and in collection 29 against feed_user_seen
             # (_INTERVAL_MS, default 5 min): gaia_api_private_readers_shadow_total{reader,result}, counts only. ON; needs
