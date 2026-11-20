@@ -35,3 +35,16 @@ describe("freshness", () => {
 		expect(createMetrics().render()).not.toContain('geodb_feeder_apply_seconds_bucket{le="60"}')
 	})
 })
+
+describe("applied message timestamp", () => {
+	it("is a separate gauge family keyed by partition, and leaves the last-applied wall clock alone", () => {
+		const m = createMetrics()
+		m.appliedMessageTimestamp.set({partition: "0"}, 1_700_000_000)
+		m.appliedMessageTimestamp.set({partition: "1"}, 1_700_000_050.5)
+		const text = m.render()
+		expect(text).toContain("# TYPE geodb_feeder_applied_message_timestamp_seconds gauge")
+		expect(line(text, 'geodb_feeder_applied_message_timestamp_seconds{partition="0"}')).toBe("1700000000")
+		expect(line(text, 'geodb_feeder_applied_message_timestamp_seconds{partition="1"}')).toBe("1700000050.5")
+		expect(text).toContain("# TYPE geodb_feeder_last_applied_timestamp_seconds gauge")
+	})
+})

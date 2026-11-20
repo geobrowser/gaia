@@ -79,6 +79,7 @@ export function createMetrics() {
 		appliedBlockPuts: counter("geodb_feeder_applied_block_puts_total", "Puts of the applied-block row (geodb-feeder-applied in cursors), by result (ok, failed)."),
 		lag: gauge("geodb_feeder_consumer_lag", "Messages between the topic head and the last applied offset, by partition."),
 		lastApplied: gauge("geodb_feeder_last_applied_timestamp_seconds", "Unix time the feeder last finished a message."),
+		appliedMessageTimestamp: gauge("geodb_feeder_applied_message_timestamp_seconds", "Kafka timestamp (Unix seconds) of the newest edits-topic message applied to geo-db, by partition. With consumer_lag it gives how far geo-db is behind the topic."),
 		lastOffset: gauge("geodb_feeder_last_applied_offset", "Last applied offset, by partition."),
 		spaces: gauge("geodb_feeder_spaces", "Spaces founded in geo-db."),
 		serveUp: gauge("geodb_feeder_serve_up", "1 while geodb-serve answered the last probe."),

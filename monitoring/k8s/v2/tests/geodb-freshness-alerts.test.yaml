@@ -1,0 +1,69 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  - name: caught up, nothing waiting, is zero behind however old the last message is
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '0x60'
+      - series: 'geodb_feeder_applied_message_timestamp_seconds{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: geodb:feeder_behind_seconds
+        eval_time: 30m
+        exp_samples:
+          - labels: 'geodb:feeder_behind_seconds{}'
+            value: 0
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbBehindPostgres, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbBehindPostgresCritical, exp_alerts: []}
+
+  - name: a stalled writer with messages waiting warns at 2m of lag and goes critical at 10m
+    interval: 1m
+    input_series:
+      # Last applied message was stamped at t=0; the topic then keeps a message waiting from minute 1 on.
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '0 3x59'
+      - series: 'geodb_feeder_applied_message_timestamp_seconds{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: geodb:feeder_behind_seconds
+        eval_time: 5m
+        exp_samples:
+          - labels: 'geodb:feeder_behind_seconds{}'
+            value: 300
+    alert_rule_test:
+      - {eval_time: 3m, alertname: GeoDbBehindPostgres, exp_alerts: []}
+      - eval_time: 6m
+        alertname: GeoDbBehindPostgres
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: geo-db is more than 2 minutes behind the edits topic
+              description: >-
+                Messages are waiting on the edits topic and the newest one the feeder applied was stamped more
+                than 2 minutes ago (geodb:feeder_behind_seconds). A read cutover would serve stale data. Check
+                GeoDbFeederStalled, the feeder log for the repeating error and geodb-0.
+      - {eval_time: 8m, alertname: GeoDbBehindPostgresCritical, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbBehindPostgresCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: geo-db is more than 10 minutes behind the edits topic
+              description: >-
+                Messages are waiting on the edits topic and the newest one the feeder applied was stamped more
+                than 10 minutes ago (geodb:feeder_behind_seconds). Do not flip or keep any read flag on; revert
+                a flipped field first (see the read-cutover runbook), then find the stall.
+
+  - name: a busy but keeping-up feeder with a small lag stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '5x60'
+      - series: 'geodb_feeder_applied_message_timestamp_seconds{namespace="gaia", job="geodb-feeder", pod="f-1", partition="0"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbBehindPostgres, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbBehindPostgresCritical, exp_alerts: []}
