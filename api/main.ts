@@ -36,6 +36,7 @@ import {
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
 import {createRelationsResolver} from "./src/gateway/relationsServe"
+import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
@@ -329,6 +330,10 @@ const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayCon
 const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "entities") === "on"
 // `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
 const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
+// `search` / `searchConnection` =on have their own resolver (gateway/searchServe.ts); it also needs GEODB_SEARCH_SERVE=on (off by default).
+const gatewayServeSearchFields = SEARCH_FIELDS.filter(
+	(field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "on",
+)
 // The ranked reads that GEODB_RANKED_READS_SERVE lists are served at the gateway only when their field is also "on" in
 // GRAPHQL_GATEWAY_FIELDS: two opt-ins, both off by default (gateway/rankedReadsServe.ts). The listing itself is read below, where
 // the serve layer is built, so the env is read here once for the two names.
@@ -354,6 +359,7 @@ const sharedGeoDb =
 	gatewayServeEntity ||
 	gatewayServeEntities ||
 	gatewayServeRelations ||
+	gatewayServeSearchFields.length > 0 ||
 	gatewayServeBestOrder ||
 	gatewayServeTypeCounts
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
@@ -823,6 +829,28 @@ if (sharedGeoDb) {
 			"relations",
 			createRelationsResolver({...sharedGeoDb, gaiaIdsOf: createGaiaIdMap(idMapQuery(db))}),
 		)
+	}
+	if (gatewayServeSearchFields.length > 0) {
+		const searchClient = createCliGeoDbSearchClient(geoDbCardConfig, {
+			...(Number(process.env.GEODB_SEARCH_TIMEOUT_MS) > 0
+				? {timeoutMs: Math.floor(Number(process.env.GEODB_SEARCH_TIMEOUT_MS))}
+				: {}),
+			...(Number(process.env.GEODB_SEARCH_MAX_CONCURRENT) > 0
+				? {maxConcurrent: Math.floor(Number(process.env.GEODB_SEARCH_MAX_CONCURRENT))}
+				: {}),
+		})
+		const searchGaiaIdsOf = createGaiaIdMap(idMapQuery(db))
+		for (const field of gatewayServeSearchFields)
+			gatewayResolvers.set(
+				field,
+				createSearchResolver(field, {
+					geoSpaceOf: sharedGeoDb.geoSpaceOf,
+					search: searchClient,
+					readCards: sharedGeoDb.geoDb.readCards?.bind(sharedGeoDb.geoDb),
+					gaiaIdsOf: searchGaiaIdsOf,
+					enabled: process.env.GEODB_SEARCH_SERVE?.trim().toLowerCase() === "on",
+				}),
+			)
 	}
 	if (gatewayServeBestOrder) {
 		gatewayResolvers.set(

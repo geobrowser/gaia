@@ -62,15 +62,17 @@ describe("planSearchServe", () => {
 		expect(reason("search", S)).toBe("ok")
 		expect(reason("searchConnection", C_)).toBe("ok")
 		expect(
-			reason("search", `query Q($q: String!) { s: search(query: $q, first: 5) { i: id __typename } }`, {q: "ada"}),
+			reason("search", `query Q($q: String!) { s: search(query: $q, first: 5) { i: id __typename } }`, {
+				q: "ada",
+			}),
 		).toBe("ok")
 	})
 	it("names the gap for every other shape", () => {
 		expect(reason("search", `{ search(query: "ada", first: 3) { id name } }`)).toBe("selection")
 		expect(reason("search", `{ search(query: "ada", first: 3) { name } }`)).toBe("selection")
-		expect(reason("searchConnection", `{ searchConnection(query: "ada", first: 3) { totalCount nodes { id } } }`)).toBe(
-			"selection",
-		)
+		expect(
+			reason("searchConnection", `{ searchConnection(query: "ada", first: 3) { totalCount nodes { id } } }`),
+		).toBe("selection")
 		expect(reason("searchConnection", `{ searchConnection(query: "ada", first: 3) { nodes { id name } } }`)).toBe(
 			"selection",
 		)
@@ -81,9 +83,9 @@ describe("planSearchServe", () => {
 		expect(reason("search", `{ search(query: "a", first: 3) { id } }`)).toBe("args")
 		expect(reason("search", `{ search(query: "-ada", first: 3) { id } }`)).toBe("args")
 		expect(reason("search", `{ search(query: "ada", spaceId: "nope", first: 3) { id } }`)).toBe("args")
-		expect(reason("searchConnection", `{ searchConnection(query: "ada", first: 3, filter: {x: 1}) { nodes { id } } }`)).toBe(
-			"filter",
-		)
+		expect(
+			reason("searchConnection", `{ searchConnection(query: "ada", first: 3, filter: {x: 1}) { nodes { id } } }`),
+		).toBe("filter")
 		expect(reason("search", `{ search(query: "ada", first: 3) { id } spaces { id } }`)).toBe("not_single_root")
 		expect(reason("search", `{ __typename search(query: "ada", first: 3) { id } }`)).toBe("not_single_root")
 		expect(reason("search", `{ search(query: "ada", first: 3) @skip(if: false) { id } }`)).toBe("directives")
@@ -181,7 +183,9 @@ describe("createSearchResolver", () => {
 			ok: false,
 			reason: "empty",
 		})
-		const partial = make([A, B], [], {gaiaIdsOf: async (ids) => new Map(ids.filter((i) => i === A).map((i) => [i, i]))})
+		const partial = make([A, B], [], {
+			gaiaIdsOf: async (ids) => new Map(ids.filter((i) => i === A).map((i) => [i, i])),
+		})
 		expect(await createSearchResolver("search", partial.deps)(context("search", S))).toEqual({
 			ok: false,
 			reason: "legacy_id",

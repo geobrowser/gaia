@@ -63,7 +63,7 @@ import {
 export const SEARCH_FIELD = "search"
 export const SEARCH_CONNECTION_FIELD = "searchConnection"
 export const SEARCH_FIELDS = [SEARCH_FIELD, SEARCH_CONNECTION_FIELD] as const
-type SearchField = (typeof SEARCH_FIELDS)[number]
+export type SearchField = (typeof SEARCH_FIELDS)[number]
 
 const MAX_QUERY_LENGTH = 250
 const MIN_QUERY_LENGTH = 2
