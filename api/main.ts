@@ -35,6 +35,12 @@ import {
 } from "./src/gateway/rankedReadsServe"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
+import {
+	createReadSourceSwitch,
+	ENTITY_CARDS_FIELD,
+	kubeConfigMapPatchRevert,
+	readAutoRevertConfig,
+} from "./src/gateway/readSourceSwitch"
 import {createRelationsResolver} from "./src/gateway/relationsServe"
 import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
@@ -355,6 +361,17 @@ const gatewayServeEntityColumns = gatewayServeEntity && rankedReadsListed.has("e
 
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
 const geoDbCardConfig = readGeoDbCardConfig(process.env)
+// Runtime per-field read-source switch watched from GEODB_READ_SOURCE_PATH (optional ConfigMap).
+// Seeded with startup env defaults so a missing/unset file keeps existing behaviour unchanged.
+const readSourcePath = process.env.GEODB_READ_SOURCE_PATH?.trim() ?? ""
+const hasRuntimeReadSwitch = readSourcePath.length > 0
+const readSourceSwitch = createReadSourceSwitch({
+	path: readSourcePath,
+	defaults: new Map([...gatewayConfig.fieldModes, [ENTITY_CARDS_FIELD, geoDbCardConfig.mode]]),
+	log,
+	autoRevert: readAutoRevertConfig(process.env),
+	persistRevert: kubeConfigMapPatchRevert(process.env.GEODB_READ_SOURCE_CONFIGMAP ?? "") ?? undefined,
+})
 // One geodb-client pipe pool and space map serve the card route and the gateway's entity shadow, so the
 // pool's worker count, queue bound and timeout cap the two together.
 const sharedGeoDb =
@@ -371,7 +388,7 @@ const sharedGeoDb =
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
 		: null
 if (geoDbCardConfig.mode !== "off") {
-	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
+	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, {...(sharedGeoDb ?? {}), readSourceSwitch}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
 	// geodb-card-replay's pair list (GEODB_REPLAY_PAIRS=on; off by default), so the replay pod needs no DATABASE_URL.
 	// Gated by GAIA_INTERNAL_TOKEN (x-internal-token, 401 otherwise); not mounted without a long enough token.
@@ -795,8 +812,10 @@ const rankTypedObserver =
 // Gateway resolvers, one per field served from geo-db. Each answers one exact shape and declines (so PostGraphile answers) for
 // everything else; the entity resolver is its own opt-in (GRAPHQL_GATEWAY_FIELDS entity=on), the ranked-read ones need the listing too.
 const gatewayResolvers = new Map<string, FieldResolver>()
+const runtimeGatewayResolvers = new Map<string, FieldResolver>()
+const wireForRuntime = hasRuntimeReadSwitch && gatewayConfig.mode === "on"
 if (sharedGeoDb) {
-	if (gatewayServeEntity) {
+	if (gatewayServeEntity || wireForRuntime) {
 		const entityResolver = createEntityResolver({
 			...sharedGeoDb,
 			// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
@@ -806,37 +825,38 @@ if (sharedGeoDb) {
 				log,
 			}),
 		})
-		gatewayResolvers.set(
-			ENTITY_FIELD,
-			gatewayServeEntityColumns
-				? entityColumnsFirst(
-						createEntityColumnsResolver(
-							rankedReadsServe,
-							createPostgresScoresPorts(db, createDerivedReader(geoDbCardConfig)),
-						),
-						entityResolver,
-					)
-				: entityResolver,
-		)
+		const resolvedEntity = gatewayServeEntityColumns
+			? entityColumnsFirst(
+					createEntityColumnsResolver(
+						rankedReadsServe,
+						createPostgresScoresPorts(db, createDerivedReader(geoDbCardConfig)),
+					),
+					entityResolver,
+				)
+			: entityResolver
+		if (gatewayServeEntity) gatewayResolvers.set(ENTITY_FIELD, resolvedEntity)
+		else runtimeGatewayResolvers.set(ENTITY_FIELD, resolvedEntity)
 	}
-	if (gatewayServeEntities) {
-		gatewayResolvers.set(
-			"entities",
-			createEntitiesResolver({
-				...sharedGeoDb,
-				gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
-				typeScan: geoDbCardConfig.typeScan === true,
-				multiSpace: geoDbCardConfig.multiSpaceReads === true,
-			}),
-		)
+	if (gatewayServeEntities || wireForRuntime) {
+		const entitiesResolver = createEntitiesResolver({
+			...sharedGeoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+			typeScan: geoDbCardConfig.typeScan === true,
+			multiSpace: geoDbCardConfig.multiSpaceReads === true,
+		})
+		if (gatewayServeEntities) gatewayResolvers.set("entities", entitiesResolver)
+		else runtimeGatewayResolvers.set("entities", entitiesResolver)
 	}
-	if (gatewayServeRelations) {
-		gatewayResolvers.set(
-			"relations",
-			createRelationsResolver({...sharedGeoDb, gaiaIdsOf: createGaiaIdMap(idMapQuery(db))}),
-		)
+	if (gatewayServeRelations || wireForRuntime) {
+		const relationsResolver = createRelationsResolver({
+			...sharedGeoDb,
+			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
+		})
+		if (gatewayServeRelations) gatewayResolvers.set("relations", relationsResolver)
+		else runtimeGatewayResolvers.set("relations", relationsResolver)
 	}
-	if (gatewayServeSearchFields.length > 0) {
+	const wiredSearchFields = wireForRuntime ? SEARCH_FIELDS : gatewayServeSearchFields
+	if (wiredSearchFields.length > 0) {
 		const searchClient = createCliGeoDbSearchClient(geoDbCardConfig, {
 			...(Number(process.env.GEODB_SEARCH_TIMEOUT_MS) > 0
 				? {timeoutMs: Math.floor(Number(process.env.GEODB_SEARCH_TIMEOUT_MS))}
@@ -846,27 +866,38 @@ if (sharedGeoDb) {
 				: {}),
 		})
 		const searchGaiaIdsOf = createGaiaIdMap(idMapQuery(db))
-		for (const field of gatewayServeSearchFields)
-			gatewayResolvers.set(
-				field,
-				createSearchResolver(field, {
-					geoSpaceOf: sharedGeoDb.geoSpaceOf,
-					search: searchClient,
-					readCards: sharedGeoDb.geoDb.readCards?.bind(sharedGeoDb.geoDb),
-					gaiaIdsOf: searchGaiaIdsOf,
-					enabled: process.env.GEODB_SEARCH_SERVE?.trim().toLowerCase() === "on",
-				}),
-			)
+		const searchServeEnvOn = process.env.GEODB_SEARCH_SERVE?.trim().toLowerCase() === "on"
+		for (const field of wiredSearchFields) {
+			const searchResolver = createSearchResolver(field, {
+				geoSpaceOf: sharedGeoDb.geoSpaceOf,
+				search: searchClient,
+				readCards: sharedGeoDb.geoDb.readCards?.bind(sharedGeoDb.geoDb),
+				gaiaIdsOf: searchGaiaIdsOf,
+				enabled: wireForRuntime
+					? () => searchServeEnvOn || readSourceSwitch.effectiveMode(field) === "on"
+					: searchServeEnvOn,
+			})
+			if (gatewayServeSearchFields.includes(field)) gatewayResolvers.set(field, searchResolver)
+			else runtimeGatewayResolvers.set(field, searchResolver)
+		}
 	}
-	if (gatewayServeSpace || gatewayServeSpaces) {
+	if (gatewayServeSpace || gatewayServeSpaces || wireForRuntime) {
 		// `address` and `topicId` come from the keyed records in the governance system Space (GEODB_SPACE_ADDRESSES, GEODB_SPACE_TOPICS).
 		const spaceDeps = {
 			...sharedGeoDb,
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
 			gaiaIdsOf: createGaiaIdMap(idMapQuery(db)),
 		}
-		if (gatewayServeSpace) gatewayResolvers.set(SPACE_ROOT, createSpaceResolver(spaceDeps, SPACE_ROOT))
-		if (gatewayServeSpaces) gatewayResolvers.set(SPACES_ROOT, createSpaceResolver(spaceDeps, SPACES_ROOT))
+		if (gatewayServeSpace || wireForRuntime) {
+			const spaceResolver = createSpaceResolver(spaceDeps, SPACE_ROOT)
+			if (gatewayServeSpace) gatewayResolvers.set(SPACE_ROOT, spaceResolver)
+			else runtimeGatewayResolvers.set(SPACE_ROOT, spaceResolver)
+		}
+		if (gatewayServeSpaces || wireForRuntime) {
+			const spacesResolver = createSpaceResolver(spaceDeps, SPACES_ROOT)
+			if (gatewayServeSpaces) gatewayResolvers.set(SPACES_ROOT, spacesResolver)
+			else runtimeGatewayResolvers.set(SPACES_ROOT, spacesResolver)
+		}
 	}
 	if (gatewayServeBestOrder) {
 		gatewayResolvers.set(
@@ -890,8 +921,10 @@ if (sharedGeoDb) {
 }
 const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 	config: gatewayConfig,
+	readSourceSwitch,
 	observers: rankTypedObserver ? [rankTypedObserver] : undefined,
 	resolvers: gatewayResolvers.size > 0 ? gatewayResolvers : undefined,
+	runtimeResolvers: runtimeGatewayResolvers.size > 0 ? runtimeGatewayResolvers : undefined,
 	shadows:
 		gatewayShadowsAny && sharedGeoDb
 			? new Map([

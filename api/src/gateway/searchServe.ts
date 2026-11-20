@@ -47,8 +47,8 @@ export type SearchServeDeps = Pick<CardDeps, "geoSpaceOf"> & {
 	readCards?: Parameters<typeof withoutExcludedTypes>[0]
 	/** The reverse id map (geo-db id -> gaia id). Absent: never serve. */
 	gaiaIdsOf?: GaiaIdsOf
-	/** GEODB_SEARCH_SERVE=on. */
-	enabled: boolean
+	/** GEODB_SEARCH_SERVE=on, or a dynamic check (e.g. runtime readSourceSwitch mode). */
+	enabled: boolean | (() => boolean)
 }
 
 type SearchPlan = {
@@ -147,7 +147,8 @@ export function createSearchResolver(field: SearchField, deps: SearchServeDeps):
 			throw error
 		}
 		const {readCards, gaiaIdsOf} = deps
-		if (!deps.enabled || !readCards) return decline("not_enabled")
+		const enabled = typeof deps.enabled === "function" ? deps.enabled() : deps.enabled
+		if (!enabled || !readCards) return decline("not_enabled")
 		if (!gaiaIdsOf) return decline("legacy_id")
 		let geoSpaceIds: string[]
 		if (plan.spaceId === null) {

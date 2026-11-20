@@ -6,6 +6,7 @@
  *   is logged when the two differ. The shadow read never delays or fails the response.
  */
 
+import {ENTITY_CARDS_FIELD, type ReadSourceSwitch} from "../gateway/readSourceSwitch"
 import type {CardStatement, GeoCardRow, RelationRow, ValueRow} from "./card"
 import {conformingId, diffCards, ENTITY_TIME_PROPERTIES, isEmptyDiff, statementsFromPostgres} from "./card"
 import type {GeoDbCardClient} from "./client"
@@ -48,6 +49,8 @@ export type CardDeps = {
 	/** Postgres card rows for (entity, space), both compact ids. */
 	readPostgres: (entityId: string, spaceId: string) => Promise<{values: ValueRow[]; relations: RelationRow[]}>
 	log: CardLogger
+	/** Optional runtime read-source switch (overrides static `mode` for ENTITY_CARDS_FIELD when set). */
+	readSourceSwitch?: ReadSourceSwitch
 }
 
 const SAMPLE = 5
@@ -250,8 +253,11 @@ export async function resolveCard(
 	entityId: string,
 	spaceId: string,
 ): Promise<{card: EntityCard; shadow?: Promise<void>}> {
+	if (deps.readSourceSwitch) await deps.readSourceSwitch.refreshIfDue()
+	const mode = deps.readSourceSwitch ? deps.readSourceSwitch.effectiveMode(ENTITY_CARDS_FIELD) : deps.mode
 	const geoEntityId = conformingId("entity", entityId)
-	if (deps.mode === "on") {
+	if (mode === "on") {
+		const started = performance.now()
 		try {
 			const rows = await askGeoDb(deps, geoEntityId, spaceId)
 			// The reserved createdAt/updatedAt cells are not statements of the card: Postgres serves no such rows.
@@ -259,11 +265,19 @@ export async function resolveCard(
 				.filter((r) => !ENTITY_TIME_PROPERTIES.has(r.prop))
 				.map((r) => ({property: r.prop, value: r.raw}))
 			recordServed("geodb")
+			deps.readSourceSwitch?.recordOutcome(ENTITY_CARDS_FIELD, {
+				kind: "served",
+				latencyMs: performance.now() - started,
+			})
 			return {card: {entityId, spaceId, source: "geodb", statements}}
 		} catch (error) {
 			const reason = error instanceof GeoDbError ? error.reason : "error"
 			recordFallback(reason)
 			recordServed("postgres")
+			deps.readSourceSwitch?.recordOutcome(ENTITY_CARDS_FIELD, {
+				kind: reason === "unmapped_space" ? "declined" : "failure",
+				latencyMs: performance.now() - started,
+			})
 			deps.log.warn("geodb card read failed, falling back to postgres", {
 				entityId,
 				spaceId,
@@ -283,10 +297,8 @@ export async function resolveCard(
 		}
 	}
 	// Only the primary read is timed; the fallback above runs after a geo-db failure and would skew the comparison.
-	const postgres = await postgresStatements(deps, entityId, spaceId, deps.mode === "shadow")
+	const postgres = await postgresStatements(deps, entityId, spaceId, mode === "shadow")
 	recordServed("postgres")
 	const card: EntityCard = {entityId, spaceId, source: "postgres", statements: postgres.statements.map(view)}
-	return deps.mode === "shadow"
-		? {card, shadow: shadowCompare(deps, entityId, spaceId, postgres, geoEntityId)}
-		: {card}
+	return mode === "shadow" ? {card, shadow: shadowCompare(deps, entityId, spaceId, postgres, geoEntityId)} : {card}
 }
