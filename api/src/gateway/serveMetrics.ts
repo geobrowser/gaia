@@ -29,6 +29,8 @@ export const SERVE_FALLBACK_REASONS = [
 	"unmapped_space",
 	"legacy_id",
 	"empty",
+	// The read this resolver needs is not switched on for this process (a GEODB_* flag), so geo-db was not asked.
+	"not_enabled",
 	// The reverse id map (geodb/idMap.ts) could not be read.
 	"id_map",
 	// A ranked read (geodb/rankedReadsServe.ts) went to Postgres; its own counters say why (gaia_api_ranked_read_serve_fallback_total).
