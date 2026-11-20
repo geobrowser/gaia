@@ -50,6 +50,11 @@ on:
         options:
           - geo-testnet-k8s
           - k8s-geo-testnet
+      freeze_override:
+        description: "Named reason to override the 24 h geodb roll freeze after a read flip or revert (leave empty normally)."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: deploy-v2-${{ inputs.cluster }}-${{ inputs.service }}
@@ -117,6 +122,43 @@ jobs:
           esac
           echo "manifests=$manifests" >> "$GITHUB_OUTPUT"
           echo "rollout=$rollout" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight 24 h geodb read-flip freeze
+        env:
+          SERVICE: ${{ inputs.service }}
+          MANIFESTS: ${{ steps.map.outputs.manifests }}
+          FREEZE_OVERRIDE: ${{ inputs.freeze_override }}
+        run: |
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          cm_file="$tmp_dir/cm.json"
+          cm_err=""
+          for attempt in 1 2 3; do
+            if err="$(kubectl -n "$NAMESPACE" get configmap geodb-read-source --ignore-not-found=true -o json 2>&1 > "$cm_file")"; then
+              cm_err=""
+              break
+            fi
+            cm_err="$err"
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          manifest_args=()
+          live_args=()
+          idx=0
+          for m in $MANIFESTS; do
+            manifest_args+=(--manifest "$m")
+            live_file="$tmp_dir/live-${idx}.json"
+            idx=$((idx + 1))
+            if kubectl -n "$NAMESPACE" get --ignore-not-found=true -f "$m" -o json > "$live_file" 2>/dev/null; then
+              live_args+=(--live-json "$live_file")
+            fi
+          done
+          python3 scripts/check-geodb-freeze.py \
+            --service "$SERVICE" \
+            --configmap-json "$cm_file" \
+            --configmap-read-error "$cm_err" \
+            --override "$FREEZE_OVERRIDE" \
+            "${manifest_args[@]}" \
+            "${live_args[@]}"
 
       - name: Verify image tag exists in registry
         id: verify

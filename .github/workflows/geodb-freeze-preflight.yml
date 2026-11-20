@@ -1,0 +1,24 @@
+name: geodb deploy-v2 freeze preflight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/check-geodb-freeze.py'
+      - 'scripts/test-check-geodb-freeze.sh'
+      - '.github/workflows/deploy-v2.yml'
+      - '.github/workflows/geodb-freeze-preflight.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/check-geodb-freeze.py'
+      - 'scripts/test-check-geodb-freeze.sh'
+      - '.github/workflows/deploy-v2.yml'
+      - '.github/workflows/geodb-freeze-preflight.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash scripts/test-check-geodb-freeze.sh
