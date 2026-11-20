@@ -35,6 +35,7 @@ import {
 } from "./src/gateway/rankedReadsServe"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
+import {createRelationsResolver} from "./src/gateway/relationsServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
@@ -326,6 +327,8 @@ const gatewayShadowsAny = gatewayShadowFields.size > 0
 const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
 // `entities=on` has its own resolver (gateway/entitiesServe.ts): the type-scan page that selects only id, else PostGraphile.
 const gatewayServeEntities = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "entities") === "on"
+// `relations=on` has its own resolver (gateway/relationsServe.ts): one entity's relations of some types in one Space, else PostGraphile.
+const gatewayServeRelations = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, "relations") === "on"
 // The ranked reads that GEODB_RANKED_READS_SERVE lists are served at the gateway only when their field is also "on" in
 // GRAPHQL_GATEWAY_FIELDS: two opt-ins, both off by default (gateway/rankedReadsServe.ts). The listing itself is read below, where
 // the serve layer is built, so the env is read here once for the two names.
@@ -350,6 +353,7 @@ const sharedGeoDb =
 	gatewayShadowsAny ||
 	gatewayServeEntity ||
 	gatewayServeEntities ||
+	gatewayServeRelations ||
 	gatewayServeBestOrder ||
 	gatewayServeTypeCounts
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
@@ -812,6 +816,12 @@ if (sharedGeoDb) {
 				typeScan: geoDbCardConfig.typeScan === true,
 				multiSpace: geoDbCardConfig.multiSpaceReads === true,
 			}),
+		)
+	}
+	if (gatewayServeRelations) {
+		gatewayResolvers.set(
+			"relations",
+			createRelationsResolver({...sharedGeoDb, gaiaIdsOf: createGaiaIdMap(idMapQuery(db))}),
 		)
 	}
 	if (gatewayServeBestOrder) {
