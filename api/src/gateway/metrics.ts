@@ -152,6 +152,9 @@ const uncompared = new Map<string, number>()
 const shapes = new Map<string, number>()
 const mismatchParts = new Map<string, number>()
 const requests = new Map<string, number>()
+// gaia_api_gateway_requests_total: every operation the gateway routed to a field in mode shadow or on, whichever way it was answered.
+const fieldRequestFields = new Set<string>()
+const fieldRequests = new Map<string, number>()
 const postgresLatency = new Map<string, Histogram>()
 const geodbLatency = new Map<string, Histogram>()
 
@@ -168,6 +171,32 @@ const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(ke
 
 export function activateGatewayMetrics(field: string): void {
 	fields.add(field)
+	fieldRequestFields.add(field)
+}
+
+/** Registers `field` for gaia_api_gateway_requests_total at zero (a field that is served, or shadowed). */
+export function activateGatewayRequests(field: string): void {
+	fieldRequestFields.add(field)
+}
+
+/**
+ * Counts an operation routed to `field` (shadow or on) as it arrives: the denominator of a served share and of a
+ * fallback ratio. A series of its own; gaia_api_gateway_shadow_requests_total keeps counting shadowed operations only.
+ */
+export function recordGatewayFieldRequest(field: string): void {
+	fieldRequestFields.add(field)
+	bump(fieldRequests, field)
+}
+
+function renderFieldRequests(): string {
+	if (fieldRequestFields.size === 0) return ""
+	const lines = [
+		"# HELP gaia_api_gateway_requests_total GraphQL operations routed to a root field in mode shadow or on, counted when they arrive and whichever store answers them, by root field.",
+		"# TYPE gaia_api_gateway_requests_total counter",
+	]
+	for (const field of fieldRequestFields)
+		lines.push(`gaia_api_gateway_requests_total{field="${field}"} ${fieldRequests.get(field) ?? 0}`)
+	return `${lines.join("\n")}\n`
 }
 
 export function recordGatewayShadow(field: string, result: ShadowResult): void {
@@ -230,7 +259,7 @@ export function recordGatewayUnsupportedShape(field: string, reason: Unsupported
 }
 
 export function renderGatewayMetrics(): string {
-	if (fields.size === 0) return renderSearchMetrics()
+	if (fields.size === 0) return `${renderFieldRequests()}${renderSearchMetrics()}`
 	const lines = [
 		"# HELP gaia_api_gateway_shadow_total Gateway shadow comparisons by root field and result: match, mismatch, unsupported_selection (geo-db cannot answer the selection) or failed (geo-db read failed).",
 		"# TYPE gaia_api_gateway_shadow_total counter",
@@ -321,7 +350,7 @@ export function renderGatewayMetrics(): string {
 			`gaia_api_gateway_shadow_unsupported_shape_total{field="${field}",reason="${reason}",shape="${shape}"} ${count}`,
 		)
 	}
-	return `${lines.join("\n")}\n${renderSearchMetrics()}`
+	return `${lines.join("\n")}\n${renderFieldRequests()}${renderSearchMetrics()}`
 }
 
 /** Reset accumulated state. Tests only. */
@@ -334,6 +363,8 @@ export function __resetGatewayMetricsForTests(): void {
 	shapes.clear()
 	mismatchParts.clear()
 	requests.clear()
+	fieldRequestFields.clear()
+	fieldRequests.clear()
 	postgresLatency.clear()
 	geodbLatency.clear()
 	__resetSearchMetricsForTests()
