@@ -78,6 +78,7 @@ import {createFeedRunsShadow, readFeedRunsShadowConfig} from "./src/geodb/feedRu
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
+import {createMetaShadow, readMetaShadowConfig} from "./src/geodb/metaShadow"
 import {createPrivateReadersShadow, readPrivateReadersShadowConfig} from "./src/geodb/privateReadersShadow"
 import {
 	createProposalDiffShadow,
@@ -740,6 +741,13 @@ if (configRevisionShadowConfig.enabled) {
 const feedRunsShadowConfig = readFeedRunsShadowConfig(process.env)
 if (feedRunsShadowConfig.enabled) {
 	createFeedRunsShadow({config: feedRunsShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
+}
+// GEODB_META_SHADOW (default ON; 0 / off / false disables) samples the `meta` indexer-cursor rows from Postgres on a timer and compares
+// them with geo-db's `cursors` collection, counting into gaia_api_gateway_shadow_total{field="metas"}. Background only; one SELECT over a
+// two-row table plus at most a few derived gets every GEODB_META_SHADOW_INTERVAL_MS (default 5 min). Reads stay on Postgres.
+const metaShadowConfig = readMetaShadowConfig(process.env)
+if (metaShadowConfig.enabled) {
+	createMetaShadow({config: metaShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
 }
 // GEODB_PRIVATE_READERS_SHADOW (off by default) samples one user on a timer and compares the twins of user_topic_weights (readWeights,
 // readOwnWeights) and feed_user_seen (readSeen), computed from geo-db's restricted collections 28 / 29, with Postgres
