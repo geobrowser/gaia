@@ -2,7 +2,7 @@ import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {readGatewayConfig} from "../../gateway/config"
-import {createGateway} from "../../gateway/gateway"
+import {createGateway, createShadowTracker} from "../../gateway/gateway"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../../gateway/metrics"
 import {analyzePointRead} from "../../gateway/pointReadShadows"
 import {RELATION_QUERY} from "../../gateway/probe"
@@ -171,5 +171,46 @@ describe("createSearchRelationShadow pass", () => {
 		await shadow.runOnce()
 		await new Promise((r) => setTimeout(r, 20))
 		expect(seen.sort()).toEqual(["relation", "search", "search", "searchConnection", "searchConnection"])
+	})
+	it("settles each shadow before the next sample, so the geo-db client sees one search at a time", async () => {
+		let running = 0
+		let peak = 0
+		let completed = 0
+		const slow = Object.assign(async () => {
+			running++
+			peak = Math.max(peak, running)
+			await new Promise((r) => setTimeout(r, 5))
+			running--
+			completed++
+		}, {})
+		const tracker = createShadowTracker()
+		const config = {
+			...readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "search=shadow,searchConnection=shadow,relation=shadow",
+			}),
+			shadowSampleRate: 1,
+		}
+		const gateway = createGateway({
+			config,
+			delegate: async () =>
+				new Response(JSON.stringify({data: {}}), {headers: {"content-type": "application/json"}}),
+			shadows: new Map([
+				["search", slow],
+				["searchConnection", slow],
+				["relation", slow],
+			]),
+			random: () => 0,
+			trackShadow: tracker.track,
+		})
+		const send = async (r: Request) => {
+			const response = await gateway(r, {} as never)
+			await tracker.settled()
+			return response
+		}
+		const {shadow} = make({send})
+		await shadow.runOnce()
+		expect(completed).toBe(5)
+		expect(peak).toBe(1)
 	})
 })

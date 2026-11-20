@@ -23,7 +23,7 @@ import {createEntitiesResolver} from "./src/gateway/entitiesServe"
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import type {FieldResolver} from "./src/gateway/gateway"
-import {createGateway, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
+import {createGateway, createShadowTracker, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
 import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
 import {createPointReadShadows, POINT_READ_FIELDS, RELATION_FIELD} from "./src/gateway/pointReadShadows"
 import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
@@ -1130,14 +1130,22 @@ const gatewayProbeConfig = readGatewayProbeConfig(process.env)
 // count them into gaia_api_gateway_shadow_total. Background only; reads stay on Postgres (see geodb/searchRelationShadow.ts).
 const searchRelationShadowConfig = readSearchRelationShadowConfig(process.env)
 if ((gatewayProbeConfig.enabled || searchRelationShadowConfig.enabled) && gatewayConfig.mode === "on") {
+	// The shadow comparison runs detached after the response; the probes wait for it so a pass sends one operation at a
+	// time (the geo-db search client allows 2 concurrent searches and rejects the rest as `overloaded`).
+	const shadowTracker = createShadowTracker()
 	const probeGateway = createGateway({
 		...gatewayDeps,
+		trackShadow: shadowTracker.track,
 		config: {...gatewayConfig, shadowSampleRate: 1},
 		resolvers: undefined,
 		observers: undefined,
 		random: () => 0,
 	})
-	const probeSend = (request: Request) => probeGateway(request, {requestId: "gateway-probe"})
+	const probeSend = async (request: Request) => {
+		const response = await probeGateway(request, {requestId: "gateway-probe"})
+		await shadowTracker.settled()
+		return response
+	}
 	createGatewayProbe({config: gatewayProbeConfig, db, send: probeSend, log}).start()
 	if (searchRelationShadowConfig.enabled)
 		createSearchRelationShadow({config: searchRelationShadowConfig, db, send: probeSend, log}).start()
