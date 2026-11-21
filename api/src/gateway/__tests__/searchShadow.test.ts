@@ -316,6 +316,33 @@ describe("search shadow", () => {
 		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({})
 	})
 
+	// The text the pin's `geodb-client search` prints (api pod logs, 2026-11-21: `GeoDbError: refused: DefiniteRefusal DefiniteRefusal`).
+	const REFUSAL = "refused: DefiniteRefusal DefiniteRefusal"
+
+	it("counts the pin's lexical DefiniteRefusal unsupported (definite_refusal), not failed, and logs the code-point count", async () => {
+		const {shadows, log} = setup(new GeoDbError("client_failed", REFUSAL))
+		const noSpace = SEARCH.replace("spaceId: $spaceId, ", "")
+		// 3 code points, 5 UTF-16 units: the length is code points, and the text is never logged.
+		await run(shadows, "search", noSpace, {data: {search: []}}, {q: "a\u{1F600}b"})
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=unsupported_selection": 1})
+		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({"field=search,reason=definite_refusal": 1})
+		expect(metric("gaia_api_gateway_shadow_search_failed_total")).toEqual({})
+		expect(log.warn).toHaveBeenCalledTimes(1)
+		const [message, fields] = log.warn.mock.calls[0] as unknown as [string, Record<string, unknown>]
+		expect(message).toContain("refused")
+		expect(fields).toMatchObject({queryLength: 3, reason: "definite_refusal"})
+		expect(JSON.stringify(fields)).not.toContain("\u{1F600}")
+	})
+
+	it("keeps another client_failed, and a refusal that is not DefiniteRefusal, as failed", async () => {
+		for (const message of ["spawn ENOENT", "refused: invalid_argument bad_request"]) {
+			const {shadows} = setup(new GeoDbError("client_failed", message))
+			await run(shadows, "search", SEARCH, {data: {search: []}})
+		}
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=failed": 2})
+		expect(metric("gaia_api_gateway_shadow_search_failed_total")).toEqual({"field=search,reason=client_failed": 2})
+	})
+
 	it("skips an answer that is not a search result", async () => {
 		const {shadows, searchLexical, log} = setup([])
 		await run(shadows, "search", SEARCH, {errors: [{message: "boom"}]})

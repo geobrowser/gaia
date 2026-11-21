@@ -23,12 +23,13 @@
  *   - args: anything beside query, spaceId and first (offset, cursors, similarityThreshold), or a query the
  *     lexical search cannot take (under two characters, over 250, starting with `-`).
  *   - selection: `id` (or `nodes { id }`) is not selected, or a directive is used.
+ *   - definite_refusal: the serve's lexical search refused the text (`refused: DefiniteRefusal`; the pin takes no typeahead of 65
+ *     to 250 code points, nor one that folds under 2). The warn line carries `queryLength` in code points, never the text.
  *   - not_single_root: the field appears twice (aliases) or beside another root field.
  *
  * geo-db's `typeahead` mode (name, alias and description-prefix grams, typo tolerant) is the closest match to
  * gaia's name-similarity search and is the default; `bm25` is available through `GEODB_SEARCH_MODE`.
- * A multi-word query that finds fewer hits than the window is also searched word by word (searchWithWordFallback),
- * unless `wordLeg: "engine"` (GEODB_SEARCH_WORD_LEG=engine): geo-db's typeahead then runs that word leg itself inside
+ * A multi-word query that finds fewer hits than the window is also searched word by word  * unless `wordLeg: "engine"` (GEODB_SEARCH_WORD_LEG=engine): geo-db's typeahead then runs that word leg itself inside
  * the one call (plan 10.19), so the shadow spawns one process, not up to five.
  * Other PostGraphile rules the comparison does not reproduce (the OpenSearch candidate ids, Claim and block
  * exclusions) are part of what is measured.
@@ -38,7 +39,13 @@ import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "
 
 import {conformingId} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
-import {type GeoDbSearchClient, type GeoDbSearchMode, MAX_EVERY_SPACE_SEARCH, MAX_LISTED_SPACES} from "../geodb/search"
+import {
+	type GeoDbSearchClient,
+	type GeoDbSearchMode,
+	lexicalDefiniteRefusal,
+	MAX_EVERY_SPACE_SEARCH,
+	MAX_LISTED_SPACES,
+} from "../geodb/search"
 import {DEFAULT_EXCLUDED_TYPE_IDS} from "../search"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {
@@ -318,6 +325,17 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					deps.wordLeg,
 				)
 			} catch (error) {
+				if (lexicalDefiniteRefusal(error)) {
+					recordGatewayShadow(field, "unsupported_selection")
+					recordGatewayUnsupported(field, "definite_refusal")
+					deps.log.warn(`${label} refused by geo-db`, {
+						spaceId: plan.spaceId,
+						reason: "definite_refusal",
+						queryLength: [...plan.query].length,
+						error: String(error),
+					})
+					return
+				}
 				recordGatewayShadow(field, "failed")
 				recordSearchFailure(field, error instanceof GeoDbError ? error.reason : "error")
 				deps.log.warn(`${label} read failed`, {
