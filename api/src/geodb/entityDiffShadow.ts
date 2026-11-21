@@ -24,6 +24,8 @@
  * - the before side of `entity_diff`, always: also an as-of read. It is not counted, because it never could be.
  * - `no_after` (entity_diff) / `no_base` (review): the diff has nothing on the side that can be compared.
  * - `unmapped_space`, `client` (a geo-db client without the reads), `busy` (the pool or the in-flight bound).
+ * - `too_many_versions` (entity_diff): the entity has more than 512 versions across its Spaces, which geo-db refuses typed
+ *   (`ResourceExhausted`, limit 512) rather than walk. No cooldown: it is per entity.
  * Block changes and statements in other Spaces are not compared.
  * Removed relations are compared by id at the head: geo-db's relation-by-id read (`readRelationEntity`) returns an
  * empty page for a closed relation, so each removal must read empty (`removed_open` when geo-db still holds it).
@@ -36,7 +38,7 @@
  */
 
 import {conformingId, type GeoCardRow, type GeoVersionRow} from "./card"
-import {type GeoDbCardClient, GeoDbError, MAX_CARD_IDS} from "./client"
+import {entityVersionsTooMany, type GeoDbCardClient, GeoDbError, MAX_CARD_IDS} from "./client"
 import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 import {baseStatements, compareBase} from "./proposalDiffShadow"
 
@@ -67,7 +69,15 @@ export const ROUTES = ["entity_diff", "review"] as const
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
 export const MISMATCH_FIELDS = ["after_missing", "base_missing", "removed_open"] as const
 export const OUTCOMES = ["found", "missing"] as const
-export const UNSUPPORTED_REASONS = ["not_head", "no_after", "no_base", "unmapped_space", "client", "busy"] as const
+export const UNSUPPORTED_REASONS = [
+	"not_head",
+	"no_after",
+	"no_base",
+	"unmapped_space",
+	"client",
+	"busy",
+	"too_many_versions",
+] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Route = (typeof ROUTES)[number]
 type Result = (typeof RESULTS)[number]
@@ -271,6 +281,7 @@ export function createEntityDiffShadow(deps: {
 		if (error instanceof GeoDbError && error.reason === "unmapped_space")
 			return recordUnsupported(route, "unmapped_space")
 		if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported(route, "busy")
+		if (entityVersionsTooMany(error)) return recordUnsupported(route, "too_many_versions")
 		recordResult(route, "failed")
 		bump(failedReasons, `${route}\t${failReason(error)}`)
 		if (!(error instanceof GeoDbError)) log.warn("entity diff shadow failed", {route, error: String(error)})

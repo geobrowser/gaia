@@ -287,6 +287,23 @@ export function entityVersionsUnsupported(error: unknown): "client" | "server" |
 	return null
 }
 
+/** The `entity-versions` diff bound of geo-db 3be8c69156 (`entity_versions_diff_bound`): summed holding-Space versions. */
+export const ENTITY_VERSIONS_DIFF_BOUND = 512
+
+const ENTITY_VERSIONS_BOUND_REFUSAL = /^refused: ResourceExhausted ResourceExhausted requested (\d+) limit (\d+)\b/
+
+/**
+ * Whether an `entity-versions` read was refused for the walk's bound: the entity's summed holding-Space versions are past
+ * `ENTITY_VERSIONS_DIFF_BOUND`, which the serve refuses typed (`requested` the sum, `limit` 512) before walking. The
+ * request's own answer, so not a failure and not a reason to back off. Only that figure counts: a `ResourceExhausted` with
+ * another limit (the page buffer, 4096 rows), with no figures (a node still opening) or from a timeout stays the read's own failure.
+ */
+export function entityVersionsTooMany(error: unknown): boolean {
+	if (!(error instanceof GeoDbError) || error.reason !== "client_failed") return false
+	const m = ENTITY_VERSIONS_BOUND_REFUSAL.exec(error.message)
+	return m !== null && Number(m[2]) === ENTITY_VERSIONS_DIFF_BOUND && Number(m[1]) > ENTITY_VERSIONS_DIFF_BOUND
+}
+
 /** Whether `error` is the old serve's refusal of `.args.holders`, the one reason to read without it. */
 export function isHoldersUnknownArgument(error: unknown): boolean {
 	return (

@@ -275,6 +275,31 @@ describe("snapshot twin", () => {
 		expect(unsupported("snapshot", "unmapped_space")).toBe(1)
 	})
 
+	it("counts the 512-version bound refusal as too_many_versions and any other exhaustion as failed", async () => {
+		const bound = make({
+			versions: new GeoDbError(
+				"client_failed",
+				"refused: ResourceExhausted ResourceExhausted requested 513 limit 512",
+			),
+		})
+		bound.shadow.snapshot(snapshot())
+		bound.shadow.snapshot(snapshot())
+		await settle()
+		expect(bound.geoDb.readEntityVersions).toHaveBeenCalledTimes(2)
+		expect(unsupported("snapshot", "too_many_versions")).toBe(2)
+		expect(result("snapshot", "failed")).toBe(0)
+		const other = make({
+			versions: new GeoDbError(
+				"client_failed",
+				"refused: ResourceExhausted ResourceExhausted requested 9000 limit 4096",
+			),
+		})
+		other.shadow.snapshot(snapshot())
+		await settle()
+		expect(unsupported("snapshot", "too_many_versions")).toBe(2)
+		expect(result("snapshot", "failed")).toBe(1)
+	})
+
 	it("counts a failed read, an overloaded store as busy, and an old client as unsupported with a cooldown", async () => {
 		const failed = make({versions: new GeoDbError("timeout", "slow")})
 		failed.shadow.snapshot(snapshot())

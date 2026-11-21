@@ -192,6 +192,35 @@ describe("createEntityDiffShadow: entity diff", () => {
 		expect(unsupported("entity_diff", "client")).toBe(1)
 	})
 
+	it("counts the 512-version bound refusal as too_many_versions and any other exhaustion as failed", async () => {
+		const bound = vi.fn(async (): Promise<GeoVersionRow[]> => {
+			throw new GeoDbError(
+				"client_failed",
+				"refused: ResourceExhausted ResourceExhausted requested 513 limit 512",
+			)
+		})
+		const {shadow} = make({readEntityVersions: bound, readCard: async () => card()})
+		shadow.entityDiff(served())
+		shadow.entityDiff(served())
+		await settle()
+		expect(bound).toHaveBeenCalledTimes(2)
+		expect(unsupported("entity_diff", "too_many_versions")).toBe(2)
+		expect(result("entity_diff", "failed")).toBe(0)
+		const other = make({
+			readEntityVersions: async () => {
+				throw new GeoDbError(
+					"client_failed",
+					"refused: ResourceExhausted ResourceExhausted requested 9000 limit 4096",
+				)
+			},
+			readCard: async () => card(),
+		})
+		other.shadow.entityDiff(served())
+		await settle()
+		expect(unsupported("entity_diff", "too_many_versions")).toBe(2)
+		expect(result("entity_diff", "failed")).toBe(1)
+	})
+
 	it("counts a failed read and a busy pool, and samples", async () => {
 		const {shadow} = make({
 			readEntityVersions: async () => {
