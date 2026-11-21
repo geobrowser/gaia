@@ -36,14 +36,14 @@
  * `gaia_api_versions_shadow_total{result}`: match, mismatch, unsupported (geo-db cannot answer) or failed (a read
  * failed). `..._mismatch_total{field}`: count, edit_ids, order, author, author_unrecorded, newest_time, oldest_time (a mismatch can name several).
  * `..._times_total{result}`: how the createdAt check ended (ok, mismatch, absent, failed).
- * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), removed (see below), busy (pool or in-flight bound), client (a geodb-client older than
+ * `..._unsupported_total{reason}`: scoped, deep_page (offset + limit past 100), removed (see below), busy (pool or in-flight bound), too_many_versions (the entity has more than 512 versions across its Spaces, which geo-db refuses typed rather than walk; asked again each time), client (a geodb-client older than
  * geo-db 25360b28c6, which has no `entity-versions` line), server (a node before wire revision 12). `..._skipped_total{reason}`:
  * sample (not the 1-in-N picked) or rate (over the per-minute cap). After a `client` or `server` answer the shadow stops
  * asking for `PROBE_COOLDOWN_MS`, so an old client loses one pipe worker per cooldown, not one per sample.
  */
 
 import {conformingId, entityTimesOf, type GeoCardRow, type GeoVersionRow} from "./card"
-import {entityVersionsUnsupported, type GeoDbCardClient, GeoDbError} from "./client"
+import {entityVersionsTooMany, entityVersionsUnsupported, type GeoDbCardClient, GeoDbError} from "./client"
 import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 
 export type EntityVersionsShadowConfig = {
@@ -84,7 +84,15 @@ export const MISMATCH_FIELDS = [
 ] as const
 /** `times`: how the createdAt comparison ended (see the header): ok, mismatch, absent (no time to compare) or failed. */
 export const TIME_RESULTS = ["ok", "mismatch", "absent", "failed"] as const
-export const UNSUPPORTED_REASONS = ["scoped", "deep_page", "busy", "client", "server", "removed"] as const
+export const UNSUPPORTED_REASONS = [
+	"scoped",
+	"deep_page",
+	"busy",
+	"client",
+	"server",
+	"removed",
+	"too_many_versions",
+] as const
 /** Which way a `count` mismatch went: geo-db lists no version of the entity, fewer than Postgres served, or more. */
 export const COUNT_KINDS = ["geo_empty", "geo_fewer", "geo_more"] as const
 type CountKind = (typeof COUNT_KINDS)[number]
@@ -345,6 +353,7 @@ export function createEntityVersionsShadow(deps: {
 				return recordUnsupported(why)
 			}
 			if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported("busy")
+			if (entityVersionsTooMany(error)) return recordUnsupported("too_many_versions")
 			bump(results, "failed")
 			bump(failedReasons, failReason(error))
 			if (!(error instanceof GeoDbError)) log.warn("versions shadow failed", {error: String(error)})

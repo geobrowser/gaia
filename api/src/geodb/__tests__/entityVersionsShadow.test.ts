@@ -374,6 +374,36 @@ describe("createEntityVersionsShadow", () => {
 		expect(read).toHaveBeenCalledTimes(2)
 	})
 
+	it("counts the 512-version bound refusal as too_many_versions, with no cooldown, and any other exhaustion as failed", async () => {
+		const bound = vi.fn(async () => {
+			throw new GeoDbError(
+				"client_failed",
+				"refused: ResourceExhausted ResourceExhausted requested 513 limit 512",
+			)
+		})
+		const {shadow} = setup(bound)
+		shadow.versions(served())
+		shadow.versions(served())
+		await settle()
+		expect(bound).toHaveBeenCalledTimes(2)
+		expect(unsupported("too_many_versions")).toBe(2)
+		expect(result("unsupported")).toBe(2)
+		expect(result("failed")).toBe(0)
+		for (const message of [
+			"refused: ResourceExhausted ResourceExhausted opening",
+			"refused: ResourceExhausted ResourceExhausted requested 9000 limit 4096",
+			"refused: ResourceExhausted ResourceExhausted requested 400 limit 512",
+		]) {
+			const other = setup(async () => {
+				throw new GeoDbError("client_failed", message)
+			})
+			other.shadow.versions(served())
+			await settle()
+		}
+		expect(unsupported("too_many_versions")).toBe(2)
+		expect(result("failed")).toBe(3)
+	})
+
 	it("reports a node before wire revision 12 and a client with no such method", async () => {
 		const {shadow} = setup(async () => {
 			throw new GeoDbError("client_failed", "refused: DefiniteRefusal UnknownOpcode")

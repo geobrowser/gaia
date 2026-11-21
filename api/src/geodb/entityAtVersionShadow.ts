@@ -29,7 +29,8 @@
  * `gaia_api_entity_at_version_shadow_total{route,result}`: match, mismatch, unsupported (geo-db cannot answer),
  * absent_ok (neither side holds anything to compare) or failed (a geo-db read failed). `..._mismatch_total{route,field}`:
  * only_postgres, only_geo_db, name. `..._unsupported_total{route,reason}`: not_head, unmapped_space, name_elsewhere, client,
- * server, busy. `..._skipped_total{reason}`: sample, rate. After a `client` or `server` answer the shadow stops asking for
+ * server, busy, too_many_versions (the entity has more than 512 versions across its Spaces, which geo-db refuses typed;
+ * no cooldown, it is per entity). `..._skipped_total{reason}`: sample, rate. After a `client` or `server` answer the shadow stops asking for
  * `PROBE_COOLDOWN_MS`. There is no `reference_timeout`: Postgres has already answered when the shadow runs, and the shadow
  * makes no Postgres read of its own.
  */
@@ -45,7 +46,13 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "./card"
-import {entityVersionsUnsupported, type GeoDbCardClient, GeoDbError, MAX_CARD_IDS} from "./client"
+import {
+	entityVersionsTooMany,
+	entityVersionsUnsupported,
+	type GeoDbCardClient,
+	GeoDbError,
+	MAX_CARD_IDS,
+} from "./client"
 import {FAIL_REASONS, type FailReason, failReason} from "./failReason"
 import {NAME_PROPERTY} from "./rankedReads/typeCounts"
 
@@ -78,7 +85,15 @@ export function readEntityAtVersionShadowConfig(env: Record<string, string | und
 export const ROUTES = ["snapshot", "enrich_names"] as const
 export const RESULTS = ["match", "mismatch", "unsupported", "absent_ok", "failed"] as const
 export const MISMATCH_FIELDS = ["only_postgres", "only_geo_db", "name"] as const
-export const UNSUPPORTED_REASONS = ["not_head", "unmapped_space", "name_elsewhere", "client", "server", "busy"] as const
+export const UNSUPPORTED_REASONS = [
+	"not_head",
+	"unmapped_space",
+	"name_elsewhere",
+	"client",
+	"server",
+	"busy",
+	"too_many_versions",
+] as const
 export const SKIP_REASONS = ["sample", "rate"] as const
 type Route = (typeof ROUTES)[number]
 type Result = (typeof RESULTS)[number]
@@ -293,6 +308,7 @@ export function createEntityAtVersionShadow(deps: {
 			return recordUnsupported(route, why)
 		}
 		if (error instanceof GeoDbError && error.reason === "overloaded") return recordUnsupported(route, "busy")
+		if (entityVersionsTooMany(error)) return recordUnsupported(route, "too_many_versions")
 		recordResult(route, "failed")
 		bump(failedReasons, `${route}\t${failReason(error)}`)
 		if (!(error instanceof GeoDbError)) log.warn("entity-at-version shadow failed", {route, error: String(error)})

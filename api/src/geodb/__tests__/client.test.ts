@@ -8,6 +8,7 @@ import {
 	createPipeGeoDbClient,
 	createSpaceMap,
 	entitiesPageDocument,
+	entityVersionsTooMany,
 	entityVersionsUnsupported,
 	GeoDbError,
 	holdersDocument,
@@ -112,6 +113,16 @@ lines((line) => {
 		expect(entityVersionsUnsupported(old)).toBe("client")
 		expect(entityVersionsUnsupported(current)).toBeNull()
 		expect(entityVersionsUnsupported(new GeoDbError("client_failed", "refused: x UnknownOpcode"))).toBe("server")
+		const bound = (tail: string) =>
+			new GeoDbError("client_failed", `refused: ResourceExhausted ResourceExhausted ${tail}`)
+		expect(entityVersionsTooMany(bound("requested 513 limit 512"))).toBe(true)
+		expect(entityVersionsTooMany(bound("requested 160000 limit 512"))).toBe(true)
+		expect(entityVersionsTooMany(bound("requested 512 limit 512"))).toBe(false)
+		expect(entityVersionsTooMany(bound("requested 9000 limit 4096"))).toBe(false)
+		expect(entityVersionsTooMany(bound("requested 9000 limit 5120"))).toBe(false)
+		expect(entityVersionsTooMany(bound("opening"))).toBe(false)
+		expect(entityVersionsTooMany(new GeoDbError("timeout", "requested 513 limit 512"))).toBe(false)
+		expect(entityVersionsTooMany(new Error("requested 513 limit 512"))).toBe(false)
 		expect(entityVersionsUnsupported(new GeoDbError("timeout", "slow"))).toBeNull()
 		expect(entityVersionsUnsupported(new Error("want <space uuid>"))).toBeNull()
 	})
