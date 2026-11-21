@@ -41,6 +41,8 @@ export const UNSUPPORTED_REASONS = [
 	"count_refused",
 	/** A `totalCount`-only `entitiesConnection` lowered to the count form whose walk did not reach the end within the pages the tool fetched, so the sum is not the count. */
 	"count_incomplete",
+	/** A `search` / `searchConnection` text the serve's lexical search refused (`DefiniteRefusal`): the pin takes no typeahead of 65 to 250 code points, nor one that folds under 2. Counted with `queryLength` in the warn line. */
+	"definite_refusal",
 ] as const
 
 /**

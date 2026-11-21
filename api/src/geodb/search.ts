@@ -70,6 +70,20 @@ const defaultRun: RunSearch = (config, args, timeoutMs) =>
 		)
 	})
 
+const LEXICAL_DEFINITE_REFUSAL = /^refused: DefiniteRefusal\b/
+
+/**
+ * Whether a lexical search was refused by the serve for the request itself (`geodb-client search` prints
+ * `refused: DefiniteRefusal DefiniteRefusal`): a query text the pin's typeahead will not take (65 to 250 code points, or
+ * one that folds under 2). The request's own answer, so not a read failure. Another `client_failed` (a missing tool, a
+ * typed refusal such as `refused: invalid_argument ...`) and a timeout stay failures.
+ */
+export function lexicalDefiniteRefusal(error: unknown): boolean {
+	return (
+		error instanceof GeoDbError && error.reason === "client_failed" && LEXICAL_DEFINITE_REFUSAL.test(error.message)
+	)
+}
+
 /** The entities of the tool's `search` output, in order, each once. A `partial: <n>` line is not a hit. */
 export function parseSearchOutput(output: string): string[] {
 	const seen = new Set<string>()
