@@ -78,6 +78,8 @@ const CODE_TRANSIENT = [
 	"OutcomeUnknown",
 	"DeadlineExceeded",
 	"GrammarRevisionMismatch",
+	// an edit reaching the old shard after a ClusterEpoch increment (not sequenced; retry at the new home)
+	"StaleClusterEpoch",
 ]
 const CODE_EXHAUSTED = ["ResourceExhausted"]
 const CODE_DEFINITE = [
@@ -186,6 +188,10 @@ const CODE_DEFINITE = [
 	// a Relay-bound grant whose graph authority has lapsed (ISS-698-417); the feeder's grant is unbound, so it never
 	// meets this, and it is a verdict on the grant like CapabilityTokenExpired
 	"GraphAuthorityStale",
+	// Anchor import refused because the target node already holds the Space (C10.01)
+	"SpaceAlreadyHeld",
+	// routing sketch hashed under another deployment's seed_id (C02.05 / C10.03), never probed
+	"ForeignSketch",
 ]
 const CODE: Record<string, Failure> = {
 	...Object.fromEntries(CODE_TRANSIENT.map((c) => [c, T])),

@@ -152,4 +152,7 @@ export const REFUSAL_CODES = [
 	"DeadlineExceeded",
 	"PublishPastEditBound",
 	"GraphAuthorityStale",
+	"SpaceAlreadyHeld",
+	"ForeignSketch",
+	"StaleClusterEpoch",
 ] as const
