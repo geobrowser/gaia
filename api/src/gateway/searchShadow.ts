@@ -240,6 +240,9 @@ export async function searchWithWordFallback(
 	args: Parameters<GeoDbSearchClient["searchLexical"]>[0],
 	wordLeg: "client" | "engine" = "client",
 ): Promise<string[]> {
+	// geo-db's typeahead refuses text under two code points (kernel QueryTooShort, DefiniteRefusal), so a one-code-point
+	// name is not sent whole. Code points, not UTF-16 units: one emoji is two units. No word of it can be searched either.
+	if (args.mode === "typeahead" && [...args.text].length < MIN_QUERY_LENGTH) return []
 	const whole = await search.searchLexical(args)
 	if (wordLeg === "engine" && args.mode === "typeahead") return whole
 	const words = queryTokens(args.text)

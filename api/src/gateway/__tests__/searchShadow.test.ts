@@ -592,6 +592,26 @@ describe("word fallback", () => {
 		expect(c.searchLexical).toHaveBeenCalledTimes(1)
 	})
 
+	it("skips the whole-text typeahead leg under two code points (kernel QueryTooShort)", async () => {
+		// geo-db refuses typeahead text under 2 code points with DefiniteRefusal; UTF-16 length would let an emoji through.
+		const refuseShort = (answers: Record<string, string[]>) =>
+			vi.fn(async ({text}: {text: string}) => {
+				if ([...text].length < 2) throw new GeoDbError("client_failed", "QueryTooShort")
+				return answers[text] ?? []
+			})
+		for (const text of ["a", "\u{1F600}"]) {
+			const searchLexical = refuseShort({})
+			expect(await searchWithWordFallback({searchLexical}, {...args, text})).toEqual([])
+			expect(searchLexical).not.toHaveBeenCalled()
+		}
+		const two = refuseShort({ab: ["e1"], "\u{1F600}\u{1F600}": ["e2"]})
+		expect(await searchWithWordFallback({searchLexical: two}, {...args, text: "ab"})).toEqual(["e1"])
+		expect(await searchWithWordFallback({searchLexical: two}, {...args, text: "\u{1F600}\u{1F600}"})).toEqual([
+			"e2",
+		])
+		expect(two).toHaveBeenCalledTimes(2)
+	})
+
 	it("lets a failed word search fail the read", async () => {
 		const searchLexical = vi.fn(async ({text}: {text: string}) => {
 			if (text === "lovelace") throw new GeoDbError("timeout", "slow")
