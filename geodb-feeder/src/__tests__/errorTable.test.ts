@@ -229,6 +229,26 @@ describe("geodb-client error table: coverage", () => {
 	})
 })
 
+// The wire codes after GraphAuthorityStale (111): each is a DefiniteRefusal on the wire and permanent for the feeder.
+// 115 NotHome is what a serve in a non-home role answers an Edit with; resending to the same serve cannot succeed, so
+// permanent (dead-letter) is deliberate, not the fall-through default.
+const CODES_112_TO_115 = [
+	[112, "UnknownScope"],
+	[113, "ScanLimitExceeded"],
+	[114, "UnsupportedExtensionTag"],
+	[115, "NotHome"],
+] as const
+
+describe("geodb-client error table: codes 112 to 115", () => {
+	for (const [number, name] of CODES_112_TO_115) {
+		it(`${number} ${name} is listed at its wire position and classed permanent`, () => {
+			expect(REFUSAL_CODES[number - 1]).toBe(name)
+			expect(CODE[name]).toBe(P)
+			expect(classify(`refused: DefiniteRefusal ${name}\n`)).toBe(P)
+		})
+	}
+})
+
 describe("geodb-client error table: classify", () => {
 	for (const [name, want] of Object.entries(CONNECT)) {
 		it(`connect: ${name} is ${want}`, () => {
