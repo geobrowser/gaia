@@ -186,6 +186,11 @@ const CODE_DEFINITE = [
 	// a Relay-bound grant whose graph authority has lapsed (ISS-698-417); the feeder's grant is unbound, so it never
 	// meets this, and it is a verdict on the grant like CapabilityTokenExpired
 	"GraphAuthorityStale",
+	"UnknownScope",
+	"ScanLimitExceeded",
+	"UnsupportedExtensionTag",
+	// a serve outside its home role refuses an Edit; resending to it cannot succeed, so permanent on purpose
+	"NotHome",
 ]
 const CODE: Record<string, Failure> = {
 	...Object.fromEntries(CODE_TRANSIENT.map((c) => [c, T])),
