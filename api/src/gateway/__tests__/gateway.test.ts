@@ -1,8 +1,16 @@
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {classifyDocument, classifyRequest} from "../classify"
-import {parseFieldModes, parseGatewayMode, parseServeTimeoutMs, readGatewayConfig} from "../config"
+import {
+	DEFAULT_SHADOW_MAX_IN_FLIGHT,
+	parseFieldModes,
+	parseGatewayMode,
+	parseServeTimeoutMs,
+	parseShadowMaxInFlight,
+	readGatewayConfig,
+} from "../config"
 import {createGateway, type FieldResolver, routeOperation} from "../gateway"
+import {__resetGatewayMetricsForTests, activateGatewayMetrics, renderGatewayMetrics} from "../metrics"
 import {__resetServeMetricsForTests, renderServeMetrics} from "../serveMetrics"
 
 const json = (body: unknown) =>
@@ -320,5 +328,94 @@ describe("shadow choice among several shadowed roots", () => {
 		expect(intolerant.metas).not.toHaveBeenCalled()
 		expect(intolerant.connection).not.toHaveBeenCalled()
 		expect(connection).toHaveBeenCalledTimes(0)
+	})
+})
+
+describe("shadow in-flight cap", () => {
+	const post = (query: string) =>
+		new Request("http://x/graphql", {
+			method: "POST",
+			headers: {"content-type": "application/json"},
+			body: JSON.stringify({query}),
+		})
+	const delegate = async () =>
+		new Response(JSON.stringify({data: {}}), {headers: {"content-type": "application/json"}})
+	const wait = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+	beforeEach(() => {
+		__resetGatewayMetricsForTests()
+		activateGatewayMetrics("metas")
+	})
+
+	it("parses GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT, falling back to the default", () => {
+		expect(parseShadowMaxInFlight(undefined)).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("0")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("-3")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("2.5")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("nope")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("10001")).toBe(DEFAULT_SHADOW_MAX_IN_FLIGHT)
+		expect(parseShadowMaxInFlight("2")).toBe(2)
+		expect(readGatewayConfig({GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT: "7"}).shadowMaxInFlight).toBe(7)
+	})
+
+	it("skips and counts a sampled operation while the cap's worth of shadows are still running, then compares again", async () => {
+		const releases: Array<() => void> = []
+		const shadow = vi.fn(() => new Promise<void>((resolve) => releases.push(resolve)))
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "metas=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+				GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT: "2",
+			}),
+			delegate,
+			shadows: new Map([["metas", shadow]]),
+			random: () => 0,
+		})
+		const query = "{ metas { nodes { id } } }"
+		for (let i = 0; i < 3; i++) {
+			const response = await gateway(post(query), {})
+			expect(response.status).toBe(200)
+		}
+		await wait()
+		expect(shadow).toHaveBeenCalledTimes(2)
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_skipped_total{field="metas",reason="in_flight"} 1',
+		)
+
+		for (const release of releases.splice(0)) release()
+		await wait()
+		await gateway(post(query), {})
+		await wait()
+		expect(shadow).toHaveBeenCalledTimes(3)
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_skipped_total{field="metas",reason="in_flight"} 1',
+		)
+	})
+
+	it("frees a slot when a shadow throws", async () => {
+		const shadow = vi.fn(async () => {
+			throw new Error("geo-db down")
+		})
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "metas=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+				GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT: "1",
+			}),
+			delegate,
+			shadows: new Map([["metas", shadow]]),
+			random: () => 0,
+		})
+		for (let i = 0; i < 3; i++) {
+			await gateway(post("{ metas { nodes { id } } }"), {})
+			await wait()
+		}
+		expect(shadow).toHaveBeenCalledTimes(3)
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_skipped_total{field="metas",reason="in_flight"} 0',
+		)
 	})
 })

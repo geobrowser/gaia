@@ -154,6 +154,7 @@ const uncompared = new Map<string, number>()
 const shapes = new Map<string, number>()
 const mismatchParts = new Map<string, number>()
 const requests = new Map<string, number>()
+const skipped = new Map<string, number>()
 // gaia_api_gateway_requests_total: every operation the gateway routed to a field in mode shadow or on, whichever way it was answered.
 const fieldRequestFields = new Set<string>()
 const fieldRequests = new Map<string, number>()
@@ -212,6 +213,11 @@ export function recordGatewayMismatchParts(field: string, parts: Iterable<Mismat
 	const distinct = new Set(parts)
 	if (distinct.size === 0) distinct.add("other")
 	for (const part of distinct) bump(mismatchParts, `${field}\t${part}`)
+}
+
+/** Counts a sampled operation for `field` that was not compared because the gateway already ran its most shadows at once. */
+export function recordGatewayShadowSkipped(field: string): void {
+	bump(skipped, field)
 }
 
 /** Counts a shadowable operation for `field` as it arrives, before the sample decides whether to compare it. */
@@ -286,6 +292,14 @@ export function renderGatewayMetrics(): string {
 	)
 	for (const field of fields)
 		lines.push(`gaia_api_gateway_shadow_requests_total{field="${field}"} ${requests.get(field) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_skipped_total Sampled operations not compared because the gateway already ran GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT shadows at once, by root field and reason.",
+		"# TYPE gaia_api_gateway_shadow_skipped_total counter",
+	)
+	for (const field of fields)
+		lines.push(
+			`gaia_api_gateway_shadow_skipped_total{field="${field}",reason="in_flight"} ${skipped.get(field) ?? 0}`,
+		)
 	for (const [name, help, map] of [
 		[
 			"gaia_api_gateway_shadow_postgres_seconds",
@@ -365,6 +379,7 @@ export function __resetGatewayMetricsForTests(): void {
 	shapes.clear()
 	mismatchParts.clear()
 	requests.clear()
+	skipped.clear()
 	fieldRequestFields.clear()
 	fieldRequests.clear()
 	postgresLatency.clear()
