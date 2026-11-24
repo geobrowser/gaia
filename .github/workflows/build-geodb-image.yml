@@ -20,6 +20,14 @@ on:
         required: true
         type: string
         default: 6f47f0fe94
+  # geodb-image-on-green-final.yml calls this with the newest geo-db final commit whose CI
+  # passed. Build-and-push only: it never changes a pin.
+  workflow_call:
+    inputs:
+      geodb_ref:
+        description: "geo-db commit to build (full SHA on the `final` branch)"
+        required: true
+        type: string
 
 concurrency:
   group: build-geodb-image

@@ -1,0 +1,119 @@
+name: Build geodb image on green final
+
+# Keeps registry.digitalocean.com/geo/geodb:<first 10 hex> built for the newest geo-db `final`
+# commit whose CI passed, so a pin roll never has to wait on a 10-minute image build first.
+#
+# Every 20 minutes (and on demand) it asks geo-db for its newest successful `ci` run on a
+# push to `final`. If the registry already has that commit's tag, it stops. Otherwise it
+# calls build-geodb-image.yml with that SHA. `final` moves every few minutes, so this builds
+# at most one image per tick: the newest green one, never a backlog.
+#
+# Build-and-push only. It changes no manifest and no pin, and deploys nothing; rolling the
+# geodb serve to a new tag stays the manual pin roll (geodb/RUNBOOK.md).
+#
+# Credentials: GEO_DB_READ_TOKEN (already used by build-geodb-image.yml to clone geo-db).
+# scripts/geodb-newest-green-final.sh tries geo-db's Actions runs ("Actions: read"), then its
+# check runs ("Checks: read"), and fails naming the permission to add if it can read neither.
+# DIGITALOCEAN_ACCESS_TOKEN lists the registry tags.
+#
+# Pause: set the repository variable GEODB_IMAGE_ON_GREEN_FINAL=off.
+
+on:
+  schedule:
+    - cron: '7,27,47 * * * *'
+  workflow_dispatch: {}
+  # On a PR that edits this file, only the `probe` job runs: it reports which geo-db APIs the
+  # token can read and never fails. The lookup and the build run only on schedule and dispatch.
+  pull_request:
+    paths:
+      - '.github/workflows/geodb-image-on-green-final.yml'
+      - '.github/workflows/build-geodb-image.yml'
+      - 'scripts/geodb-newest-green-final.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: geodb-image-on-green-final-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Which geo-db APIs can GEO_DB_READ_TOKEN read?
+        env:
+          GH_TOKEN: ${{ secrets.GEO_DB_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Secret GEO_DB_READ_TOKEN is not available to this run."
+            exit 0
+          fi
+          out="$(PROBE=1 scripts/geodb-newest-green-final.sh)"
+          echo "$out"
+          { echo "## GEO_DB_READ_TOKEN scope on geo-db"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if ! echo "$out" | grep -Eq '^(actions runs|check runs|commit status): yes'; then
+            echo "::warning::The scheduled lookup will fail until GEO_DB_READ_TOKEN gets \"Actions: read\" (or \"Checks: read\") on geobrowser/geo-db."
+          fi
+
+  find:
+    if: github.event_name != 'pull_request' && vars.GEODB_IMAGE_ON_GREEN_FINAL != 'off'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.find.outputs.sha }}
+      build: ${{ steps.find.outputs.build }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Newest green final commit, and is it built?
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GEO_DB_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Secret GEO_DB_READ_TOKEN is not set."
+            exit 1
+          fi
+          rc=0
+          sha="$(scripts/geodb-newest-green-final.sh)" || rc=$?
+          if [ "$rc" = 2 ]; then
+            echo "::warning::No green geo-db final commit found; nothing to build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$rc" != 0 ] || [ -z "$sha" ]; then
+            echo "::error::Could not find the newest green geo-db final commit (see the message above)."
+            exit 1
+          fi
+          tag="${sha:0:10}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if ! tags="$(doctl registry repository list-tags geodb)"; then
+            echo "::error::doctl failed listing geodb tags (registry or auth problem)."
+            exit 1
+          fi
+          if echo "$tags" | awk -v t="$tag" '$1==t{found=1} END{exit !found}'; then
+            build=false
+            echo "geodb:$tag is already in the registry (geo-db $sha); nothing to do."
+          else
+            build=true
+            echo "::notice::geodb:$tag (green geo-db final $sha) is not in the registry; building it."
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          {
+            echo "## geodb image on green final"
+            echo "Newest green final: \`$sha\` (tag \`$tag\`). Build needed: $build."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: find
+    if: needs.find.outputs.build == 'true'
+    uses: ./.github/workflows/build-geodb-image.yml
+    with:
+      geodb_ref: ${{ needs.find.outputs.sha }}
+    secrets: inherit
