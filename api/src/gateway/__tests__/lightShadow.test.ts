@@ -1837,6 +1837,64 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	// `relationsList(filter: {typeId}) { toEntity { name } }`: neither the rows' type nor their target id is selected, only the
+	// target's own fields (the Explore card's `tags` / `publisher` / `authors` aliases of `entitiesOrderedByProperty`).
+	describe("a type-filtered relations list that selects only the target's fields", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const otherType = "1b2c3d4e5f6a4b7c8d9e0f1a2b3c4d5e"
+		const target = "99999999999949998999999999999999"
+		const query = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id tags: relationsList(filter: {typeId: {is: "${edgeType}"}}, first: 4) { toEntity { name } } } }`
+		const body = {data: {entities: [{id: FIRST.id, tags: [{toEntity: {name: "Tag"}}]}]}}
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = (type: string) =>
+			`${conformingId("entity", type)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, q = query, payload: unknown = body) =>
+			call(s.points.get("entities") as never, q, {}, payload)
+
+		it("plans the list with the filter's Types, nested fields uncompared", () => {
+			const a = analyzeLightEntities(parse(query), null, {}, {relationsTypeFilter: true})
+			expect(a.ok).toBe(true)
+			if (a.ok)
+				expect(a.plan.uncompared).toEqual(expect.arrayContaining(["nested_entity", "filter_completeness"]))
+		})
+
+		it("stays unsupported without the type-filter flag, and without a filter", () => {
+			expect(analyzeLightEntities(parse(query), null, {}, {})).toEqual({ok: false, reason: "selection"})
+			const unfiltered = query.replace(`filter: {typeId: {is: "${edgeType}"}}, `, "")
+			expect(analyzeLightEntities(parse(unfiltered), null, {}, {relationsTypeFilter: true})).toEqual({
+				ok: false,
+				reason: "selection",
+			})
+		})
+
+		it("matches when geo-db holds a relation of a filter Type", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)}, {typeFilter: true})
+			await callQuery(s)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({nested_entity: 1})
+		})
+
+		it("flags a list geo-db holds no relation of the filter's Types for", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(otherType)}, {typeFilter: true})
+			await callQuery(s)
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
+	it("plans the Explore card selection of entitiesOrderedByProperty (target-only `toEntity` lists)", () => {
+		const id = (n: number) => `${String(n).repeat(8)}-1111-4111-8111-111111111111`
+		const nested = `toEntity { valuesList(filter: {propertyId: {is: "${id(2)}"}}) { text } }`
+		const query = `{ entitiesOrderedByProperty(propertyId: "${id(2)}", sortDirection: DESC, dataType: "text", typeIds: ["${id(1)}"], first: 24, filter: {and: [{relations: {some: {toEntityId: {in: ["${id(3)}"]}, typeId: {is: "${id(4)}"}}}}]}) { id name typeIds relationsList(filter: {typeId: {is: "${id(5)}"}}, first: 1) { ${nested} } description spaceIds valuesList(filter: {propertyId: {in: ["${id(2)}"]}}) { propertyId text datetime } tags: relationsList(filter: {typeId: {is: "${id(5)}"}}, first: 4) { toEntity { name } } quoted: relationsList(filter: {typeId: {is: "${id(5)}"}}, first: 1) { toEntityId } } }`
+		const options = {ordered: true, entitiesBatch: true, relationsTypeFilter: true, derivedFields: true}
+		expect(analyzeLightEntities(parse(query), null, {}, options).ok).toBe(true)
+		// Without the flag the two target-only lists are not comparable.
+		expect(analyzeLightEntities(parse(query), null, {}, {...options, relationsTypeFilter: false})).toEqual({
+			ok: false,
+			reason: "selection",
+		})
+	})
+
 	// The target's own values: `relationsList { typeId toEntity { id valuesList } }`, read as one batch of the targets' cards.
 	describe("a relation target's own values", () => {
 		const typeId = "e550fe517e904b2c8fffdf13408f5634"
