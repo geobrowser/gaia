@@ -2,6 +2,7 @@ import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {conformingId} from "../../geodb/card"
 import {GeoDbError} from "../../geodb/client"
+import {withFailureScope} from "../../geodb/failReason"
 import {createCliGeoDbSearchClient, parseSearchOutput} from "../../geodb/search"
 import {normalizeUuid} from "../../utils/uuid"
 import {readGatewayConfig} from "../config"
@@ -315,6 +316,21 @@ describe("search shadow", () => {
 		expect(down.log.warn).toHaveBeenCalled()
 		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({})
 	})
+
+	it.each(["search", "searchConnection"] as const)(
+		"notes a timeout or client_failed read in the gateway failed reason for %s, not other",
+		async (field) => {
+			const query = field === "search" ? SEARCH : CONNECTION
+			const body = {data: {[field]: field === "search" ? [] : {nodes: []}}}
+			for (const error of [new GeoDbError("timeout", "slow"), new GeoDbError("client_failed", "broken pipe")]) {
+				await withFailureScope(async () => run(setup(error).shadows, field, query, body))
+			}
+			expect(metric("gaia_api_gateway_shadow_failed_total")).toEqual({
+				[`field=${field},reason=timeout`]: 1,
+				[`field=${field},reason=client_failed`]: 1,
+			})
+		},
+	)
 
 	// The text the pin's `geodb-client search` prints (api pod logs, 2026-11-21: `GeoDbError: refused: DefiniteRefusal DefiniteRefusal`).
 	const REFUSAL = "refused: DefiniteRefusal DefiniteRefusal"

@@ -152,6 +152,12 @@ export const REFUSAL_CODES = [
 	"DeadlineExceeded",
 	"PublishPastEditBound",
 	"GraphAuthorityStale",
+	"UnknownScope",
+	"ScanLimitExceeded",
+	// 114 and 115 are in newer builds of the client only; the pin's table ends at 113. Listed so a refusal that names
+	// them is classed on purpose, not by the fall-through.
+	"UnsupportedExtensionTag",
+	"NotHome",
 	"SpaceAlreadyHeld",
 	"ForeignSketch",
 	"StaleClusterEpoch",
