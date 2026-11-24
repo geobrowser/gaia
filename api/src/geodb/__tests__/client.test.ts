@@ -514,6 +514,45 @@ process.exit(1)
 		client.close()
 	})
 
+	it("does not back the whole pool off when a read times out on a worker still starting", async () => {
+		// The worker says ready only after the read's deadline: a saturated serve queues its handshake.
+		const {client} = fakePipe(
+			`
+setTimeout(() => process.stdout.write("ready\\n"), 1500)
+lines(() => {})
+`,
+			{timeoutMs: 150},
+		)
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({reason: "timeout"})
+		// The next read is tried (and times out itself); it is not turned away as "backing off".
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({reason: "timeout"})
+		client.close()
+	})
+
+	it("still backs off after a worker exits or answers wrongly before ready", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("garbage\\n")\nprocess.exit(1)`)
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+		})
+		const started = starts()
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+			message: "geodb-client is not starting; backing off",
+		})
+		expect(starts()).toBe(started)
+		client.close()
+	})
+
+	it("reports the pool's load: workers busy, reads waiting", async () => {
+		const {client} = fakePipe(`process.stdout.write("ready\\n")\nlines(() => {})`, {poolSize: 2, timeoutMs: 5000})
+		expect(client.load()).toEqual({slots: 2, busy: 0, queued: 0})
+		const reads = [1, 2, 3, 4, 5].map(() => client.readCard({geoSpaceId: SPACE, entityId: ENTITY}).catch(() => {}))
+		expect(client.load()).toEqual({slots: 2, busy: 2, queued: 3})
+		client.close()
+		await Promise.all(reads)
+		expect(client.load().queued).toBe(0)
+	})
+
 	it("refuses ids that are not 32 hex digits before starting anything", async () => {
 		const {client, starts} = fakePipe("process.exit(0)")
 		await expect(client.readCard({geoSpaceId: SPACE, entityId: 'x" } }'})).rejects.toBeInstanceOf(GeoDbError)

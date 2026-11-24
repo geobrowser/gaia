@@ -1,5 +1,7 @@
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import {GeoDbError} from "../../geodb/client"
+import {noteReadFailure, withFailureScope} from "../../geodb/failReason"
 import {classifyDocument, classifyRequest} from "../classify"
 import {
 	DEFAULT_SHADOW_MAX_IN_FLIGHT,
@@ -10,7 +12,12 @@ import {
 	readGatewayConfig,
 } from "../config"
 import {createGateway, type FieldResolver, routeOperation} from "../gateway"
-import {__resetGatewayMetricsForTests, activateGatewayMetrics, renderGatewayMetrics} from "../metrics"
+import {
+	__resetGatewayMetricsForTests,
+	activateGatewayMetrics,
+	recordGatewayShadow,
+	renderGatewayMetrics,
+} from "../metrics"
 import {__resetServeMetricsForTests, renderServeMetrics} from "../serveMetrics"
 
 const json = (body: unknown) =>
@@ -394,6 +401,36 @@ describe("shadow in-flight cap", () => {
 		)
 	})
 
+	it("sheds a sampled operation without running its shadow while the geo-db pool is overloaded, counted skipped not failed", async () => {
+		let overloaded = true
+		const shadow = vi.fn(async () => {})
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "metas=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+			}),
+			delegate,
+			shadows: new Map([["metas", shadow]]),
+			random: () => 0,
+			shadowShed: () => overloaded,
+		})
+		const query = "{ metas { nodes { id } } }"
+		await gateway(post(query), {})
+		await gateway(post(query), {})
+		await wait()
+		expect(shadow).not.toHaveBeenCalled()
+		const shed = renderGatewayMetrics()
+		expect(shed).toContain('gaia_api_gateway_shadow_skipped_total{field="metas",reason="pool_busy"} 2')
+		expect(shed).toContain('gaia_api_gateway_shadow_skipped_total{field="metas",reason="in_flight"} 0')
+		expect(shed).toContain('gaia_api_gateway_shadow_failed_total{field="metas",reason="other"} 0')
+
+		overloaded = false
+		await gateway(post(query), {})
+		await wait()
+		expect(shadow).toHaveBeenCalledTimes(1)
+	})
+
 	it("frees a slot when a shadow throws", async () => {
 		const shadow = vi.fn(async () => {
 			throw new Error("geo-db down")
@@ -417,5 +454,27 @@ describe("shadow in-flight cap", () => {
 		expect(renderGatewayMetrics()).toContain(
 			'gaia_api_gateway_shadow_skipped_total{field="metas",reason="in_flight"} 0',
 		)
+	})
+})
+
+describe("a read the pool never tried is not a failed shadow", () => {
+	beforeEach(() => __resetGatewayMetricsForTests())
+
+	it("counts a cooling_down failure as unsupported_selection / cooling_down, and a timeout as failed", () => {
+		activateGatewayMetrics("entity")
+		withFailureScope(() => {
+			noteReadFailure(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
+			recordGatewayShadow("entity", "failed")
+		})
+		withFailureScope(() => {
+			noteReadFailure(new GeoDbError("timeout", "slow"))
+			recordGatewayShadow("entity", "failed")
+		})
+		const out = renderGatewayMetrics()
+		expect(out).toContain('gaia_api_gateway_shadow_total{field="entity",result="failed"} 1')
+		expect(out).toContain('gaia_api_gateway_shadow_total{field="entity",result="unsupported_selection"} 1')
+		expect(out).toContain('gaia_api_gateway_shadow_unsupported_total{field="entity",reason="cooling_down"} 1')
+		expect(out).toContain('gaia_api_gateway_shadow_failed_total{field="entity",reason="cooling_down"} 0')
+		expect(out).toContain('gaia_api_gateway_shadow_failed_total{field="entity",reason="timeout"} 1')
 	})
 })

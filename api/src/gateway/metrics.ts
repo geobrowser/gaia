@@ -47,7 +47,13 @@ export const UNSUPPORTED_REASONS = [
 	"nested_filter",
 	/** `relationsConnection`: a filter operator other than `is`, `equalTo` and `in` (`isNull: false`, `greaterThan`, ..). */
 	"filter_operator",
+	/** The pool refused to try the read: it was backing off after a worker that exited before ready (`failed{reason=cooling_down}` before; the read never reached geo-db, so it says nothing about geo-db's answer). */
+	"cooling_down",
 ] as const
+
+/** Why a sampled shadow was not run at all: the gateway's own cap on shadows at once, or the geo-db pool already saturated. */
+export const SKIPPED_REASONS = ["in_flight", "pool_busy"] as const
+export type SkippedReason = (typeof SKIPPED_REASONS)[number]
 
 /**
  * Parts of a shadowed operation that were answered by PostGraphile but not checked against geo-db, by reason.
@@ -209,9 +215,18 @@ function renderFieldRequests(): string {
 }
 
 export function recordGatewayShadow(field: string, result: ShadowResult): void {
-	bump(results, `${field}\t${result}`)
 	// Why a read failed comes from the pool's failure scope (see geodb/failReason.ts); `other` when none was noted.
-	if (result === "failed") bump(failed, `${field}\t${notedFailReason()}`)
+	if (result === "failed") {
+		const why = notedFailReason()
+		if (why === "cooling_down") {
+			// The pool never tried the read (it was backing off), so geo-db gave no answer to judge: not a failure.
+			bump(results, `${field}\tunsupported_selection`)
+			bump(unsupported, `${field}\tcooling_down`)
+			return
+		}
+		bump(failed, `${field}\t${why}`)
+	}
+	bump(results, `${field}\t${result}`)
 }
 
 /** Counts each distinct part of one mismatching operation once. An empty list counts `other`. */
@@ -222,8 +237,8 @@ export function recordGatewayMismatchParts(field: string, parts: Iterable<Mismat
 }
 
 /** Counts a sampled operation for `field` that was not compared because the gateway already ran its most shadows at once. */
-export function recordGatewayShadowSkipped(field: string): void {
-	bump(skipped, field)
+export function recordGatewayShadowSkipped(field: string, reason: SkippedReason = "in_flight"): void {
+	bump(skipped, `${field}\t${reason}`)
 }
 
 /** Counts a shadowable operation for `field` as it arrives, before the sample decides whether to compare it. */
@@ -299,13 +314,14 @@ export function renderGatewayMetrics(): string {
 	for (const field of fields)
 		lines.push(`gaia_api_gateway_shadow_requests_total{field="${field}"} ${requests.get(field) ?? 0}`)
 	lines.push(
-		"# HELP gaia_api_gateway_shadow_skipped_total Sampled operations not compared because the gateway already ran GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT shadows at once, by root field and reason.",
+		"# HELP gaia_api_gateway_shadow_skipped_total Sampled operations not compared by root field and reason: in_flight (the gateway already ran GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT shadows at once) or pool_busy (the geo-db pool's queue was at GRAPHQL_GATEWAY_SHADOW_SHED_QUEUE, so the read was not sent).",
 		"# TYPE gaia_api_gateway_shadow_skipped_total counter",
 	)
 	for (const field of fields)
-		lines.push(
-			`gaia_api_gateway_shadow_skipped_total{field="${field}",reason="in_flight"} ${skipped.get(field) ?? 0}`,
-		)
+		for (const reason of SKIPPED_REASONS)
+			lines.push(
+				`gaia_api_gateway_shadow_skipped_total{field="${field}",reason="${reason}"} ${skipped.get(`${field}\t${reason}`) ?? 0}`,
+			)
 	for (const [name, help, map] of [
 		[
 			"gaia_api_gateway_shadow_postgres_seconds",
