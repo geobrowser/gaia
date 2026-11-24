@@ -39,6 +39,7 @@ import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "
 
 import {conformingId} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
+import {noteReadFailure} from "../geodb/failReason"
 import {
 	type GeoDbSearchClient,
 	type GeoDbSearchMode,
@@ -336,6 +337,8 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					})
 					return
 				}
+				// The CLI client does not go through the pool, which is what notes a failure's reason for the gateway counter.
+				noteReadFailure(error)
 				recordGatewayShadow(field, "failed")
 				recordSearchFailure(field, error instanceof GeoDbError ? error.reason : "error")
 				deps.log.warn(`${label} read failed`, {
