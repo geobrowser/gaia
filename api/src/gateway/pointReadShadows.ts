@@ -396,28 +396,33 @@ function finishRelationPlan(plan: RelationPlan): RelationPlan {
 	return plan
 }
 
+export type RelationsPointPlan = {
+	field: typeof RELATIONS_FIELD
+	key: string
+	ids: string[]
+	list: RelationListPlan | null
+	relation: RelationPlan
+	/** `relationsConnection`: the rows sit under `nodes` (or its alias) of the answer. */
+	connection?: true
+	nodesKey?: string
+}
+
 export type PointPlan =
 	| {field: typeof ENTITIES_FIELD; key: string; ids: string[]; card: EntityCardPlan; uncompared: UncomparedReason[]}
 	| {field: typeof RELATION_FIELD; key: string; id: string; relation: RelationPlan}
-	| {
-			field: typeof RELATIONS_FIELD
-			key: string
-			ids: string[]
-			list: RelationListPlan | null
-			relation: RelationPlan
-			/** `relationsConnection`: the rows sit under `nodes` of the answer. */
-			connection?: true
-	  }
+	| RelationsPointPlan
+	| {field: typeof RELATIONS_CONNECTION_FIELD; plans: RelationsPointPlan[]}
 
 /**
- * What a `relationsConnection` selection asks for: the `nodes` row selection (every `nodes` field merged), and whether
+ * What a `relationsConnection` selection asks for: the `nodes` row selection (and its response key), and whether
  * `pageInfo` / `totalCount` are asked. Anything else (`edges`, a second `nodes` alias) is unsupported.
  */
 function connectionParts(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
-): {nodes: SelectionSetNode | null; pageInfo: boolean; totalCount: boolean} {
+): {nodes: SelectionSetNode | null; nodesKey: string; pageInfo: boolean; totalCount: boolean} {
 	let nodes: SelectionSetNode | null = null
+	let nodesKey = "nodes"
 	let pageInfo = false
 	let totalCount = false
 	for (const field of inlineFields(set, fragments)) {
@@ -425,13 +430,60 @@ function connectionParts(
 		if (name === "nodes") {
 			if (nodes || field.arguments?.length || !field.selectionSet) return refuse("selection")
 			nodes = field.selectionSet
+			nodesKey = keyOf(field)
 		} else if (name === "pageInfo" && !field.arguments?.length && field.selectionSet) pageInfo = true
 		else if (name === "totalCount" && isPlain(field)) totalCount = true
 		// Aggregates are counts geo-db is not asked for: counted uncompared beside `nodes`, `count_only` alone.
 		else if ((name === "aggregates" || name === "groupedAggregates") && field.selectionSet) totalCount = true
 		else if (name !== "__typename") return refuse("selection")
 	}
-	return {nodes, pageInfo, totalCount}
+	return {nodes, nodesKey, pageInfo, totalCount}
+}
+
+function planRelationsRoot(
+	root: FieldNode,
+	connection: boolean,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Args,
+	card: (set: SelectionSetNode, uncompared: Set<UncomparedReason>) => EntityCardPlan,
+): RelationsPointPlan {
+	if (!root.selectionSet) return refuse("selection")
+	const args = rootArgs(root, resolved)
+	const notes = {partial: false}
+	const filter = relationFilter(args.filter, connection, notes)
+	const onlyIds = Object.keys(filter).length === 1 && filter.id !== undefined
+	const list = onlyIds && !connection ? null : planRelationList(args, filter, connection, notes.partial)
+	if (!list) checkListArgs(args, filter.id ?? [])
+	let rowSet = root.selectionSet
+	let nodesKey: string | undefined
+	const extra = new Set<UncomparedReason>()
+	if (connection) {
+		const parts = connectionParts(root.selectionSet, fragments)
+		if (!parts.nodes) return refuse("count_only")
+		rowSet = parts.nodes
+		nodesKey = parts.nodesKey
+		if (parts.pageInfo) extra.add("page_info")
+		if (parts.totalCount) extra.add("relation_count")
+	}
+	const planned = planRelation(rowSet, fragments, card)
+	const fixed: RelationPlan["fixed"] = {}
+	for (const column of EDGE_COLUMNS) {
+		const values = filter[column]
+		if (values?.length === 1) fixed[column] = values[0]
+	}
+	const relation = finishRelationPlan({...planned, fixed})
+	// The answer of a filtered list is checked row by row: geo-db cannot say what Postgres left out.
+	if (list && !list.slice)
+		relation.uncompared = [...new Set([...relation.uncompared, "filter_completeness" as const])]
+	relation.uncompared = [...new Set([...relation.uncompared, ...extra])]
+	return {
+		field: RELATIONS_FIELD,
+		key: keyOf(root),
+		ids: filter.id ?? [],
+		list,
+		relation,
+		...(connection ? {connection: true as const, nodesKey} : {}),
+	}
 }
 
 export type PointAnalysis = {ok: true; plan: PointPlan} | {ok: false; reason: UnsupportedReason}
@@ -445,56 +497,47 @@ export function analyzePointRead(
 ): PointAnalysis {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
+		const card = (set: SelectionSetNode, uncompared: Set<UncomparedReason>) =>
+			planEntitySelection(set, fragments, resolved, uncompared)
+		if (field === RELATIONS_CONNECTION_FIELD) {
+			const matching = roots.filter((r) => r.name.value === RELATIONS_CONNECTION_FIELD)
+			if (matching.length === 0) return {ok: false, reason: "not_single_root"}
+			const plans: RelationsPointPlan[] = []
+			const seenKeys = new Set<string>()
+			let hasCountOnly = false
+			for (const root of matching) {
+				const key = keyOf(root)
+				if (seenKeys.has(key)) return {ok: false, reason: "selection"}
+				seenKeys.add(key)
+				try {
+					plans.push(planRelationsRoot(root, true, fragments, resolved, card))
+				} catch (error) {
+					if (error instanceof Unsupported && error.reason === "count_only") {
+						hasCountOnly = true
+						continue
+					}
+					throw error
+				}
+			}
+			const first = plans[0]
+			if (!first) return {ok: false, reason: "count_only"}
+			if (hasCountOnly)
+				first.relation.uncompared = [...new Set([...first.relation.uncompared, "relation_count" as const])]
+			if (plans.length === 1) return {ok: true, plan: first}
+			return {ok: true, plan: {field: RELATIONS_CONNECTION_FIELD, plans}}
+		}
 		const root = roots[0]
 		if (roots.length !== 1 || !root || root.name.value !== field) return {ok: false, reason: "not_single_root"}
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const args = rootArgs(root, resolved)
-		const card = (set: SelectionSetNode, uncompared: Set<UncomparedReason>) =>
-			planEntitySelection(set, fragments, resolved, uncompared)
 		if (field === RELATION_FIELD) {
 			if (Object.keys(args).length !== 1 || !("id" in args)) return {ok: false, reason: "args"}
 			const id = typeof args.id === "string" && isValidUuid(args.id) ? normalizeUuid(args.id) : refuse("args")
 			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
 			return {ok: true, plan: {field, key: keyOf(root), id, relation}}
 		}
-		if (field === RELATIONS_FIELD || field === RELATIONS_CONNECTION_FIELD) {
-			const connection = field === RELATIONS_CONNECTION_FIELD
-			const notes = {partial: false}
-			const filter = relationFilter(args.filter, connection, notes)
-			const onlyIds = Object.keys(filter).length === 1 && filter.id !== undefined
-			const list = onlyIds && !connection ? null : planRelationList(args, filter, connection, notes.partial)
-			if (!list) checkListArgs(args, filter.id ?? [])
-			let rowSet = root.selectionSet
-			const extra = new Set<UncomparedReason>()
-			if (connection) {
-				const parts = connectionParts(root.selectionSet, fragments)
-				if (!parts.nodes) return {ok: false, reason: "count_only"}
-				rowSet = parts.nodes
-				if (parts.pageInfo) extra.add("page_info")
-				if (parts.totalCount) extra.add("relation_count")
-			}
-			const planned = planRelation(rowSet, fragments, card)
-			const fixed: RelationPlan["fixed"] = {}
-			for (const column of EDGE_COLUMNS) {
-				const values = filter[column]
-				if (values?.length === 1) fixed[column] = values[0]
-			}
-			const relation = finishRelationPlan({...planned, fixed})
-			// The answer of a filtered list is checked row by row: geo-db cannot say what Postgres left out.
-			if (list && !list.slice)
-				relation.uncompared = [...new Set([...relation.uncompared, "filter_completeness" as const])]
-			relation.uncompared = [...new Set([...relation.uncompared, ...extra])]
-			return {
-				ok: true,
-				plan: {
-					field: RELATIONS_FIELD,
-					key: keyOf(root),
-					ids: filter.id ?? [],
-					list,
-					relation,
-					...(connection ? {connection: true as const} : {}),
-				},
-			}
+		if (field === RELATIONS_FIELD) {
+			return {ok: true, plan: planRelationsRoot(root, false, fragments, resolved, card)}
 		}
 		// A longer `entities` id list is compared on an even spread of MAX_BATCH_IDS of its ids.
 		const ids = idsFromFilter(args.filter, Number.POSITIVE_INFINITY)
@@ -756,13 +799,34 @@ function collectItems(
 	const root = asRecord(body)
 	if (!root || root.errors !== undefined) return null
 	const data = asRecord(root.data)
-	if (!data || !(plan.key in data)) return null
+	if (!data) return null
+	if (plan.field === RELATIONS_CONNECTION_FIELD) {
+		const items: Item[] = []
+		const uncompared = new Set<UncomparedReason>()
+		let truncated = false
+		let anyComparable = false
+		for (const subplan of plan.plans) {
+			const one = collectItems(subplan, body, facets)
+			if (!one) continue
+			anyComparable = true
+			items.push(...one.items)
+			truncated ||= one.truncated
+			for (const reason of one.uncompared ?? []) uncompared.add(reason)
+		}
+		if (!anyComparable) return null
+		if (items.length > MAX_BATCH_IDS) {
+			uncompared.add("sampled_rows")
+			return {items: spread(items, MAX_BATCH_IDS), truncated, uncompared: [...uncompared]}
+		}
+		return {items, truncated, uncompared: [...uncompared]}
+	}
+	if (!(plan.key in data)) return null
 	let answer = data[plan.key]
 	if (plan.field === RELATIONS_FIELD && plan.connection) {
 		// A connection that is null (PostGraphile hid it) or has no `nodes` array has nothing to compare.
 		const connection = asRecord(answer)
 		if (!connection) return null
-		answer = connection.nodes
+		answer = connection[plan.nodesKey ?? "nodes"]
 	}
 	if (plan.field === RELATION_FIELD) {
 		// geo-db cannot look a relation up by id: a relation PostGraphile lacks has nothing to compare.
@@ -830,7 +894,7 @@ function collectItems(
 function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ_FIELDS)[number]): FieldShadow {
 	activateGatewayMetrics(field)
 	const label = `gateway ${field} shadow`
-	return async ({params, document, classification, response}) => {
+	const shadow: FieldShadow = async ({params, document, classification, response}) => {
 		try {
 			const analysis = analyzePointRead(field, document, classification.operationName, params.variables)
 			if (!analysis.ok) {
@@ -887,7 +951,9 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			const planned =
 				plan.field === RELATION_FIELD || plan.field === RELATIONS_FIELD
 					? plan.relation.uncompared
-					: plan.uncompared
+					: plan.field === RELATIONS_CONNECTION_FIELD
+						? plan.plans.flatMap((p) => p.relation.uncompared)
+						: plan.uncompared
 			const unsupported = judged.find((j) => j.result === "unsupported")
 			if (mismatched.length === 0 && unsupported?.reason) {
 				// Part of the operation was never compared (the entity's spaces, the budget): not a match.
@@ -922,6 +988,8 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			} catch {}
 		}
 	}
+	if (field === RELATIONS_CONNECTION_FIELD) shadow.tolerates = "*"
+	return shadow
 }
 
 /** The shadows for the given point-read root fields, by field. Registers only their metric series. */
