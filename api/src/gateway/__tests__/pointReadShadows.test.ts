@@ -963,13 +963,7 @@ describe("relationsConnection shadow", () => {
 	})
 
 	it.each([
-		[
-			"a nested-object filter",
-			"filter: {typeId: {is: $t}, fromEntity: {createdAt: {greaterThan: $t}}}",
-			"nested_filter",
-		],
-		["a combinator", "filter: {and: [{typeId: {is: $t}}]}", "nested_filter"],
-		["isNull false", "filter: {typeId: {is: $t}, spaceId: {isNull: false}}", "filter_operator"],
+		["an operator with two keys", "filter: {typeId: {is: $t, in: [$t]}}", "filter"],
 		["an unknown column", "filter: {position: {is: $t}}", "filter"],
 		["no filter", "first: 5", "filter"],
 		["orderBy plus condition", "filter: {typeId: {is: $t}}, condition: {id: $t}", "args"],
@@ -977,6 +971,75 @@ describe("relationsConnection shadow", () => {
 	])("refuses %s", (_, args, reason) => {
 		const query = `query Q($t: UUID!) { relationsConnection(${args}) { nodes { fromEntityId spaceId typeId toEntityId } } }`
 		expect(analyzePointRead("relationsConnection", parse(query), null, {t: REL_TYPE})).toEqual({ok: false, reason})
+	})
+
+	describe("filters that restrict Postgres' rows without changing what an edge is", () => {
+		const ROW = {fromEntityId: FROM, spaceId: SPACE, typeId: REL_TYPE, toEntityId: TARGET}
+		const NODES = "nodes { fromEntityId spaceId typeId toEntityId }"
+		const plan = (filter: string, sel = NODES) => {
+			const query = `query Q { relationsConnection(first: 5, filter: ${filter}) { ${sel} } }`
+			return analyzePointRead("relationsConnection", parse(query), null, {})
+		}
+		// The web's most common shape: from-entity facets, one space, one type and one target by id.
+		const FACETS = `{fromEntity: {spaceIds: {overlaps: ["${SPACE}"]}, typeIds: {overlaps: ["${PERSON}"]}}, spaceId: {is: "${SPACE}"}, toEntity: {id: {is: "${TARGET}"}}, typeId: {is: "${REL_TYPE}"}}`
+
+		it("reads toEntity: {id} as the target and compares the rows (a match and a mismatch)", async () => {
+			const query = `query Q { relationsConnection(first: 5, filter: ${FACETS}) { ${NODES} } }`
+			const ok = setup(geo(TARGET))
+			await go(ok.shadows, query, conn([ROW]), {})
+			expect(totals("relationsConnection")).toEqual({match: 1})
+			expect(totals("relationsConnection", "gaia_api_gateway_shadow_uncompared_total")).toMatchObject({
+				filter_completeness: 1,
+			})
+			__resetGatewayMetricsForTests()
+			const bad = setup(geo(PERSON))
+			await go(bad.shadows, query, conn([ROW]), {})
+			expect(totals("relationsConnection")).toEqual({mismatch: 1})
+			expect(unsupported()).toEqual({})
+		})
+
+		it("never treats a partly-understood filter as the whole slice", () => {
+			const a = plan(
+				`{fromEntityId: {is: "${FROM}"}, spaceId: {is: "${SPACE}"}, typeId: {is: "${REL_TYPE}"}, toEntity: {typeIds: {overlaps: ["${PERSON}"]}}}`,
+			)
+			expect(a.ok && a.plan.field === "relations" && a.plan.list?.slice).toBe(null)
+		})
+
+		it("checks the returned rows when the filter only narrows through objects or combinators", () => {
+			expect(plan(`{fromEntity: {createdAt: {greaterThan: "x"}}}`).ok).toBe(true)
+			expect(plan(`{and: [{typeId: {is: "${REL_TYPE}"}}]}`).ok).toBe(true)
+			// ... but with no edge column to read, there is nothing to check.
+			expect(plan(`{and: [{typeId: {is: "${REL_TYPE}"}}]}`, "nodes { id }")).toEqual({
+				ok: false,
+				reason: "selection",
+			})
+		})
+
+		it("ignores notIn, or and not, and compares the rows", () => {
+			const notIn = plan(
+				`{fromEntityId: {is: "${FROM}"}, spaceId: {in: ["${SPACE}"]}, typeId: {notIn: ["${PERSON}"]}}`,
+			)
+			expect(notIn.ok).toBe(true)
+			const orNot = plan(
+				`{or: [{fromEntity: {id: {isNot: "${FROM}"}}}, {typeId: {is: "${PERSON}"}}], not: {typeId: {is: "${PERSON}"}}, spaceId: {is: "${SPACE}"}, typeId: {is: "${REL_TYPE}"}}`,
+			)
+			expect(orNot.ok).toBe(true)
+			// A value inside or/not must not become a fixed edge column.
+			if (orNot.ok && orNot.plan.field === "relations") expect(orNot.plan.list?.filter.typeId).toEqual([REL_TYPE])
+		})
+
+		it("does not take a column inside or/not/and as a constraint on every row", () => {
+			const a = plan(`{or: [{spaceId: {is: "${SPACE}"}}], typeId: {is: "${REL_TYPE}"}}`)
+			expect(a.ok && a.plan.field === "relations" && a.plan.list?.filter).toEqual({typeId: [REL_TYPE]})
+		})
+
+		it("names aggregates selections count_only, whatever the filter", () => {
+			expect(plan(FACETS, "aggregates { distinctCount { id } }")).toEqual({ok: false, reason: "count_only"})
+			expect(plan(FACETS, "groupedAggregates(groupBy: [TYPE_ID]) { keys }")).toEqual({
+				ok: false,
+				reason: "count_only",
+			})
+		})
 	})
 
 	it("refuses several roots in one document", () => {
@@ -989,9 +1052,9 @@ describe("relationsConnection shadow", () => {
 
 	it("counts an unsupported shape under the field with its reason", async () => {
 		const {shadows, readCard} = setup()
-		const query = `query Q($t: UUID!) { relationsConnection(filter: {fromEntity: {name: {is: "x"}}}) { nodes { id } } }`
+		const query = `query Q($t: UUID!) { relationsConnection(filter: {position: {is: "x"}}) { nodes { id } } }`
 		await go(shadows, query, conn([]), {t: REL_TYPE})
-		expect(unsupported()).toEqual({nested_filter: 1})
+		expect(unsupported()).toEqual({filter: 1})
 		expect(readCard).not.toHaveBeenCalled()
 	})
 

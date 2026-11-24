@@ -85,8 +85,10 @@ export const RELATIONS_FIELD = "relations"
  * `relationsConnection(filter, first, after) { nodes { .. } pageInfo totalCount }`: the cursor-paginated twin of
  * `relations`, and the web's largest read with no shadow before this. Its `nodes` are planned and judged exactly as
  * `relations` rows are (same plan, same edge and slice checks); `pageInfo` and `totalCount` are counted uncompared
- * (`page_info`, `relation_count`), a selection of neither `nodes` is `count_only`, and a filter on a nested object
- * (`fromEntity: {..}`) or with an operator other than `is`/`equalTo`/`in` is `nested_filter` / `filter_operator`.
+ * (`page_info`, `relation_count`), and a selection without `nodes` (aggregates only) is `count_only`. A filter clause
+ * through a nested object (`fromEntity: {..}`), a combinator, or with an operator other than `is`/`equalTo`/`in`
+ * only narrows Postgres' rows, so it is ignored (`filter_completeness`, never a whole slice); `fromEntity`/`toEntity`
+ * `{id}` pin the edge's end. Returned rows are still checked as edges.
  */
 export const RELATIONS_CONNECTION_FIELD = "relationsConnection"
 export const POINT_READ_FIELDS = [ENTITIES_FIELD, RELATION_FIELD, RELATIONS_FIELD, RELATIONS_CONNECTION_FIELD] as const
@@ -283,31 +285,64 @@ const uuidOrRefuse = (v: unknown): string =>
  * `{<column>: {is | equalTo: <uuid>} | {in: [<uuid> ..]}, ..}` over the relation's uuid columns. `{is: null}` is no
  * constraint (connection-filter ignores it). Anything else, or no constraint at all, is unsupported (`filter`).
  */
-export function relationFilter(filter: unknown, specific = false): RelationFilter {
+export function relationFilter(
+	filter: unknown,
+	specific = false,
+	notes: {partial: boolean} = {partial: false},
+): RelationFilter {
 	const object = asRecord(filter)
 	if (!object) return refuse("filter")
 	const out: RelationFilter = {}
-	for (const [column, raw] of Object.entries(object)) {
-		if (!(RELATION_COLUMNS as readonly string[]).includes(column)) {
-			// `relationsConnection` only: say a filter through a nested object (`fromEntity`, `and`, ..) is that.
-			return refuse(
-				specific && (NESTED_FILTER_KEYS as readonly string[]).includes(column) ? "nested_filter" : "filter",
-			)
-		}
-		const clause = asRecord(raw)
-		if (!clause || Object.keys(clause).length !== 1) return refuse("filter")
+	/**
+	 * `relationsConnection` only. A clause on a row's own uuid column: `is`, `equalTo` and `in` pin it. Any other
+	 * operator, or a clause reaching through an object or a combinator, only narrows what Postgres returned; the rows
+	 * it did return are still real edges, so it is ignored and the answer is marked `partial` (never a whole slice).
+	 */
+	const take = (column: (typeof RELATION_COLUMNS)[number], clause: Record<string, unknown>, nested: boolean) => {
+		if (Object.keys(clause).length !== 1) return refuse("filter")
 		const [op, value] = Object.entries(clause)[0] as [string, unknown]
-		if (specific && !["is", "equalTo", "in"].includes(op)) return refuse("filter_operator")
+		if (specific && !["is", "equalTo", "in"].includes(op)) {
+			notes.partial = true
+			return
+		}
 		let values: string[]
 		if (op === "is" || op === "equalTo") {
-			if (value === null) continue
+			if (value === null) return
 			values = [uuidOrRefuse(value)]
 		} else if (op === "in" && Array.isArray(value) && value.length > 0)
 			values = [...new Set(value.map(uuidOrRefuse))]
 		else return refuse("filter")
-		out[column as (typeof RELATION_COLUMNS)[number]] = values
+		// A column named twice (directly and through an object) is not pinned to either.
+		if (nested && out[column]) {
+			notes.partial = true
+			return
+		}
+		out[column] = values
 	}
-	if (Object.keys(out).length === 0) return refuse("filter")
+	for (const [column, raw] of Object.entries(object)) {
+		if (!(RELATION_COLUMNS as readonly string[]).includes(column)) {
+			if (!(specific && (NESTED_FILTER_KEYS as readonly string[]).includes(column))) return refuse("filter")
+			notes.partial = true
+			// `fromEntity: {id: ..}` / `toEntity: {id: ..}` pin the edge's end; everything else inside only narrows.
+			const ends = {fromEntity: "fromEntityId", toEntity: "toEntityId"} as const
+			const inner = asRecord(raw)
+			if (inner && column in ends) {
+				const id = asRecord(inner.id)
+				if (
+					id &&
+					Object.keys(id).length === 1 &&
+					["is", "equalTo", "in"].includes(Object.keys(id)[0] as string)
+				)
+					take(ends[column as keyof typeof ends], id, true)
+			}
+			continue
+		}
+		const clause = asRecord(raw)
+		if (!clause) return refuse("filter")
+		take(column as (typeof RELATION_COLUMNS)[number], clause, false)
+	}
+	// A connection with nothing pinned is still checked row by row when its filter was only ignored.
+	if (Object.keys(out).length === 0 && !notes.partial) return refuse("filter")
 	return out
 }
 
@@ -317,7 +352,7 @@ const NESTED_FILTER_KEYS = ["fromEntity", "toEntity", "type", "entity", "space",
 const LIST_ARGS = new Set(["filter", "first", "offset", "orderBy"])
 
 /** `relations(filter, first, offset, orderBy)` with a filter other than an id list. */
-function planRelationList(args: Args, filter: RelationFilter, connection = false): RelationListPlan {
+function planRelationList(args: Args, filter: RelationFilter, connection = false, partial = false): RelationListPlan {
 	for (const name of Object.keys(args)) if (!LIST_ARGS.has(name) && !(connection && name === "after")) refuse("args")
 	// A cursor page starts wherever Postgres' cursor says: it is never the whole slice.
 	if (args.after !== undefined && args.after !== null && typeof args.after !== "string") refuse("args")
@@ -344,6 +379,7 @@ function planRelationList(args: Args, filter: RelationFilter, connection = false
 		typeIds.length > 0 &&
 		offset === 0 &&
 		!paged &&
+		!partial &&
 		!filter.id &&
 		!filter.entityId &&
 		!filter.toEntityId
@@ -391,6 +427,8 @@ function connectionParts(
 			nodes = field.selectionSet
 		} else if (name === "pageInfo" && !field.arguments?.length && field.selectionSet) pageInfo = true
 		else if (name === "totalCount" && isPlain(field)) totalCount = true
+		// Aggregates are counts geo-db is not asked for: counted uncompared beside `nodes`, `count_only` alone.
+		else if ((name === "aggregates" || name === "groupedAggregates") && field.selectionSet) totalCount = true
 		else if (name !== "__typename") return refuse("selection")
 	}
 	return {nodes, pageInfo, totalCount}
@@ -421,9 +459,10 @@ export function analyzePointRead(
 		}
 		if (field === RELATIONS_FIELD || field === RELATIONS_CONNECTION_FIELD) {
 			const connection = field === RELATIONS_CONNECTION_FIELD
-			const filter = relationFilter(args.filter, connection)
+			const notes = {partial: false}
+			const filter = relationFilter(args.filter, connection, notes)
 			const onlyIds = Object.keys(filter).length === 1 && filter.id !== undefined
-			const list = onlyIds && !connection ? null : planRelationList(args, filter, connection)
+			const list = onlyIds && !connection ? null : planRelationList(args, filter, connection, notes.partial)
 			if (!list) checkListArgs(args, filter.id ?? [])
 			let rowSet = root.selectionSet
 			const extra = new Set<UncomparedReason>()
