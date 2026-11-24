@@ -37,6 +37,7 @@ data:
         "searchConnection": "shadow",
         "entitiesConnection": "shadow",
         "entitiesOrderedByProperty": "shadow",
+        "entitiesOrderedByPropertyConnection": "shadow",
         "spaces": "shadow",
         "space": "shadow",
         "metas": "shadow",

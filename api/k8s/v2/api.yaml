@@ -302,7 +302,7 @@ spec:
               value: "0.25"
             # space = spaces' comparison on one Space; metas (indexer cursors) has no geo-db home and is only counted unsupported.
             - name: GRAPHQL_GATEWAY_FIELDS
-              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,relationsConnection=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"
+              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,relationsConnection=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,entitiesOrderedByPropertyConnection=shadow,spaces=shadow,space=shadow,metas=shadow"
             # Runtime per-field read-source switch watched from ConfigMap geodb-read-source (create-once in
             # api/k8s/v2/geodb-read-source-configmap.yaml, all fields shipped shadow; optional volume so pods
             # without it use the startup env defaults). Auto-revert thresholds match GatewayServeFallbackHigh

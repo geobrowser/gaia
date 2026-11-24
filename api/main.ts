@@ -14,8 +14,10 @@ import {readGatewayConfig} from "./src/gateway/config"
 import {createEntitiesConnectionResolver} from "./src/gateway/entitiesConnectionServe"
 import {
 	createEntitiesConnectionShadow,
+	createEntitiesOrderedConnectionShadow,
 	createEntitiesOrderedShadow,
 	ENTITIES_CONNECTION_FIELD,
+	ENTITIES_ORDERED_CONNECTION_FIELD,
 	ENTITIES_ORDERED_FIELD,
 } from "./src/gateway/entitiesConnectionShadow"
 import {createEntitiesOrderedByPropertyResolver} from "./src/gateway/entitiesOrderedByPropertyServe"
@@ -326,6 +328,7 @@ const gatewayShadowFields = new Set(
 		ENTITY_FIELD,
 		ENTITIES_CONNECTION_FIELD,
 		ENTITIES_ORDERED_FIELD,
+		ENTITIES_ORDERED_CONNECTION_FIELD,
 		SPACES_FIELD,
 		SPACE_FIELD,
 		METAS_FIELD,
@@ -1032,11 +1035,12 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 						},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),
-					// entitiesConnection / entitiesOrderedByProperty =shadow only; absent from GRAPHQL_GATEWAY_FIELDS they are not mounted.
+					// entitiesConnection / entitiesOrderedByProperty(Connection) =shadow only; absent from GRAPHQL_GATEWAY_FIELDS they are not mounted.
 					...(
 						[
 							[ENTITIES_CONNECTION_FIELD, createEntitiesConnectionShadow],
 							[ENTITIES_ORDERED_FIELD, createEntitiesOrderedShadow],
+							[ENTITIES_ORDERED_CONNECTION_FIELD, createEntitiesOrderedConnectionShadow],
 						] as const
 					)
 						.filter(([field]) => gatewayShadowFields.has(field))
