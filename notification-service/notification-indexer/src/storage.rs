@@ -1250,9 +1250,7 @@ impl Storage {
         Ok(found)
     }
 
-    /// Read a named poll cursor. Returns `None` if the poller has never run.
-    #[instrument(name = "notification_indexer.storage.get_poll_cursor", skip(self))]
-    pub async fn get_poll_cursor(
+    async fn get_poll_cursor_row(
         &self,
         name: &str,
     ) -> Result<Option<(DateTime<Utc>, i64)>, StorageError> {
@@ -1262,7 +1260,16 @@ impl Storage {
         .bind(name)
         .fetch_optional(&self.pool)
         .await?;
-        let cursor = row.map(|r| (r.get("cursor_updated_at"), r.get("cursor_id")));
+        Ok(row.map(|r| (r.get("cursor_updated_at"), r.get("cursor_id"))))
+    }
+
+    /// Read a named poll cursor. Returns `None` if the poller has never run.
+    #[instrument(name = "notification_indexer.storage.get_poll_cursor", skip(self))]
+    pub async fn get_poll_cursor(
+        &self,
+        name: &str,
+    ) -> Result<Option<(DateTime<Utc>, i64)>, StorageError> {
+        let cursor = self.get_poll_cursor_row(name).await?;
         // Counts agreement with geo-db's copy; Postgres stays the answer (plan 10.22 section 8.3).
         if let Some(shadow) = poll_cursor_shadow() {
             shadow.observe(name, cursor).await;
@@ -1336,8 +1343,18 @@ impl Storage {
     /// floor, update the row.
     #[instrument(name = "notification_indexer.storage.rejection_floor", skip(self))]
     pub async fn rejection_floor(&self, backfill_hours: i64) -> Result<i64, StorageError> {
-        if let Some((ts, _)) = self.get_poll_cursor(REJECTION_FLOOR_CURSOR).await? {
+        if let Some((ts, id)) = self.get_poll_cursor_row(REJECTION_FLOOR_CURSOR).await? {
+            crate::poll_cursor_shadow::observe_and_backfill(
+                REJECTION_FLOOR_CURSOR,
+                (ts, id),
+                poll_cursor_shadow(),
+                cursor_mirror(),
+            )
+            .await;
             return Ok(ts.timestamp());
+        }
+        if let Some(shadow) = poll_cursor_shadow() {
+            shadow.observe(REJECTION_FLOOR_CURSOR, None).await;
         }
 
         // Epoch arithmetic rather than a chrono `Duration`, which collides with
