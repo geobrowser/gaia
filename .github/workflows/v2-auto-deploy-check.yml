@@ -1,0 +1,51 @@
+name: v2 auto-deploy check
+
+# The auto-deploy path map is parsed out of build-v2-images.yml and deploy-v2.yml. If either
+# changes shape, or a service gains a deploy arm without a build entry, the map silently
+# shrinks; this fails the PR instead.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/v2-changed-services.py'
+      - '.github/workflows/build-v2-images.yml'
+      - '.github/workflows/deploy-v2.yml'
+      - '.github/workflows/ship-v2-service.yml'
+      - '.github/workflows/deploy-v2-on-merge.yml'
+      - '.github/workflows/v2-auto-deploy-check.yml'
+      - '**/Dockerfile'
+  pull_request:
+    paths:
+      - 'scripts/v2-changed-services.py'
+      - '.github/workflows/build-v2-images.yml'
+      - '.github/workflows/deploy-v2.yml'
+      - '.github/workflows/ship-v2-service.yml'
+      - '.github/workflows/deploy-v2-on-merge.yml'
+      - '.github/workflows/v2-auto-deploy-check.yml'
+      - '**/Dockerfile'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Path map self-check
+        run: |
+          python3 scripts/v2-changed-services.py --self-check
+          python3 scripts/v2-changed-services.py --list
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color \
+            .github/workflows/ship-v2-service.yml \
+            .github/workflows/deploy-v2-on-merge.yml \
+            .github/workflows/v2-auto-deploy-check.yml
+          # The two callee workflows predate this check; lint their structure (inputs,
+          # workflow_call wiring, expressions) without holding their shell to shellcheck.
+          ./actionlint -color -shellcheck= \
+            .github/workflows/build-v2-images.yml \
+            .github/workflows/deploy-v2.yml

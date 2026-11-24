@@ -1,0 +1,65 @@
+name: Ship one gaia-v2 service (called)
+
+# Build, then deploy, one service at the calling commit. Called only by
+# deploy-v2-on-merge.yml, once per changed service, inside a per-service concurrency group,
+# so two merges touching the same service build and deploy one after the other.
+#
+# Reuses the two workflows that ship the stack by hand; nothing here applies manifests.
+#   build   build-v2-images.yml  tags the image with this commit's SHA
+#   fresh   skips the deploy if a newer commit on main already touches this service: that
+#           commit's own run deploys it, and deploying this older image after it would roll
+#           the service backwards
+#   deploy  deploy-v2.yml on geo-testnet-k8s (namespace gaia), which waits on
+#           `kubectl rollout status` and fails the run if the rollout does not complete
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-v2-images.yml
+    with:
+      service: ${{ inputs.service }}
+    secrets: inherit
+
+  fresh:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      superseded: ${{ steps.check.outputs.superseded }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Has a newer commit on main touched this service?
+        id: check
+        env:
+          SERVICE: ${{ inputs.service }}
+        run: |
+          git fetch -q origin main
+          newer="$(python3 scripts/v2-changed-services.py --base "$GITHUB_SHA" --head origin/main)"
+          if echo "$newer" | jq -e --arg s "$SERVICE" 'index($s) != null' > /dev/null; then
+            echo "::notice::$SERVICE changed again on main after ${GITHUB_SHA:0:8}; that run deploys it, so this one does not."
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: fresh
+    if: needs.fresh.outputs.superseded != 'true'
+    uses: ./.github/workflows/deploy-v2.yml
+    with:
+      service: ${{ inputs.service }}
+      tag: ${{ github.sha }}
+      cluster: geo-testnet-k8s
+    secrets: inherit
