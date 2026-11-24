@@ -799,6 +799,8 @@ function readRootArgs(
 }
 
 export const ORDERED_ROOT = "entitiesOrderedByProperty"
+/** The cursor-paginated twin of ORDERED_ROOT (`nodes`/`edges`, `pageInfo`, `totalCount`, plus `after`): what the web asks. */
+export const ORDERED_CONNECTION_ROOT = "entitiesOrderedByPropertyConnection"
 const ORDERED_ARGS = [
 	"filter",
 	"propertyId",
@@ -887,7 +889,10 @@ export function analyzeLightEntities(
 		relationsTypeFilter?: boolean
 		derivedFields?: boolean
 		connection?: boolean
-		/** The root is `entitiesOrderedByProperty` (a database function answering a plain list; see readOrderedArgs). */
+		/**
+		 * The root is `entitiesOrderedByProperty` (a database function answering a plain list; see readOrderedArgs), or with
+		 * `connection` its cursor-paginated twin `entitiesOrderedByPropertyConnection`.
+		 */
 		ordered?: boolean
 	} = {},
 ): LightAnalysis<LightEntitiesPlan> {
@@ -898,7 +903,13 @@ export function analyzeLightEntities(
 		const sentinel = options.connection === true && parsed.roots.some((r) => r.name.value === METAS_FIELD)
 		const roots = sentinel ? parsed.roots.filter((r) => r.name.value !== METAS_FIELD) : parsed.roots
 		const root = roots[0]
-		const rootName = options.ordered ? ORDERED_ROOT : options.connection ? "entitiesConnection" : "entities"
+		const rootName = options.ordered
+			? options.connection
+				? ORDERED_CONNECTION_ROOT
+				: ORDERED_ROOT
+			: options.connection
+				? "entitiesConnection"
+				: "entities"
 		// Several `entitiesConnection` roots that each ask only `totalCount` (the topic page's counters): counts, no cards.
 		if (
 			options.connection &&
@@ -911,7 +922,7 @@ export function analyzeLightEntities(
 		const args = argsOf(root, resolved)
 		for (const arg of Object.keys(args))
 			if (options.ordered) {
-				if (!ORDERED_ARGS.includes(arg)) refuse("args")
+				if (!ORDERED_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
 			} else if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
 		const after = args.after
 		if (after !== undefined && after !== null && typeof after !== "string") refuse("args")

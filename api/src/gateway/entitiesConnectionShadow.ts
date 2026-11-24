@@ -16,13 +16,23 @@
 import {checkCountOnly} from "./countOnlyShadow"
 import {countLight, type EntityShadowDeps} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
-import {analyzeCountOnly, analyzeLightEntities, noteUnsupported, ORDERED_ROOT, runLight} from "./lightShadow"
+import {
+	analyzeCountOnly,
+	analyzeLightEntities,
+	noteUnsupported,
+	ORDERED_CONNECTION_ROOT,
+	ORDERED_ROOT,
+	runLight,
+} from "./lightShadow"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
 
 export const ENTITIES_CONNECTION_FIELD = "entitiesConnection"
 
 /** The `entitiesOrderedByProperty` field: a database function answering a plain list, shadowed like `entities`. */
 export const ENTITIES_ORDERED_FIELD = ORDERED_ROOT
+
+/** The cursor-paginated `entitiesOrderedByPropertyConnection` field: the web's property-ordered feeds and lists. */
+export const ENTITIES_ORDERED_CONNECTION_FIELD = ORDERED_CONNECTION_ROOT
 
 /** The `entitiesConnection` shadow. Registers its metric series; never throws. */
 export const createEntitiesConnectionShadow = (deps: EntityShadowDeps): FieldShadow =>
@@ -34,6 +44,15 @@ export const createEntitiesConnectionShadow = (deps: EntityShadowDeps): FieldSha
  */
 export const createEntitiesOrderedShadow = (deps: EntityShadowDeps): FieldShadow =>
 	createLightListShadow(ENTITIES_ORDERED_FIELD, {ordered: true}, deps)
+
+/**
+ * The `entitiesOrderedByPropertyConnection` shadow: `nodes` (or `edges { node }`) are judged on their cards and, for a
+ * Space-scoped page, their order is held to geo-db's values, exactly as `entitiesOrderedByProperty`'s list is. `pageInfo`
+ * is not read, `totalCount` is `total_count`, and the vote / entity-id narrowing stays `filter_completeness`. A count-only
+ * selection is `unsupported_selection{count_only}` (the count-only form states only `entitiesConnection`).
+ */
+export const createEntitiesOrderedConnectionShadow = (deps: EntityShadowDeps): FieldShadow =>
+	createLightListShadow(ENTITIES_ORDERED_CONNECTION_FIELD, {ordered: true, connection: true}, deps)
 
 function createLightListShadow(
 	field: string,
@@ -50,7 +69,13 @@ function createLightListShadow(
 				relationsTypeFilter: deps.relationsTypeFilter === true,
 				derivedFields: deps.derivedFields === true,
 			})
-			if (!analysis.ok && analysis.reason === "count_only" && mode.connection && deps.countOnly === true) {
+			if (
+				!analysis.ok &&
+				analysis.reason === "count_only" &&
+				mode.connection &&
+				!mode.ordered &&
+				deps.countOnly === true
+			) {
 				const counted = analyzeCountOnly(document, classification.operationName, params.variables)
 				if (counted.ok) {
 					let countBody: unknown
@@ -89,6 +114,6 @@ function createLightListShadow(
 		}
 	}
 	// A `metas` cursor sentinel beside `entitiesConnection` is tolerated (counted `metas_cursor`).
-	if (mode.connection) shadow.tolerates = ["metas"]
+	if (mode.connection && !mode.ordered) shadow.tolerates = ["metas"]
 	return shadow
 }

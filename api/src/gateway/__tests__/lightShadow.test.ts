@@ -3,7 +3,12 @@ import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
 import {GeoDbError, holdersDocument} from "../../geodb/client"
-import {createEntitiesConnectionShadow, createEntitiesOrderedShadow} from "../entitiesConnectionShadow"
+import {
+	createEntitiesConnectionShadow,
+	createEntitiesOrderedConnectionShadow,
+	createEntitiesOrderedShadow,
+	ENTITIES_ORDERED_CONNECTION_FIELD,
+} from "../entitiesConnectionShadow"
 import {createEntityShadow, createHoldersGate, type HoldersGate, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -2631,5 +2636,135 @@ describe("entitiesOrderedByProperty with the light selection", () => {
 		;(wrong[0] as Entity).name = "something else"
 		await call(shadow as never, ordered(base), {}, {data: {entitiesOrderedByProperty: wrong}})
 		expect(results()).toEqual({match: 1, mismatch: 1})
+	})
+})
+
+describe("entitiesOrderedByPropertyConnection shadow", () => {
+	const PROPERTY = "00000000-9962-4962-9962-0000000000bb"
+	const ROOT = "entitiesOrderedByPropertyConnection"
+	const opts = {ordered: true, connection: true}
+	const list = (n: number): Entity[] =>
+		Array.from({length: n}, (_, at) => {
+			const e = clone(ENTITY)
+			e.id = `${at.toString(16).padStart(2, "0")}${HEX.slice(2)}`
+			return e
+		})
+	const outputsFor = (entities: Entity[]) => ({
+		[geoSpace(SPACE_A)]: entities.map((e) => geoOutput(e).replaceAll(HEX, e.id)).join(""),
+	})
+	const args = `propertyId: "${PROPERTY}", sortDirection: DESC, dataType: "integer", first: 5, spaceIds: ["${SPACE_A}"]`
+	const connection = (
+		a: string,
+		extra = "pageInfo { endCursor hasNextPage }",
+		wrap = (x: string) => `nodes ${x}`,
+	) => {
+		const q = FIXTURE.request.query
+		const open = q.indexOf('entity(id: "' + HEX + '")')
+		const tail = q.slice(q.indexOf("{", open))
+		const lastClose = tail.lastIndexOf("}")
+		return `${q.slice(0, open)}${ROOT}(${a}) { ${extra} ${wrap(tail.slice(0, lastClose))} }${tail.slice(lastClose)}`
+	}
+
+	it("names its field", () => expect(ENTITIES_ORDERED_CONNECTION_FIELD).toBe(ROOT))
+
+	it("plans the nodes, leaving the order, paging and count uncompared", () => {
+		const a = analyzeLightEntities(
+			parse(connection(`${args}, after: "abc"`, "totalCount pageInfo { endCursor }")),
+			null,
+			{},
+			opts,
+		)
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.nodesKey).toBe("nodes")
+			expect(a.plan.spaceIds).toEqual([SPACE_A])
+			expect(a.plan.uncompared).toEqual(expect.arrayContaining(["order_completeness", "total_count"]))
+		}
+	})
+
+	it("is only its own root, and the list root does not take after", () => {
+		expect(analyzeLightEntities(parse(connection(args)), null, {}, {connection: true}).ok).toBe(false)
+		expect(analyzeLightEntities(parse(connection(args)), null, {}, {ordered: true}).ok).toBe(false)
+		expect(analyzeLightEntities(parse(connection(`${args}, bogus: 1`)), null, {}, opts)).toEqual({
+			ok: false,
+			reason: "args",
+		})
+	})
+
+	it("counts a count-only selection and a selection with neither nodes nor edges as unsupported", () => {
+		expect(analyzeLightEntities(parse(connection(args, "totalCount", () => "")), null, {}, opts)).toEqual({
+			ok: false,
+			reason: "count_only",
+		})
+		expect(
+			analyzeLightEntities(parse(connection(args, "pageInfo { endCursor }", () => "")), null, {}, opts),
+		).toEqual({
+			ok: false,
+			reason: "selection",
+		})
+	})
+
+	it("compares the nodes and flags one that differs", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesOrderedConnectionShadow(s.deps)
+		await call(shadow as never, connection(args), {}, {data: {[ROOT]: {nodes: entities, pageInfo: {}}}})
+		expect(results()).toEqual({match: 1})
+		const wrong = clone(entities)
+		;(wrong[0] as Entity).name = "something else"
+		await call(shadow as never, connection(args), {}, {data: {[ROOT]: {nodes: wrong}}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
+	})
+
+	it("holds the page order to geo-db's values", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const valueRow = (e: Entity, raw: string) => ({
+			prop: conformingId("entity", PROPERTY),
+			raw,
+			entity: conformingId("entity", e.id),
+		})
+		const readCards = vi.fn(async () => [
+			valueRow(entities[0] as Entity, "1"),
+			valueRow(entities[1] as Entity, "5"),
+		])
+		const shadow = createEntitiesOrderedConnectionShadow({...s.deps, geoDb: {...s.deps.geoDb, readCards}} as never)
+		await call(shadow as never, connection(args), {}, {data: {[ROOT]: {nodes: entities}}})
+		expect(results()).toEqual({mismatch: 1})
+		await call(shadow as never, connection(args), {}, {data: {[ROOT]: {nodes: [...entities].reverse()}}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
+	})
+
+	it("reads the nodes of an edges page", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesOrderedConnectionShadow(s.deps)
+		await call(
+			shadow as never,
+			connection(args, "", (x) => `edges { node ${x} cursor }`),
+			{},
+			{data: {[ROOT]: {edges: entities.map((node) => ({node, cursor: "c"}))}}},
+		)
+		expect(results()).toEqual({match: 1})
+	})
+
+	it("counts a count-only operation unsupported, even with the count-only form on", async () => {
+		const s = setup({})
+		const shadow = createEntitiesOrderedConnectionShadow({...s.deps, countOnly: true})
+		await call(
+			shadow as never,
+			connection(args, "totalCount", () => ""),
+			{},
+			{data: {}},
+		)
+		expect(results()).toEqual({unsupported_selection: 1})
+		expect(unsupported()).toEqual({count_only: 1})
+	})
+
+	it("counts a null connection nothing and never throws on a bad body", async () => {
+		const s = setup(outputsFor(list(1)))
+		const shadow = createEntitiesOrderedConnectionShadow(s.deps)
+		await call(shadow as never, connection(args), {}, {data: {[ROOT]: null}})
+		expect(results()).toEqual({})
 	})
 })
