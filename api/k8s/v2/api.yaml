@@ -295,11 +295,13 @@ spec:
             # (GRAPHQL_GATEWAY_SHADOW_SAMPLE, default 1%) is compared against geo-db.
             - name: GRAPHQL_GATEWAY
               value: "on"
-            # 11-24: 25% of eligible operations (was the 1% default) to compress the stage-1 soak. geo-db load
-            # stays bounded by GATEWAY_SHADOW_READS_PER_SECOND below (a refused read counts `unsupported`/`throttled`,
-            # never a failure) and by GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT (default 32 per pod). Responses are unchanged.
+            # 11-24: 5% of eligible operations (the 1% default, then 25% for about an hour). At 25% the shadows'
+            # fan-out took geo-db from ~57 to ~158 live requests/s with all 8 workers busy, and shadow timeouts and
+            # cool-downs rose to 10-22% on several fields, so the comparison data got worse, not better. Raise again
+            # after the reactor claim-deadlock fix rolls out. Responses are unchanged; load is still bounded by
+            # GATEWAY_SHADOW_READS_PER_SECOND below and GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT (default 32 per pod).
             - name: GRAPHQL_GATEWAY_SHADOW_SAMPLE
-              value: "0.25"
+              value: "0.05"
             # space = spaces' comparison on one Space; metas (indexer cursors) has no geo-db home and is only counted unsupported.
             - name: GRAPHQL_GATEWAY_FIELDS
               value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,relationsConnection=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,entitiesOrderedByPropertyConnection=shadow,spaces=shadow,space=shadow,metas=shadow"
