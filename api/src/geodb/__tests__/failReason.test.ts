@@ -269,7 +269,11 @@ describe("gaia_api_gateway_shadow_failed_total", () => {
 		const client = fakePipe(NEVER_READY)
 		await read(client).catch(() => {})
 		await runShadowOver(client)
-		expect(series("cooling_down")).toBe("1")
+		// A read the pool never tried is not a failed shadow: it counts unsupported_selection / cooling_down instead.
+		expect(series("cooling_down")).toBe("0")
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_unsupported_total{field="metas",reason="cooling_down"} 1',
+		)
 		client.close()
 	})
 

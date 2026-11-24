@@ -51,7 +51,7 @@ import {createSearchResolver} from "./src/gateway/searchServe"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createSpaceResolver, SPACE_ROOT, SPACES_ROOT} from "./src/gateway/spaceServe"
 import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
-import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
+import {createPipeGeoDbClient, createSpaceMap, type PoolLoad, poolSaturated} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {
 	createConfigRevisionReader,
@@ -979,6 +979,11 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 	observers: rankTypedObserver ? [rankTypedObserver] : undefined,
 	resolvers: gatewayResolvers.size > 0 ? gatewayResolvers : undefined,
 	runtimeResolvers: runtimeGatewayResolvers.size > 0 ? runtimeGatewayResolvers : undefined,
+	// Shadow reads share the serve's workers: stop sending them once every worker is busy and reads are queueing.
+	shadowShed: poolSaturated(
+		sharedGeoDb?.geoDb as {load?: () => PoolLoad} | undefined,
+		gatewayConfig.shadowShedQueue ?? 0,
+	),
 	shadows:
 		gatewayShadowsAny && sharedGeoDb
 			? new Map([

@@ -38,11 +38,17 @@ export type GatewayConfig = {
 	 * (each holding a copy of its response) in the api. Unset in a literal config means DEFAULT_SHADOW_MAX_IN_FLIGHT.
 	 */
 	shadowMaxInFlight?: number
+	/**
+	 * Shadow reads are not sent while the geo-db pool has every worker busy and at least this many reads waiting
+	 * (GRAPHQL_GATEWAY_SHADOW_SHED_QUEUE). 0 turns shedding off. Unset in a literal config means DEFAULT_SHADOW_SHED_QUEUE.
+	 */
+	shadowShedQueue?: number
 }
 
 export const DEFAULT_SHADOW_SAMPLE_RATE = 0.01
 export const DEFAULT_SERVE_TIMEOUT_MS = 250
 export const DEFAULT_SHADOW_MAX_IN_FLIGHT = 32
+export const DEFAULT_SHADOW_SHED_QUEUE = 4
 const MAX_SHADOW_MAX_IN_FLIGHT = 10_000
 const MAX_SERVE_TIMEOUT_MS = 5_000
 
@@ -60,6 +66,15 @@ export function parseShadowMaxInFlight(raw: string | undefined): number {
 	return Number.isInteger(value) && value >= 1 && value <= MAX_SHADOW_MAX_IN_FLIGHT
 		? value
 		: DEFAULT_SHADOW_MAX_IN_FLIGHT
+}
+
+/** A whole number in [0, 10000] (0 = never shed); anything else (unset, empty, negative, fractional) is the default. */
+export function parseShadowShedQueue(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === "") return DEFAULT_SHADOW_SHED_QUEUE
+	const value = Number(raw)
+	return Number.isInteger(value) && value >= 0 && value <= MAX_SHADOW_MAX_IN_FLIGHT
+		? value
+		: DEFAULT_SHADOW_SHED_QUEUE
 }
 
 /** A fraction in [0, 1]; anything else (unset, empty, NaN, out of range) is the default. */
@@ -98,5 +113,6 @@ export function readGatewayConfig(env: Record<string, string | undefined>): Gate
 		shadowSampleRate: parseSampleRate(env.GRAPHQL_GATEWAY_SHADOW_SAMPLE),
 		serveTimeoutMs: parseServeTimeoutMs(env.GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS),
 		shadowMaxInFlight: parseShadowMaxInFlight(env.GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT),
+		shadowShedQueue: parseShadowShedQueue(env.GRAPHQL_GATEWAY_SHADOW_SHED_QUEUE),
 	}
 }

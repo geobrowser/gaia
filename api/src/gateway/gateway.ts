@@ -105,6 +105,12 @@ export type GatewayDeps<Ctx> = {
 	/** Runtime per-field read-source switch with auto-revert (overrides static config.fieldModes when set). */
 	readSourceSwitch?: ReadSourceSwitch
 	onClassified?: (classification: Classification, route: Route) => void
+	/**
+	 * True while the geo-db pool is saturated: a sampled shadow is then not sent (counted
+	 * gaia_api_gateway_shadow_skipped_total{reason="pool_busy"}), so optional reads never deepen a queue the
+	 * serving paths share. Never consulted for a served field.
+	 */
+	shadowShed?: () => boolean
 }
 
 export function fieldModeOf(config: GatewayConfig, field: string, readSourceSwitch?: ReadSourceSwitch): FieldMode {
@@ -211,6 +217,10 @@ function scheduleShadow<Ctx>(
 		// A slow geo-db must not pile up comparisons, each holding a copy of its response: past the cap, skip and count.
 		if (inFlight.count >= (deps.config.shadowMaxInFlight ?? DEFAULT_SHADOW_MAX_IN_FLIGHT)) {
 			recordGatewayShadowSkipped(field)
+			return
+		}
+		if (deps.shadowShed?.()) {
+			recordGatewayShadowSkipped(field, "pool_busy")
 			return
 		}
 		const clone = response.clone()

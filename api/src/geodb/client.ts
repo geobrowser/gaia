@@ -15,8 +15,9 @@
  * owed a reply) says nothing about the request, so that request is retried once on the fresh worker.
  * Any other refusal is real and rejects its request `client_failed` without a retry. Replacing dead
  * workers is rate-capped (`MAX_RETRIES_PER_WINDOW`), past which requests fail rather than retry. A
- * worker that cannot start (geo-db down) backs the whole client off for a second, so an outage answers
- * every request at once from Postgres instead of starting a process per request.
+ * worker that cannot start (geo-db down: it exits or answers wrongly before ready) backs the whole client
+ * off for a second, so an outage answers every request at once from Postgres instead of starting a process per
+ * request. A request that merely times out while its worker is still starting does not: that is a slow serve.
  *
  * A read that lands on a dead worker pays for a fresh process and handshake (25 to 100 ms against 2 ms
  * warm), and a worker dies three ways while idle: the server closes a connection idle for a minute, the
@@ -562,7 +563,28 @@ type Slot = {
 	lastSpace: string | null
 }
 
+/** How busy a pool is: its workers, those holding a read, and the reads waiting for one. */
+export type PoolLoad = {slots: number; busy: number; queued: number}
+
+/**
+ * A predicate that is true while `client`'s pool is saturated: every worker holds a read and at least `queueLimit`
+ * more wait. Undefined when shedding is off (`queueLimit` 0) or the client reports no load (a test double).
+ */
+export function poolSaturated(
+	client: {load?: () => PoolLoad} | undefined,
+	queueLimit: number,
+): (() => boolean) | undefined {
+	const load = client?.load?.bind(client)
+	if (!load || queueLimit <= 0) return undefined
+	return () => {
+		const {slots, busy, queued} = load()
+		return busy >= slots && queued >= queueLimit
+	}
+}
+
 export type PipeGeoDbClient = GeoDbCardClient & {
+	/** The pool's load now, for a caller that would rather not send an optional read into a saturated pool. */
+	load(): PoolLoad
 	/** Stop every worker. */
 	close(): void
 }
@@ -620,7 +642,10 @@ export function createPipeGeoDbClient(
 			child.kill("SIGKILL")
 			if (why) recordWorkerEnd(why)
 		}
-		if (neverReady && child) backoffUntil = now() + START_BACKOFF_MS
+		// A worker that exited or answered wrongly before ready says geo-db cannot be reached, so the pool backs off.
+		// A request that merely timed out while its worker was still starting says only that the serve is slow: it
+		// must not turn away every other read on the pod for a second (each counted as a failed shadow).
+		if (neverReady && child && why !== "timeout") backoffUntil = now() + START_BACKOFF_MS
 		if (request && failure) {
 			if (retry && !neverReady && !request.retried && retryBudget()) {
 				request.retried = true
@@ -1252,6 +1277,13 @@ export function createPipeGeoDbClient(
 				false,
 				true,
 			)
+		},
+		load() {
+			return {
+				slots: slots.length,
+				busy: slots.filter((slot) => slot.request !== null).length,
+				queued: queue.length,
+			}
 		},
 		close() {
 			clearInterval(warmTimer)
