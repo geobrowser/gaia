@@ -81,7 +81,15 @@ import {mismatchPartsOf} from "./mismatchParts"
 export const ENTITIES_FIELD = "entities"
 export const RELATION_FIELD = "relation"
 export const RELATIONS_FIELD = "relations"
-export const POINT_READ_FIELDS = [ENTITIES_FIELD, RELATION_FIELD, RELATIONS_FIELD] as const
+/**
+ * `relationsConnection(filter, first, after) { nodes { .. } pageInfo totalCount }`: the cursor-paginated twin of
+ * `relations`, and the web's largest read with no shadow before this. Its `nodes` are planned and judged exactly as
+ * `relations` rows are (same plan, same edge and slice checks); `pageInfo` and `totalCount` are counted uncompared
+ * (`page_info`, `relation_count`), a selection of neither `nodes` is `count_only`, and a filter on a nested object
+ * (`fromEntity: {..}`) or with an operator other than `is`/`equalTo`/`in` is `nested_filter` / `filter_operator`.
+ */
+export const RELATIONS_CONNECTION_FIELD = "relationsConnection"
+export const POINT_READ_FIELDS = [ENTITIES_FIELD, RELATION_FIELD, RELATIONS_FIELD, RELATIONS_CONNECTION_FIELD] as const
 
 /** Most ids (or relation rows) one operation may ask geo-db about; a larger batch is not shadowed. */
 export const MAX_BATCH_IDS = 20
@@ -275,15 +283,21 @@ const uuidOrRefuse = (v: unknown): string =>
  * `{<column>: {is | equalTo: <uuid>} | {in: [<uuid> ..]}, ..}` over the relation's uuid columns. `{is: null}` is no
  * constraint (connection-filter ignores it). Anything else, or no constraint at all, is unsupported (`filter`).
  */
-export function relationFilter(filter: unknown): RelationFilter {
+export function relationFilter(filter: unknown, specific = false): RelationFilter {
 	const object = asRecord(filter)
 	if (!object) return refuse("filter")
 	const out: RelationFilter = {}
 	for (const [column, raw] of Object.entries(object)) {
-		if (!(RELATION_COLUMNS as readonly string[]).includes(column)) return refuse("filter")
+		if (!(RELATION_COLUMNS as readonly string[]).includes(column)) {
+			// `relationsConnection` only: say a filter through a nested object (`fromEntity`, `and`, ..) is that.
+			return refuse(
+				specific && (NESTED_FILTER_KEYS as readonly string[]).includes(column) ? "nested_filter" : "filter",
+			)
+		}
 		const clause = asRecord(raw)
 		if (!clause || Object.keys(clause).length !== 1) return refuse("filter")
 		const [op, value] = Object.entries(clause)[0] as [string, unknown]
+		if (specific && !["is", "equalTo", "in"].includes(op)) return refuse("filter_operator")
 		let values: string[]
 		if (op === "is" || op === "equalTo") {
 			if (value === null) continue
@@ -297,11 +311,17 @@ export function relationFilter(filter: unknown): RelationFilter {
 	return out
 }
 
+/** Filter keys that reach through a relation's own objects or combine filters; `relationsConnection` names them. */
+const NESTED_FILTER_KEYS = ["fromEntity", "toEntity", "type", "entity", "space", "toSpace", "and", "or", "not"] as const
+
 const LIST_ARGS = new Set(["filter", "first", "offset", "orderBy"])
 
 /** `relations(filter, first, offset, orderBy)` with a filter other than an id list. */
-function planRelationList(args: Args, filter: RelationFilter): RelationListPlan {
-	for (const name of Object.keys(args)) if (!LIST_ARGS.has(name)) refuse("args")
+function planRelationList(args: Args, filter: RelationFilter, connection = false): RelationListPlan {
+	for (const name of Object.keys(args)) if (!LIST_ARGS.has(name) && !(connection && name === "after")) refuse("args")
+	// A cursor page starts wherever Postgres' cursor says: it is never the whole slice.
+	if (args.after !== undefined && args.after !== null && typeof args.after !== "string") refuse("args")
+	const paged = typeof args.after === "string"
 	const count = (v: unknown) =>
 		v === undefined || v === null
 			? null
@@ -323,6 +343,7 @@ function planRelationList(args: Args, filter: RelationFilter): RelationListPlan 
 		spaceId &&
 		typeIds.length > 0 &&
 		offset === 0 &&
+		!paged &&
 		!filter.id &&
 		!filter.entityId &&
 		!filter.toEntityId
@@ -342,7 +363,38 @@ function finishRelationPlan(plan: RelationPlan): RelationPlan {
 export type PointPlan =
 	| {field: typeof ENTITIES_FIELD; key: string; ids: string[]; card: EntityCardPlan; uncompared: UncomparedReason[]}
 	| {field: typeof RELATION_FIELD; key: string; id: string; relation: RelationPlan}
-	| {field: typeof RELATIONS_FIELD; key: string; ids: string[]; list: RelationListPlan | null; relation: RelationPlan}
+	| {
+			field: typeof RELATIONS_FIELD
+			key: string
+			ids: string[]
+			list: RelationListPlan | null
+			relation: RelationPlan
+			/** `relationsConnection`: the rows sit under `nodes` of the answer. */
+			connection?: true
+	  }
+
+/**
+ * What a `relationsConnection` selection asks for: the `nodes` row selection (every `nodes` field merged), and whether
+ * `pageInfo` / `totalCount` are asked. Anything else (`edges`, a second `nodes` alias) is unsupported.
+ */
+function connectionParts(
+	set: SelectionSetNode,
+	fragments: Map<string, SelectionSetNode>,
+): {nodes: SelectionSetNode | null; pageInfo: boolean; totalCount: boolean} {
+	let nodes: SelectionSetNode | null = null
+	let pageInfo = false
+	let totalCount = false
+	for (const field of inlineFields(set, fragments)) {
+		const name = field.name.value
+		if (name === "nodes") {
+			if (nodes || field.arguments?.length || !field.selectionSet) return refuse("selection")
+			nodes = field.selectionSet
+		} else if (name === "pageInfo" && !field.arguments?.length && field.selectionSet) pageInfo = true
+		else if (name === "totalCount" && isPlain(field)) totalCount = true
+		else if (name !== "__typename") return refuse("selection")
+	}
+	return {nodes, pageInfo, totalCount}
+}
 
 export type PointAnalysis = {ok: true; plan: PointPlan} | {ok: false; reason: UnsupportedReason}
 
@@ -367,12 +419,22 @@ export function analyzePointRead(
 			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
 			return {ok: true, plan: {field, key: keyOf(root), id, relation}}
 		}
-		if (field === RELATIONS_FIELD) {
-			const filter = relationFilter(args.filter)
+		if (field === RELATIONS_FIELD || field === RELATIONS_CONNECTION_FIELD) {
+			const connection = field === RELATIONS_CONNECTION_FIELD
+			const filter = relationFilter(args.filter, connection)
 			const onlyIds = Object.keys(filter).length === 1 && filter.id !== undefined
-			const list = onlyIds ? null : planRelationList(args, filter)
+			const list = onlyIds && !connection ? null : planRelationList(args, filter, connection)
 			if (!list) checkListArgs(args, filter.id ?? [])
-			const planned = planRelation(root.selectionSet, fragments, card)
+			let rowSet = root.selectionSet
+			const extra = new Set<UncomparedReason>()
+			if (connection) {
+				const parts = connectionParts(root.selectionSet, fragments)
+				if (!parts.nodes) return {ok: false, reason: "count_only"}
+				rowSet = parts.nodes
+				if (parts.pageInfo) extra.add("page_info")
+				if (parts.totalCount) extra.add("relation_count")
+			}
+			const planned = planRelation(rowSet, fragments, card)
 			const fixed: RelationPlan["fixed"] = {}
 			for (const column of EDGE_COLUMNS) {
 				const values = filter[column]
@@ -382,7 +444,18 @@ export function analyzePointRead(
 			// The answer of a filtered list is checked row by row: geo-db cannot say what Postgres left out.
 			if (list && !list.slice)
 				relation.uncompared = [...new Set([...relation.uncompared, "filter_completeness" as const])]
-			return {ok: true, plan: {field, key: keyOf(root), ids: filter.id ?? [], list, relation}}
+			relation.uncompared = [...new Set([...relation.uncompared, ...extra])]
+			return {
+				ok: true,
+				plan: {
+					field: RELATIONS_FIELD,
+					key: keyOf(root),
+					ids: filter.id ?? [],
+					list,
+					relation,
+					...(connection ? {connection: true as const} : {}),
+				},
+			}
 		}
 		// A longer `entities` id list is compared on an even spread of MAX_BATCH_IDS of its ids.
 		const ids = idsFromFilter(args.filter, Number.POSITIVE_INFINITY)
@@ -645,7 +718,13 @@ function collectItems(
 	if (!root || root.errors !== undefined) return null
 	const data = asRecord(root.data)
 	if (!data || !(plan.key in data)) return null
-	const answer = data[plan.key]
+	let answer = data[plan.key]
+	if (plan.field === RELATIONS_FIELD && plan.connection) {
+		// A connection that is null (PostGraphile hid it) or has no `nodes` array has nothing to compare.
+		const connection = asRecord(answer)
+		if (!connection) return null
+		answer = connection.nodes
+	}
 	if (plan.field === RELATION_FIELD) {
 		// geo-db cannot look a relation up by id: a relation PostGraphile lacks has nothing to compare.
 		return answer === null ? null : itemsOfRelation(answer, plan.relation)

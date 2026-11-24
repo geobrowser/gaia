@@ -43,6 +43,10 @@ export const UNSUPPORTED_REASONS = [
 	"count_incomplete",
 	/** A `search` / `searchConnection` text the serve's lexical search refused (`DefiniteRefusal`): the pin takes no typeahead of 65 to 250 code points, nor one that folds under 2. Counted with `queryLength` in the warn line. */
 	"definite_refusal",
+	/** `relationsConnection`: a filter on one of the relation's own objects (`fromEntity: {..}`) or a combinator (`and`, `or`, `not`); geo-db cannot evaluate it, so nothing is asked. */
+	"nested_filter",
+	/** `relationsConnection`: a filter operator other than `is`, `equalTo` and `in` (`isNull: false`, `greaterThan`, ..). */
+	"filter_operator",
 ] as const
 
 /**
@@ -104,6 +108,8 @@ export const UNCOMPARED_REASONS = [
 	"meta_filter",
 	/** `relation` / `relations`: the to-space and verified flag are selected but could not be compared (the relation's id, or geo-db's claims read, was missing). */
 	"relation_facets",
+	/** `relationsConnection { pageInfo }`: the cursor and has-next flag are Postgres' own paging, which geo-db has no view of. */
+	"page_info",
 ] as const
 
 /**
