@@ -61,6 +61,9 @@ export function classify(message: string): Failure {
 	// handshake refuses before any intent is sent, so it is no verdict on the edit: it lasts until the serve and the
 	// client tag are on the same side of the bump, and the apply is safe to repeat once they are.
 	if (/GrammarRevisionMismatch/.test(message)) return "transient"
+	// An edit reached an old shard after a ClusterEpoch increment, refused before any admission side effect (C10.02).
+	// Not a verdict on the edit; repeating once routing points at the new home succeeds.
+	if (/StaleClusterEpoch/.test(message)) return "transient"
 	return "permanent"
 }
 

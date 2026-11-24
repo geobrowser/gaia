@@ -158,4 +158,7 @@ export const REFUSAL_CODES = [
 	// them is classed on purpose, not by the fall-through.
 	"UnsupportedExtensionTag",
 	"NotHome",
+	"SpaceAlreadyHeld",
+	"ForeignSketch",
+	"StaleClusterEpoch",
 ] as const

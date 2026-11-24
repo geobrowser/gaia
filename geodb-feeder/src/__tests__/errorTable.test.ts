@@ -78,6 +78,8 @@ const CODE_TRANSIENT = [
 	"OutcomeUnknown",
 	"DeadlineExceeded",
 	"GrammarRevisionMismatch",
+	// an edit reaching the old shard after a ClusterEpoch increment (not sequenced; retry at the new home)
+	"StaleClusterEpoch",
 ]
 const CODE_EXHAUSTED = ["ResourceExhausted"]
 const CODE_DEFINITE = [
@@ -191,6 +193,10 @@ const CODE_DEFINITE = [
 	"UnsupportedExtensionTag",
 	// a serve outside its home role refuses an Edit; resending to it cannot succeed, so permanent on purpose
 	"NotHome",
+	// Anchor import refused because the target node already holds the Space (C10.01)
+	"SpaceAlreadyHeld",
+	// routing sketch hashed under another deployment's seed_id (C02.05 / C10.03), never probed
+	"ForeignSketch",
 ]
 const CODE: Record<string, Failure> = {
 	...Object.fromEntries(CODE_TRANSIENT.map((c) => [c, T])),
