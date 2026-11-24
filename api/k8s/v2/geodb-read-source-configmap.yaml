@@ -32,6 +32,7 @@ data:
         "entities": "shadow",
         "relation": "shadow",
         "relations": "shadow",
+        "relationsConnection": "shadow",
         "search": "shadow",
         "searchConnection": "shadow",
         "entitiesConnection": "shadow",

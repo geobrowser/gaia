@@ -851,3 +851,211 @@ describe("relation facet claims on the wire", () => {
 		})
 	})
 })
+
+describe("relationsConnection shadow", () => {
+	const FROM = "44444444-4444-4444-8444-444444444444"
+	const TARGET = "55555555-5555-4555-8555-555555555555"
+	// The web's debate-targets read: a from-entity list, a type list and one space, nodes + pageInfo.
+	const TARGETS = `query T($from: [UUID!], $types: [UUID!], $spaceId: UUID!, $first: Int!, $after: Cursor) {
+  relationsConnection(first: $first, after: $after, filter: {fromEntityId: {in: $from}, typeId: {in: $types}, spaceId: {is: $spaceId}}) {
+    nodes { fromEntityId typeId toEntityId }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+	// The ranking blocks' read: rows of one type that point at one entity, from any entity and space.
+	const RANKERS = `query R($typeId: UUID!, $blockId: UUID!) {
+  relationsConnection(first: 100, filter: {typeId: {is: $typeId}, toEntityId: {is: $blockId}}) {
+    totalCount
+    nodes { fromEntityId spaceId fromEntity { typeIds createdAt } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+	const vars = {from: [FROM], types: [REL_TYPE], spaceId: SPACE, first: 100}
+	const conn = (nodes: unknown[]) => ({
+		data: {relationsConnection: {nodes, pageInfo: {hasNextPage: false, endCursor: null}}},
+	})
+	const row = (to = TARGET) => ({fromEntityId: FROM, typeId: REL_TYPE, toEntityId: to})
+	const geo = (...targets: string[]) => ({
+		[hex(FROM)]: [
+			`${NAME}\tFrom\ts1\t${hex(FROM)}\t1`,
+			...targets.map((t, i) => `${REL_TYPE}\t${hex(t)}\ts${i + 2}\t${hex(FROM)}\t1`),
+		],
+	})
+	const go = (
+		shadows: ReturnType<typeof setup>["shadows"],
+		query: string,
+		body: unknown,
+		v: Record<string, unknown>,
+	) =>
+		shadows.get("relationsConnection")?.({
+			classification: {operationName: null, operationType: "query", rootFields: ["relationsConnection"]},
+			params: {query, operationName: null, variables: v},
+			document: parse(query),
+			response: Response.json(body),
+		})
+	const unsupported = (field = "relationsConnection") => totals(field, "gaia_api_gateway_shadow_unsupported_total")
+
+	it("is one of the point-read shadows", () => {
+		expect(setup().shadows.has("relationsConnection")).toBe(true)
+	})
+
+	it("matches rows whose edges geo-db holds, leaving pageInfo uncompared", async () => {
+		const {shadows} = setup(geo(TARGET))
+		await go(shadows, TARGETS, conn([row()]), vars)
+		expect(totals("relationsConnection")).toEqual({match: 1})
+		expect(totals("relationsConnection", "gaia_api_gateway_shadow_uncompared_total")).toMatchObject({
+			page_info: 1,
+		})
+	})
+
+	it("is a mismatch when a returned edge is missing from geo-db", async () => {
+		const {shadows} = setup(geo(PERSON))
+		await go(shadows, TARGETS, conn([row()]), vars)
+		expect(totals("relationsConnection")).toEqual({mismatch: 1})
+	})
+
+	it("checks the relations of a from entity, type and space as a whole slice", async () => {
+		const query = `query S($f: UUID!, $t: UUID!, $s: UUID!) {
+  relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t}, spaceId: {is: $s}}) { nodes { toEntityId } }
+}`
+		const v = {f: FROM, t: REL_TYPE, s: SPACE}
+		const ok = setup(geo(TARGET))
+		await go(ok.shadows, query, conn([{toEntityId: TARGET}]), v)
+		expect(totals("relationsConnection")).toEqual({match: 1})
+		__resetGatewayMetricsForTests()
+		// geo-db holds a second relation Postgres did not return.
+		const extra = setup(geo(TARGET, PERSON))
+		await go(extra.shadows, query, conn([{toEntityId: TARGET}]), v)
+		expect(totals("relationsConnection")).toEqual({mismatch: 1})
+	})
+
+	it("does not treat a cursor page as the whole slice", () => {
+		const query = `query S($f: UUID!, $t: UUID!, $s: UUID!) {
+  relationsConnection(first: 10, after: "abc", filter: {fromEntityId: {is: $f}, typeId: {is: $t}, spaceId: {is: $s}}) { nodes { toEntityId } }
+}`
+		const a = analyzePointRead("relationsConnection", parse(query), null, {f: FROM, t: REL_TYPE, s: SPACE})
+		expect(a.ok && a.plan.field === "relations" && a.plan.list?.slice).toBe(null)
+	})
+
+	it("compares rows of a filter that pins the type and target only, noting totalCount", async () => {
+		const {shadows} = setup(geo(TARGET))
+		const node = {fromEntityId: FROM, spaceId: SPACE, fromEntity: {typeIds: [], createdAt: "x"}}
+		await go(
+			shadows,
+			RANKERS,
+			{data: {relationsConnection: {totalCount: 1, nodes: [node]}}},
+			{typeId: REL_TYPE, blockId: TARGET},
+		)
+		expect(totals("relationsConnection")).toEqual({match: 1})
+		expect(totals("relationsConnection", "gaia_api_gateway_shadow_uncompared_total")).toMatchObject({
+			relation_count: 1,
+			nested_entity: 1,
+		})
+	})
+
+	it.each([
+		["a count-only selection", "{ totalCount }", "count_only"],
+		["edges", "{ edges { node { toEntityId } } }", "selection"],
+		["a nodes field it does not know", "{ nodes { toEntityId bogus } }", "selection"],
+	])("refuses %s", (_, selection, reason) => {
+		const query = `query Q($f: UUID!) { relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: "${REL_TYPE}"}, spaceId: {is: "${SPACE}"}}) ${selection} }`
+		expect(analyzePointRead("relationsConnection", parse(query), null, {f: FROM})).toEqual({ok: false, reason})
+	})
+
+	it.each([
+		[
+			"a nested-object filter",
+			"filter: {typeId: {is: $t}, fromEntity: {createdAt: {greaterThan: $t}}}",
+			"nested_filter",
+		],
+		["a combinator", "filter: {and: [{typeId: {is: $t}}]}", "nested_filter"],
+		["isNull false", "filter: {typeId: {is: $t}, spaceId: {isNull: false}}", "filter_operator"],
+		["an unknown column", "filter: {position: {is: $t}}", "filter"],
+		["no filter", "first: 5", "filter"],
+		["orderBy plus condition", "filter: {typeId: {is: $t}}, condition: {id: $t}", "args"],
+		["a non-string cursor", "filter: {typeId: {is: $t}}, after: 5", "args"],
+	])("refuses %s", (_, args, reason) => {
+		const query = `query Q($t: UUID!) { relationsConnection(${args}) { nodes { fromEntityId spaceId typeId toEntityId } } }`
+		expect(analyzePointRead("relationsConnection", parse(query), null, {t: REL_TYPE})).toEqual({ok: false, reason})
+	})
+
+	it("refuses several roots in one document", () => {
+		const query = `query Q($t: UUID!) { a: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } b: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } }`
+		expect(analyzePointRead("relationsConnection", parse(query), null, {t: REL_TYPE})).toEqual({
+			ok: false,
+			reason: "not_single_root",
+		})
+	})
+
+	it("counts an unsupported shape under the field with its reason", async () => {
+		const {shadows, readCard} = setup()
+		const query = `query Q($t: UUID!) { relationsConnection(filter: {fromEntity: {name: {is: "x"}}}) { nodes { id } } }`
+		await go(shadows, query, conn([]), {t: REL_TYPE})
+		expect(unsupported()).toEqual({nested_filter: 1})
+		expect(readCard).not.toHaveBeenCalled()
+	})
+
+	it("skips an answer that is null, errored or has no nodes", async () => {
+		const {shadows, readCard} = setup(geo(TARGET))
+		await go(shadows, TARGETS, {data: {relationsConnection: null}}, vars)
+		await go(shadows, TARGETS, {errors: [{message: "x"}], data: null}, vars)
+		await go(shadows, TARGETS, {data: {relationsConnection: {pageInfo: {}}}}, vars)
+		expect(readCard).not.toHaveBeenCalled()
+		expect(totals("relationsConnection")).toEqual({})
+	})
+
+	it("counts failed, and never throws, when geo-db fails", async () => {
+		const {shadows} = setup({fail: ["x"]})
+		await expect(go(shadows, TARGETS, conn([row()]), vars)).resolves.toBeUndefined()
+		expect(totals("relationsConnection")).toEqual({failed: 1})
+	})
+
+	describe("through the gateway", () => {
+		const request = (query: string, variables: Record<string, unknown>) =>
+			new Request("http://api/graphql", {
+				method: "POST",
+				headers: {"content-type": "application/json"},
+				body: JSON.stringify({query, variables}),
+			})
+		const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+		async function viaGateway(readCard: () => Promise<unknown>) {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const shadows = createPointReadShadows({
+				geoDb: {readCard: readCard as never},
+				geoSpaceOf: async (space) => (space === hex(SPACE) ? GEO_SPACE : null),
+				log,
+			})
+			const answer = conn([row()])
+			const gateway = createGateway({
+				config: readGatewayConfig({
+					GRAPHQL_GATEWAY: "on",
+					GRAPHQL_GATEWAY_FIELDS: "relationsConnection=shadow",
+					GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+				}),
+				delegate: () => Response.json(answer),
+				shadows,
+			})
+			const response = await gateway(request(TARGETS, vars), {})
+			await settle()
+			return {response, answer}
+		}
+
+		it.each([
+			["throws", async () => Promise.reject(new GeoDbError("client_failed", "boom"))],
+			["times out", async () => Promise.reject(new GeoDbError("timeout", "slow"))],
+		])("returns PostGraphile's answer unchanged when geo-db %s", async (_, readCard) => {
+			const {response, answer} = await viaGateway(readCard)
+			expect(response.status).toBe(200)
+			expect(await response.json()).toEqual(answer)
+			expect(totals("relationsConnection")).toEqual({failed: 1})
+		})
+
+		it("matches through the gateway when geo-db agrees", async () => {
+			const {response, answer} = await viaGateway(async () =>
+				rowsFromGeoDbOutput(geo(TARGET)[hex(FROM)]?.join("\n") ?? "", hex(FROM)),
+			)
+			expect(await response.json()).toEqual(answer)
+			expect(totals("relationsConnection")).toEqual({match: 1})
+		})
+	})
+})
