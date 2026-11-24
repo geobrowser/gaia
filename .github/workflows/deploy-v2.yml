@@ -55,6 +55,24 @@ on:
         required: false
         type: string
         default: ""
+  # deploy-v2-on-merge.yml calls this per changed service after its build. Same inputs as
+  # the dispatch; it never passes geodb-serve or valkey.
+  workflow_call:
+    inputs:
+      service:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      cluster:
+        type: string
+        required: false
+        default: geo-testnet-k8s
+      freeze_override:
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: deploy-v2-${{ inputs.cluster }}-${{ inputs.service }}

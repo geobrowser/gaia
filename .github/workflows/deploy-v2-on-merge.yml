@@ -1,0 +1,85 @@
+name: Build and deploy gaia-v2 on merge
+
+# Every push to main builds and deploys the v2 services it touched, to geo-testnet-k8s
+# (namespace gaia). It is the same build-v2-images then deploy-v2 pair that ships by hand,
+# called once per service; see ship-v2-service.yml.
+#
+# What is touched comes from scripts/v2-changed-services.py, which reads the service list,
+# Dockerfiles, build contexts and manifests out of build-v2-images.yml and deploy-v2.yml, so
+# there is no second list to keep in sync. Tests and Markdown alone touch nothing.
+#
+# Never deployed from here:
+#   geodb-serve  the geodb StatefulSet image is the pin roll, which stays manual
+#   valkey       pinned image
+#   a push that changes any geodb image pin line (registry.digitalocean.com/geo/geodb:<tag>),
+#                which is a pin roll: the api and geodb-feeder manifests carry the pin in their
+#                init containers, so the whole push is left to the manual order in geodb/RUNBOOK.md
+#
+# Kill switch: set the repository variable AUTO_DEPLOY_V2=off (Settings > Secrets and
+# variables > Actions > Variables). AUTO_DEPLOY_V2_SKIP takes a space-separated list of
+# services to leave out, e.g. "search-indexer api". Neither needs a code change.
+#
+# A failed build, a failed geodb freeze preflight or a rollout that does not complete in
+# deploy-v2's 600 s turns this run red. Nothing is rolled back automatically.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.plan.outputs.services }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Which services changed
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          KILL: ${{ vars.AUTO_DEPLOY_V2 }}
+          SKIP: ${{ vars.AUTO_DEPLOY_V2_SKIP }}
+        run: |
+          services='[]'
+          if [ "$KILL" = "off" ]; then
+            echo "::notice::AUTO_DEPLOY_V2=off; nothing deployed."
+          elif ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "::warning::Push base $BEFORE is not a known commit (forced push or new branch); nothing deployed. Ship by hand with build-v2-images and deploy-v2."
+          elif python3 scripts/v2-changed-services.py --geodb-pin-changed --base "$BEFORE" --head "$GITHUB_SHA"; then
+            echo "::warning::This push changes a geodb image pin, which is a manual pin roll; nothing deployed. Follow geodb/RUNBOOK.md."
+          else
+            services="$(python3 scripts/v2-changed-services.py --base "$BEFORE" --head "$GITHUB_SHA")"
+            if [ -n "$SKIP" ]; then
+              services="$(echo "$services" | jq -c --arg skip "$SKIP" '($skip | split(" ") | map(select(. != ""))) as $s | map(select(. as $x | $s | index($x) | not))')"
+            fi
+          fi
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Auto deploy ${GITHUB_SHA:0:8}"
+            echo "Services: \`$services\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ship:
+    needs: plan
+    if: needs.plan.outputs.services != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        service: ${{ fromJSON(needs.plan.outputs.services) }}
+    # One build+deploy per service at a time, in push order. A run still waiting here when a
+    # newer one for the same service arrives is cancelled: the newer commit contains it.
+    concurrency:
+      group: deploy-v2-on-merge-${{ matrix.service }}
+      cancel-in-progress: false
+    uses: ./.github/workflows/ship-v2-service.yml
+    with:
+      service: ${{ matrix.service }}
+    secrets: inherit

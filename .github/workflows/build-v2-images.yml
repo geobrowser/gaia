@@ -36,6 +36,15 @@ on:
           - membership-acceptor
           - chain-keepalive
           - geodb-feeder
+  # deploy-v2-on-merge.yml calls this per changed service after a push to main. The tag is
+  # still the pushed commit's SHA (github.sha is the caller's), so a called build and a
+  # dispatched one tag identically.
+  workflow_call:
+    inputs:
+      service:
+        description: Which service to build and push (one of the dispatch choices above)
+        type: string
+        required: true
 
 concurrency:
   group: build-v2-images-${{ inputs.service }}
