@@ -186,6 +186,11 @@ const CODE_DEFINITE = [
 	// a Relay-bound grant whose graph authority has lapsed (ISS-698-417); the feeder's grant is unbound, so it never
 	// meets this, and it is a verdict on the grant like CapabilityTokenExpired
 	"GraphAuthorityStale",
+	"UnknownScope",
+	"ScanLimitExceeded",
+	"UnsupportedExtensionTag",
+	// a serve outside its home role refuses an Edit; resending to it cannot succeed, so permanent on purpose
+	"NotHome",
 ]
 const CODE: Record<string, Failure> = {
 	...Object.fromEntries(CODE_TRANSIENT.map((c) => [c, T])),
@@ -227,6 +232,26 @@ describe("geodb-client error table: coverage", () => {
 		// A bump means re-reading the client's error sets into geodbClientErrors.ts before this passes.
 		for (const tag of tags) expect(tag).toBe(GEODB_COMMIT)
 	})
+})
+
+// The wire codes after GraphAuthorityStale (111): each is a DefiniteRefusal on the wire and permanent for the feeder.
+// 115 NotHome is what a serve in a non-home role answers an Edit with; resending to the same serve cannot succeed, so
+// permanent (dead-letter) is deliberate, not the fall-through default.
+const CODES_112_TO_115 = [
+	[112, "UnknownScope"],
+	[113, "ScanLimitExceeded"],
+	[114, "UnsupportedExtensionTag"],
+	[115, "NotHome"],
+] as const
+
+describe("geodb-client error table: codes 112 to 115", () => {
+	for (const [number, name] of CODES_112_TO_115) {
+		it(`${number} ${name} is listed at its wire position and classed permanent`, () => {
+			expect(REFUSAL_CODES[number - 1]).toBe(name)
+			expect(CODE[name]).toBe(P)
+			expect(classify(`refused: DefiniteRefusal ${name}\n`)).toBe(P)
+		})
+	}
 })
 
 describe("geodb-client error table: classify", () => {
