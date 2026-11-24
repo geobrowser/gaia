@@ -260,6 +260,25 @@ describe("geodb-client error table: codes 112 to 115", () => {
 	}
 })
 
+// Codes 116 to 118 follow 115 in the same table. 118 StaleClusterEpoch is the one transient code of the three: an edit
+// that reached the old shard after a ClusterEpoch increment was not sequenced, so a retry at the new home is right.
+const CODES_116_TO_118 = [
+	[116, "SpaceAlreadyHeld", P],
+	[117, "ForeignSketch", P],
+	[118, "StaleClusterEpoch", T],
+] as const
+
+describe("geodb-client error table: codes 116 to 118", () => {
+	for (const [number, name, want] of CODES_116_TO_118) {
+		it(`${number} ${name} is listed at its wire position and classed ${want}`, () => {
+			expect(REFUSAL_CODES[number - 1]).toBe(name)
+			expect(CODE[name]).toBe(want)
+			expect(classify(`refused: DefiniteRefusal ${name}\n`)).toBe(want)
+		})
+	}
+	it("the table ends at 118", () => expect(REFUSAL_CODES.length).toBe(118))
+})
+
 describe("geodb-client error table: classify", () => {
 	for (const [name, want] of Object.entries(CONNECT)) {
 		it(`connect: ${name} is ${want}`, () => {
