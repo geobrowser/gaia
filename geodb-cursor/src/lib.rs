@@ -88,10 +88,10 @@ impl Config {
     /// reverse. Only this mirror honours it; `from_vars_for` readers and other mirrors do not.
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<Config> {
         Self::from_vars_for("GEODB_CURSOR_MIRROR", |k| {
-            if k == "GEODB_KEY_PATH" {
-                if let Some(p) = get("GEODB_CURSOR_KEY_PATH").filter(|p| !p.trim().is_empty()) {
-                    return Some(p);
-                }
+            if k == "GEODB_KEY_PATH"
+                && let Some(p) = get("GEODB_CURSOR_KEY_PATH").filter(|p| !p.trim().is_empty())
+            {
+                return Some(p);
             }
             get(k)
         })
