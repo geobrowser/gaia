@@ -13,7 +13,7 @@
  *   - REFUSAL_CATEGORIES / REFUSAL_CODES: `OutcomeCategory` and `code_names` in src/format/wire/error_frame.zig,
  *     printed as `refused: <category> <code>`.
  */
-export const GEODB_COMMIT = "99fdac58cf"
+export const GEODB_COMMIT = "862d06166d"
 
 export const CONN_ERRORS = [
 	"TransportFailed",
@@ -154,8 +154,8 @@ export const REFUSAL_CODES = [
 	"GraphAuthorityStale",
 	"UnknownScope",
 	"ScanLimitExceeded",
-	// 114 to 118 (this and the four names below) are in newer builds of the client only, not at GEODB_COMMIT: the pin's
-	// table ends at 113. Listed so a refusal that names them is classed on purpose, not by the fall-through.
+	// 114 to 118 (this and the four names below) are at GEODB_COMMIT (`appended_codes` in error_frame.zig); the
+	// previous pin 99fdac58cf ended at 113, so a client on it never prints them.
 	"UnsupportedExtensionTag",
 	"NotHome",
 	"SpaceAlreadyHeld",

@@ -108,7 +108,7 @@ these clusters is flaky, so retry a failed read two or three times before treati
 | live `deploy/geodb-feeder`, init container `geodb-setup` | `geodb:67b6974a5e` (the `geodb-client` binary the feeder runs comes from this image, not from the feeder image) |
 | live `geodb-card-replay` | `geodb-feeder:edc7e8a4` |
 | live `deploy/api` | `api:7b2500a9afec...` (full sha), init container `geodb:8cba4da996` |
-| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:99fdac58cf` (built 11-19, run 44647532450; rollback tag `4728254ce5`, the previous pin, the live image). `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). Neither is rolled. |
+| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:862d06166d` (11-24, build run 45467714576; previous pin `99fdac58cf`, the live image until §8d runs). The move is a store revision change (5 to 9): roll it only by §8d, and roll back only by §8d step 6 (a `store-rev5` swap or a snapshot restore), never by an image swap. `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). |
 | newest `geodb-feeder` tag in the registry | `bdada8fb`. **No feeder image containing #1566, #1567, #1570, #1576, #1577, #1578, #1580 or #1581 has been built**, so none of them is live. |
 
 Merged since #1574 was written: #1565, #1566, #1567, #1570, #1571, #1572, #1573, #1575, #1576, #1577, #1578, #1579, #1580, #1581 (all
@@ -274,6 +274,8 @@ doctl registry repository list-tags geodb | awk '$1=="57e34f06df"'              
 2. The roll, serve alone, once the feeder from step 1 is Ready. Serve restarts once; its pod is the only thing the command touches:
 
 ```bash
+# Historical (11-13). Do NOT reuse for 862d06166d or any tag whose persistent_revision differs from the live store:
+# serve does not migrate on open and refuses the old store. That roll is §8d.
 $K set image sts/geodb serve=registry.digitalocean.com/geo/geodb:99fdac58cf
 $K rollout status sts/geodb --timeout=900s
 ```
@@ -2682,6 +2684,189 @@ EOF
 #   geodb-client --key /etc/geodb/reader-key/key --binding /tmp/binding.txt pipe < reads.tsv > out
 # every request answers `+<n>` and its rows; `-<n>` is a refusal.
 ```
+
+### 8d. 2026-11-24: roll 99fdac58cf → 862d06166d (revision 5 → 9, migrate)
+
+This is §8a applied to this roll, with every number read from the code at the two commits and from the cluster on
+2026-11-24 ~19:15Z. Where it differs from §8a (the feeder is not scaled; the Job budget; the client order), this section wins.
+
+What changes, read from geo-db `src/format/revision.zig` and the wire tables at each commit:
+
+| | `99fdac58cf` (live) | `862d06166d` |
+| -- | -- | -- |
+| `persistent_revision` (store FORMAT) | 5 | 9 |
+| wire payload / min supported | 22 / 18 | 23 / 18 |
+| wire mutate / min supported | 8 | 9 / 8 |
+| query plan dag | 21 | 22 |
+| wire frame | 19 | 19 |
+
+- **Serve does not migrate on open.** The new serve refuses a revision-5 store (`DefiniteRefusal`,
+  `IncompatibleFormatVersion`) and leaves it untouched; deploying the image before step 3 is an outage, not damage.
+- **The new serve accepts the old clients** (payload 22 ≥ 18, mutate 8 ≥ 8). **The old serve refuses new clients**
+  (payload 23 > 22). So: serve first, then clients; on rollback, clients first, then serve.
+- **Migrate needs `>= 8e79f290e2`** (ISS-817-204); `8e79f290e2` is an ancestor of `862d06166d`. ISS-815-336 and ISS-797-562
+  are also fixed there.
+- `geodb-migrate` opens the old root read-only and without its lock, replays every Space into a fresh root, re-checks
+  every seal, carries `derived/`, `work/`, `.replica` custody and `AUTHORITY`, and prints `DONE migrate spaces=N versions=M`.
+  It refuses an unsealed tail, so serve must stop cleanly first.
+
+**Kinds migrate stops on** (each a typed `Unsupported`, nothing written to `store`): merge or publish into a Branch, a
+Branch header with ops, tail, ordered, detached Embedding, erasure, rehost, dropped_discard, legacy_provenance_seal,
+reclaimed_versionless_space, `UnsupportedCodec`. Live on 11-24: `geodb-client spaces` lists **1629 Spaces, all Public,
+0 Branch**; `geodb_spaces_in_use` 1629; `/data/store/ops` holds 1629 directories. The 99fdac58cf wire has no opcode that
+creates an ordered Space, and the feeder writes only `found` and `apply` (no erasure, no embedding). Not proved from
+outside: reclaimed_versionless_space. If it is present the Job stops with `Unsupported` and `store` is untouched; abort
+(step 3, last bullet).
+
+**Disk:** `data-geodb-0` is 50Gi (52.5 GB); 17.15 GB used, of which `store` is 17.0 GB; 32.67 GB free. The migrated root
+is 1.7 to 9.6 % smaller than its source, so ≥ 1.2x the store free (20.4 GB) holds, and ~15 GB is left after the run with
+`store-rev5` kept. **Snapshots:** 13 on `data-geodb-0` (DO limit 25).
+
+**Duration:** migrate is bound by one commit per seal. The 11-11 live 4 → 5 run took 3 h 52 min for 389,252 versions
+(~28 seals/s); live has ~420k now (389k + 11,955 sealed since 11-20 01:23Z + the days between). Serial: ~4 h 10 min.
+`--threaded --jobs 4`: ~1.9x on m4, so ~2 h 15 min. `--jobs 8` hit a retry assert in an earlier run; do not use it.
+Budget 2.5 h of serve downtime, 4.5 h worst case.
+
+**The feeder during the downtime: leave it running.** `apply.ts` retries a transient failure (geo-db down) forever with
+backoff and never dead-letters it (`main.ts`: "message failed, retrying (never skipped)"); `/health/liveness` always
+answers 200, so the pod is not restarted; Kafka offsets commit only after an apply, and retention is 7 days. No apply can
+land while serve is down, so `geodb-feeder-state` does not change between step 1 and step 4; its snapshot in step 2 is
+consistent with `store-rev5`.
+
+```bash
+K(){ kubectl --context do-nyc2-geo-testnet-k8s -n gaia "$@"; }
+NEW=862d06166d
+OLD=99fdac58cf
+# 0. preconditions
+doctl registry repository list-tags geodb --registry geo | grep "$NEW"   # the tag must exist (build run 45467714576)
+#    merge the pin PR (deploys nothing). Silence for 5 h: GeoDbFeederDown, GeoDbFeederStalled, GeoDbFeederLagHigh, the
+#    per-consumer *Stalled alerts, GeoDbOutboxMirror*, GeoDbSessionsAllGone, GeoDbVotesCountMirrorLag,
+#    ApiGeoDbCardShadowFailing, ApiGeoDbCardFallbackRateHigh.
+#    before-picture: §8c reads -> before.out; Prometheus geodb_sessions_by_wire_payload (rev22 = all), geodb_wire_refused_total (0).
+K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}{.data.sealer-id}{"\n"}' > ids.before
+# 1. quiesce serve only (SIGTERM; the supervisor forwards SIGINT; serve writes its final checkpoint). The feeder stays up.
+K logs -f geodb-0 > geodb-0-shutdown.log 2>&1 &
+K scale statefulset/geodb --replicas=0 && K wait --for=delete pod/geodb-0 --timeout=330s
+grep 'closed: the final checkpoint written' geodb-0-shutdown.log       # must print; if not, stop and look
+# 2. rollback points while nothing writes. Keep until step 7.
+for pvc in data-geodb-0 geodb-feeder-state; do
+  cat <<YAML | K apply -f -
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: {name: premigrate-rev5-$pvc, namespace: gaia}
+spec: {volumeSnapshotClassName: do-block-storage, source: {persistentVolumeClaimName: $pvc}}
+YAML
+done
+K get volumesnapshot premigrate-rev5-data-geodb-0 premigrate-rev5-geodb-feeder-state   # both READYTOUSE true
+```
+
+3. Migrate in a Job on `data-geodb-0`. It checks revision 5, writes `store-rev9` beside `store`, checks the `DONE` line
+   against the Space count and the new FORMAT, and only then swaps. `store-rev5` stays on the volume. The log goes to
+   `migrate-rev9.log` (the 11-11 `migrate.log` is still there).
+
+```bash
+cat <<YAML | K apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata: {name: geodb-migrate, namespace: gaia}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001}
+      imagePullSecrets: [{name: geo}]
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: data-geodb-0}}
+        - {name: serve-config, configMap: {name: geodb-serve-config}}
+        - {name: store-secret, secret: {secretName: geodb-store-secret, defaultMode: 0440}}
+      containers:
+        - name: migrate
+          image: registry.digitalocean.com/geo/geodb:$NEW
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cd /data
+              [ ! -e store-rev5 ] || { echo "store-rev5 exists: an earlier attempt was not cleaned up"; exit 1; }
+              grep -q '^persistent 5 ' store/FORMAT
+              rm -rf store-rev9
+              geodb-migrate --from /data/store --to /data/store-rev9 --threaded --jobs 4 \
+                --secret-file /etc/geodb/store-secret/secret.hex --config /etc/geodb/serve.cfg > migrate-rev9.log 2>&1 \
+                || { tail -n 5 migrate-rev9.log; exit 1; }
+              tail -n 2 migrate-rev9.log
+              n=\$(ls store/ops | wc -l)
+              grep -q "^DONE migrate spaces=\$((n)) " migrate-rev9.log
+              grep -q '^persistent 9 ' store-rev9/FORMAT
+              mv store store-rev5 && mv store-rev9 store
+              echo swapped
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: serve-config, mountPath: /etc/geodb/serve.cfg, subPath: serve.cfg, readOnly: true}
+            - {name: store-secret, mountPath: /etc/geodb/store-secret, readOnly: true}
+          resources:
+            requests: {memory: 5Gi, cpu: "500m"}   # the serve's figures (geodb.yaml); a 2Gi limit is refused
+            limits: {memory: 7Gi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+YAML
+K wait --for=condition=complete job/geodb-migrate --timeout=5h
+K logs job/geodb-migrate          # DONE migrate spaces=1629 versions=<m>, then "swapped"
+```
+
+   - Expect `spaces=1629` (the 11-24 count) and no line saying a seal differs.
+   - **A typed stop** (`Unsupported ...`, `DefiniteRefusal`) leaves `store` at revision 5 and creates no swap. Abort the
+     roll: `K delete job geodb-migrate`, revert the pin PR, `deploy-v2 geodb-serve tag=pinned` from the reverted `main`
+     (serve comes back on `$OLD` over the untouched store), un-silence. Clear `store-rev9` later with a one-shot Job.
+   - The image carries no store-check binary (it ships geodb-client, geodb-migrate, geodb-serve, geodb-supervisor), so the
+     strict store check from the geo-db plan cannot run here. The migrator's own seal re-check plus step 5 are the proof.
+
+```bash
+# 4. serve on the new image (deploy-v2 applies geodb.yaml with replicas: 1)
+gh workflow run deploy-v2.yml --ref main -f service=geodb-serve -f tag=pinned -f cluster=geo-testnet-k8s
+K rollout status statefulset/geodb --timeout=900s
+K logs geodb-0 | head -20      # --allow-plaintext added by the supervisor (ISS-781-472: prove it here), listen, metrics, serving:
+K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}{.data.sealer-id}{"\n"}' | diff - ids.before   # unchanged
+#    the feeder (still on the $OLD client, payload 22) reconnects by itself; watch its applied counter move.
+#    then the clients, one at a time, each with the image tag it already runs (deploy-v2 re-applies the yaml, whose
+#    geodb-setup init container now pulls geodb:$NEW):
+for s in geodb-feeder hermes-ipfs-cache hermes-pipeline topology-indexer vote-indexer search-indexer \
+         notification-indexer delivery-worker ranking-indexer scoring-service proposal-executor api; do
+  echo "${s}: deploy with its current tag (K get deploy,cronjob -l app=$s -o wide), then K rollout status"
+done
+#    CronJobs and one-shot Jobs in the PR pick the new init image on their next apply; until then they run the $OLD
+#    client, which the new serve accepts.
+```
+
+5. Proofs, all read-only:
+   - every live geodb image is `$NEW`:
+     `K get sts,deploy,cronjob -o json | jq -r '.items[] | .metadata.name as $n | (.spec.template.spec // .spec.jobTemplate.spec.template.spec) | (.initContainers // []) + .containers | .[] | select(.image|test("/geodb:")) | "\($n) \(.image)"'`
+     (28 rows on 11-24: the serve plus 27 `geodb-setup` init containers);
+   - Prometheus: `geodb_sessions_by_wire_payload` moves from `rev22` to `rev23` as clients roll;
+     `geodb_wire_refused_total{reason="revision"}` stays 0 and `GeoDbWireRevisionRefused` does not fire;
+   - `geodb-client spaces` from the feeder pod lists 1629 Public Spaces;
+   - feeder: applied counter rising, dead letters 0, `geodb_feeder_consumer_lag` falling to its pre-roll level;
+   - §8c reads give `after.out`; `cmp before.out after.out` on quiet entities.
+6. Rollback. Keep `store-rev5` and both `premigrate-rev5-*` snapshots until step 7. An image swap alone never rolls
+   back: the `$OLD` serve refuses a revision-9 store.
+   - (a) Before the feeder has applied anything on the migrated store: clients back to `$OLD` first (revert the pin PR,
+     redeploy each client as in step 4, api first is fine). Then scale `sts/geodb` to 0, swap back with a one-shot
+     Job on `data-geodb-0` (`mv store store-rev9-discarded && mv store-rev5 store`), and `deploy-v2 geodb-serve
+     tag=pinned` from the reverted `main`.
+   - (b) After the feeder has applied on revision 9: `store-rev5` is behind the feeder's stored offset. Do (a) and also
+     restore `geodb-feeder-state` from `premigrate-rev5-geodb-feeder-state` (scale the feeder to 0, recreate the PVC
+     with `dataSource` the snapshot, deploy), so the feeder replays from the quiesce point; check
+     `/data/feeder/offsets.json` is still inside the 7-day retention first. Or restore both PVCs from the snapshots as in §8b.
+   - Keep Relay `readGrantTtlMs` ≤ 5000 while any `$OLD` serve is live.
+   - Neither a snapshot nor `store-rev5` carries the revision-9 `AUTHORITY`; a later re-roll starts at `policy_epoch=0`.
+7. After a day on revision 9: delete `premigrate-rev5-data-geodb-0` and `premigrate-rev5-geodb-feeder-state`, and remove
+   `store-rev5` and `migrate-rev9.log` with a one-shot Job (serve scaled to 0; the volume is ReadWriteOnce). Un-silence.
+
+Open caveats on 11-24: ISS-781-472 (the supervisor's `--allow-plaintext` detection) is still unproved on live; the
+commits after the candidate manifest are not N-1 tested; the pin's `geodb-e2e` is not a gate.
 
 ## 9. Snapshots: the only recovery source
 
