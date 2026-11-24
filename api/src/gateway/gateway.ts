@@ -1,13 +1,14 @@
 import type {DocumentNode} from "graphql"
 import {withFailureScope} from "../geodb/failReason"
 import {type Classification, classifyRequestWithDocument, type GraphqlRequestParams} from "./classify"
-import type {FieldMode, GatewayConfig} from "./config"
+import {DEFAULT_SHADOW_MAX_IN_FLIGHT, type FieldMode, type GatewayConfig} from "./config"
 import {
 	activateGatewayRequests,
 	observeGatewayGeoDb,
 	observeGatewayPostgres,
 	recordGatewayFieldRequest,
 	recordGatewayRequest,
+	recordGatewayShadowSkipped,
 } from "./metrics"
 import {isGeoDbErrorReason, type ReadSourceSwitch} from "./readSourceSwitch"
 import {activateServeMetrics, observeServe, recordServeFallback, recordServeSource} from "./serveMetrics"
@@ -185,6 +186,7 @@ function scheduleShadow<Ctx>(
 	classified: {classification: Classification; params: GraphqlRequestParams | null; document: DocumentNode | null},
 	response: Response,
 	postgresSeconds: number,
+	inFlight: {count: number},
 ): void {
 	try {
 		const {classification, params, document} = classified
@@ -206,13 +208,20 @@ function scheduleShadow<Ctx>(
 		if (!((deps.random ?? Math.random)() < deps.config.shadowSampleRate)) return
 		if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) return
 		if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) return
+		// A slow geo-db must not pile up comparisons, each holding a copy of its response: past the cap, skip and count.
+		if (inFlight.count >= (deps.config.shadowMaxInFlight ?? DEFAULT_SHADOW_MAX_IN_FLIGHT)) {
+			recordGatewayShadowSkipped(field)
+			return
+		}
 		const clone = response.clone()
+		inFlight.count += 1
 		const done = new Promise<void>((resolve) => {
 			setTimeout(() => {
 				const started = performance.now()
 				withFailureScope(() => shadow({classification, params, document, response: clone}))
 					.catch(() => {})
 					.finally(() => {
+						inFlight.count -= 1
 						observeGatewayGeoDb(field, (performance.now() - started) / 1000)
 						resolve()
 					})
@@ -263,6 +272,8 @@ function scheduleObservers<Ctx>(
 
 export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 	const resolvers: ReadonlyMap<string, FieldResolver> = deps.resolvers ?? new Map()
+	// Sampled shadow comparisons this gateway is running now (see GatewayConfig.shadowMaxInFlight).
+	const shadowsInFlight = {count: 0}
 	if (deps.config.mode === "on")
 		for (const field of resolvers.keys())
 			if (fieldModeOf(deps.config, field) === "on") {
@@ -315,7 +326,7 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 		}
 		const delegated = performance.now()
 		const response = await deps.delegate(request, context)
-		scheduleShadow(deps, classified, response, (performance.now() - delegated) / 1000)
+		scheduleShadow(deps, classified, response, (performance.now() - delegated) / 1000, shadowsInFlight)
 		scheduleObservers(deps, classified, response)
 		return response
 	}

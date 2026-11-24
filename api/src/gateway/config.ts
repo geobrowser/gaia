@@ -31,10 +31,19 @@ export type GatewayConfig = {
 	shadowSampleRate: number
 	/** How long a served field waits for geo-db before falling back to PostGraphile, in milliseconds. */
 	serveTimeoutMs: number
+	/**
+	 * Most sampled shadow comparisons one gateway runs at once (GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT). A sampled
+	 * operation that would go over it is not compared and is counted in
+	 * gaia_api_gateway_shadow_skipped_total{field,reason="in_flight"}, so a slow geo-db cannot pile up comparisons
+	 * (each holding a copy of its response) in the api. Unset in a literal config means DEFAULT_SHADOW_MAX_IN_FLIGHT.
+	 */
+	shadowMaxInFlight?: number
 }
 
 export const DEFAULT_SHADOW_SAMPLE_RATE = 0.01
 export const DEFAULT_SERVE_TIMEOUT_MS = 250
+export const DEFAULT_SHADOW_MAX_IN_FLIGHT = 32
+const MAX_SHADOW_MAX_IN_FLIGHT = 10_000
 const MAX_SERVE_TIMEOUT_MS = 5_000
 
 /** A whole number of milliseconds in [1, 5000]; anything else is the default. */
@@ -42,6 +51,15 @@ export function parseServeTimeoutMs(raw: string | undefined): number {
 	if (raw === undefined || raw.trim() === "") return DEFAULT_SERVE_TIMEOUT_MS
 	const value = Number(raw)
 	return Number.isInteger(value) && value >= 1 && value <= MAX_SERVE_TIMEOUT_MS ? value : DEFAULT_SERVE_TIMEOUT_MS
+}
+
+/** A whole number in [1, 10000]; anything else (unset, empty, zero, negative, fractional) is the default. */
+export function parseShadowMaxInFlight(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === "") return DEFAULT_SHADOW_MAX_IN_FLIGHT
+	const value = Number(raw)
+	return Number.isInteger(value) && value >= 1 && value <= MAX_SHADOW_MAX_IN_FLIGHT
+		? value
+		: DEFAULT_SHADOW_MAX_IN_FLIGHT
 }
 
 /** A fraction in [0, 1]; anything else (unset, empty, NaN, out of range) is the default. */
@@ -79,5 +97,6 @@ export function readGatewayConfig(env: Record<string, string | undefined>): Gate
 		fieldModes: parseFieldModes(env.GRAPHQL_GATEWAY_FIELDS),
 		shadowSampleRate: parseSampleRate(env.GRAPHQL_GATEWAY_SHADOW_SAMPLE),
 		serveTimeoutMs: parseServeTimeoutMs(env.GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS),
+		shadowMaxInFlight: parseShadowMaxInFlight(env.GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT),
 	}
 }
