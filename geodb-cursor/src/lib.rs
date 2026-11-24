@@ -81,8 +81,20 @@ impl Config {
         Self::from_vars(|k| std::env::var(k).ok())
     }
 
+    ///
+    /// `GEODB_CURSOR_KEY_PATH`, when set, is the key the mirror writes with instead of `GEODB_KEY_PATH`.
+    /// A process that also reads geo-db with a read-only key under `GEODB_KEY_PATH` (the notification
+    /// indexer's shadow and twin) sets it, so the writer key never stands in for the reader key or the
+    /// reverse. Only this mirror honours it; `from_vars_for` readers and other mirrors do not.
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<Config> {
-        Self::from_vars_for("GEODB_CURSOR_MIRROR", get)
+        Self::from_vars_for("GEODB_CURSOR_MIRROR", |k| {
+            if k == "GEODB_KEY_PATH"
+                && let Some(p) = get("GEODB_CURSOR_KEY_PATH").filter(|p| !p.trim().is_empty())
+            {
+                return Some(p);
+            }
+            get(k)
+        })
     }
 
     /// `from_vars` for the mirror whose on-switch is the variable `flag` (`1` or `true`).
@@ -623,6 +635,28 @@ mod tests {
         let c = Config::from_vars(on).unwrap();
         assert_eq!(c.collection, DEFAULT_COLLECTION);
         assert_eq!(c.args.last().unwrap(), "pipe");
+    }
+
+    #[test]
+    fn the_mirror_prefers_its_own_key_path_and_readers_never_see_it() {
+        let vars = |k: &str| match k {
+            "GEODB_CURSOR_MIRROR" => Some("1".to_string()),
+            "GEODB_KEY_PATH" => Some("/reader.key".into()),
+            "GEODB_CURSOR_KEY_PATH" => Some("/cursor.key".into()),
+            "GEODB_BINDING_PATH" => Some("/b".into()),
+            _ => None,
+        };
+        let key_arg = |c: &Config| {
+            let i = c.args.iter().position(|a| a == "--key").unwrap();
+            c.args[i + 1].to_string_lossy().into_owned()
+        };
+        assert_eq!(key_arg(&Config::from_vars(vars).unwrap()), "/cursor.key");
+        // A reader built on the same environment keeps GEODB_KEY_PATH.
+        let r = Config::from_vars_for("GEODB_CURSOR_MIRROR", vars).unwrap();
+        assert_eq!(key_arg(&r), "/reader.key");
+        // Unset: the old behaviour.
+        let plain = |k: &str| (k != "GEODB_CURSOR_KEY_PATH").then(|| vars(k)).flatten();
+        assert_eq!(key_arg(&Config::from_vars(plain).unwrap()), "/reader.key");
     }
 
     #[tokio::test]
