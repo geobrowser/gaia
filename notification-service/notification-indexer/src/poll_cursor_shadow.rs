@@ -77,6 +77,20 @@ pub fn describe() {
     }
 }
 
+/// With the shadow on and the cursor mirror (`GEODB_CURSOR_MIRROR`) off or unconfigured, geo-db never
+/// receives a poll cursor and every read is `missing_in_geodb`. Logs that once, at startup, and returns
+/// whether it did.
+pub fn warn_if_mirror_off(get: impl Fn(&str) -> Option<String>) -> bool {
+    if geodb_cursor::Config::from_vars(&get).is_some() {
+        return false;
+    }
+    warn!(
+        event = "geodb_poll_cursor_shadow.mirror_off",
+        "poll cursor shadow is on but the cursor mirror is off; geo-db is never written, so every comparison will be missing_in_geodb"
+    );
+    true
+}
+
 pub struct PollCursorShadow {
     reader: DerivedReader,
     collection: u32,
@@ -96,7 +110,12 @@ impl PollCursorShadow {
     }
 
     pub fn from_env() -> Option<Self> {
-        Self::from_vars(|k| std::env::var(k).ok())
+        let get = |k: &str| std::env::var(k).ok();
+        let shadow = Self::from_vars(get);
+        if shadow.is_some() {
+            warn_if_mirror_off(get);
+        }
+        shadow
     }
 
     /// Reads `name` from geo-db and counts it against what Postgres answered. Never fails the caller.
@@ -190,6 +209,22 @@ mod tests {
         assert!(PollCursorShadow::from_vars(vars(FLAG)).is_some());
         // The writer's flag does not turn the shadow on.
         assert!(PollCursorShadow::from_vars(vars("GEODB_CURSOR_MIRROR")).is_none());
+    }
+
+    #[test]
+    fn shadow_on_with_the_mirror_off_warns_and_a_working_mirror_does_not() {
+        let vars = |mirror: bool| {
+            move |k: &str| match k {
+                FLAG => Some("1".to_string()),
+                "GEODB_CURSOR_MIRROR" if mirror => Some("1".to_string()),
+                "GEODB_KEY_PATH" => Some("/reader".into()),
+                "GEODB_CURSOR_KEY_PATH" => Some("/cursor".into()),
+                "GEODB_BINDING_PATH" => Some("/b".into()),
+                _ => None,
+            }
+        };
+        assert!(warn_if_mirror_off(vars(false)));
+        assert!(!warn_if_mirror_off(vars(true)));
     }
 
     fn fake(script: &str) -> PollCursorShadow {
