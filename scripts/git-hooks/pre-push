@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Pre-push: clippy the Rust crates this push changes, with the pinned toolchain, as CI does.
+#
+# Opt in once per clone:
+#   git config core.hooksPath scripts/git-hooks
+# Opt out:
+#   git config --unset core.hooksPath
+# Skip one push:
+#   git push --no-verify
+#
+# Why the pinned toolchain: CI builds with rust-toolchain.toml's channel (1.94.0), but a
+# Homebrew `cargo` on PATH ignores rust-toolchain.toml and is newer, so it reports different
+# lints. A clean local clippy then goes red in CI (gaia#1714). This runs
+# `rustup run <channel> cargo clippy -p <changed crates> --all-targets -- -D warnings`.
+#
+# Changed crates are the workspace members (Cargo.toml [workspace].members) that own a
+# changed file. A change to the root Cargo.toml, Cargo.lock or rust-toolchain.toml lints
+# the whole workspace. GAIA_CLIPPY_ALL=1 always lints the whole workspace.
+
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+zero=0000000000000000000000000000000000000000
+changed=""
+while read -r local_ref local_sha _remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" = "$zero" ] && continue # deleting a remote branch
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    # New branch, or the remote tip is not local: compare against where it left main.
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+    [ -n "$base" ] || { echo "pre-push clippy: no merge-base with origin/main for $local_ref; skipping it" >&2; continue; }
+  else
+    base="$remote_sha"
+  fi
+  changed+="$(git diff --name-only "$base" "$local_sha")"$'\n'
+done
+
+[ -n "${changed//[$'\n']/}" ] || exit 0
+
+channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+[ -n "$channel" ] || { echo "pre-push clippy: no channel in rust-toolchain.toml" >&2; exit 1; }
+
+# Workspace members, one per line, from the root Cargo.toml.
+members="$(awk '/^\[workspace\]/{w=1} w && /^members *=/{m=1} m{print} m && /\]/{exit}' Cargo.toml \
+  | grep -oE '"[^"]+"' | tr -d '"')"
+
+crate_name() {
+  awk '/^\[package\]/{p=1; next} /^\[/{p=0} p && /^name *=/{gsub(/.*= *"|".*/, ""); print; exit}' "$1/Cargo.toml"
+}
+
+whole=0
+[ "${GAIA_CLIPPY_ALL:-0}" = "1" ] && whole=1
+crates=()
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    Cargo.toml|Cargo.lock|rust-toolchain.toml) whole=1 ;;
+  esac
+  best=""
+  while IFS= read -r m; do
+    case "$f" in
+      "$m"/*) [ ${#m} -gt ${#best} ] && best="$m" ;;
+    esac
+  done <<< "$members"
+  [ -n "$best" ] || continue
+  case "$f" in *.rs|*Cargo.toml) ;; *) continue ;; esac
+  name="$(crate_name "$best")"
+  [ -n "$name" ] || continue
+  case " ${crates[*]-} " in *" $name "*) ;; *) crates+=("$name") ;; esac
+done <<< "$changed"
+
+if [ "$whole" = 0 ] && [ "${#crates[@]}" = 0 ]; then
+  exit 0
+fi
+
+if ! rustup run "$channel" cargo --version > /dev/null 2>&1; then
+  echo "pre-push clippy: toolchain $channel is not installed; run: rustup toolchain install $channel --component clippy" >&2
+  exit 1
+fi
+
+# atlas-check.yml allows one lint the rest of CI does not; match it so this is not stricter.
+lint() {
+  local extra=()
+  case " $* " in *" -p atlas "*) extra=(-A clippy::doc_overindented_list_items) ;; esac
+  echo "pre-push clippy ($channel): cargo clippy $* --all-targets -- -D warnings ${extra[*]-}" >&2
+  rustup run "$channel" cargo clippy "$@" --all-targets -- -D warnings ${extra[@]+"${extra[@]}"}
+}
+
+if [ "$whole" = 1 ]; then
+  lint --workspace --exclude atlas
+  lint -p atlas
+  exit 0
+fi
+
+others=()
+for c in "${crates[@]}"; do
+  if [ "$c" = atlas ]; then
+    lint -p atlas
+  else
+    others+=(-p "$c")
+  fi
+done
+[ "${#others[@]}" = 0 ] || lint "${others[@]}"
