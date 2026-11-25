@@ -1,6 +1,13 @@
 import {Kind, type OperationDefinitionNode} from "graphql"
 import type {GaiaIdsOf} from "../geodb/idMap"
-import {type GeoDbSearchClient, type GeoDbSearchMode, MAX_EVERY_SPACE_SEARCH, MAX_LISTED_SPACES} from "../geodb/search"
+import {
+	type GeoDbSearchClient,
+	type GeoDbSearchMode,
+	lexicalBusyRefusal,
+	lexicalDefiniteRefusal,
+	MAX_EVERY_SPACE_SEARCH,
+	MAX_LISTED_SPACES,
+} from "../geodb/search"
 import type {CardDeps} from "../geodb/service"
 import {argsOf, fieldsOf, isPlainField, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
 import type {FieldResolver, ResolveResult} from "./gateway"
@@ -33,6 +40,8 @@ import {queryTokens, SEARCH_FIELD, type SearchField, withoutExcludedTypes} from 
  *     or not the named one.
  *   - empty: geo-db found nothing; PostgreSQL's similarity search may still.
  *   - legacy_id: a hit the reverse id map (geodb/idMap.ts) cannot place; without the map nothing is served.
+ *   - definite_refusal: geo-db refused the query text by design (`DefiniteRefusal`, e.g. folds under 2 code points).
+ *   - refused_busy: geo-db shed the read because its every-Space typeahead share of the worker pool was taken (load, not a fault).
  *   - timeout, overloaded, client_failed, bad_request: geo-db failing, passed through for the gateway to count.
  *
  * Postgres's rules the answer does not reproduce (OpenSearch candidate ids, Claim and block exclusions beyond the
@@ -163,13 +172,24 @@ export function createSearchResolver(field: SearchField, deps: SearchServeDeps):
 		const everySpace = plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES
 		const ask = Math.min(MAX_FIRST, Math.max(MIN_ASK, plan.first * 3))
 		const searchArgs = {geoSpaceIds, limit: ask, ...(everySpace ? {everySpace: true} : {})}
+		const runLexical = async (text: string, mode: GeoDbSearchMode): Promise<string[] | ResolveResult> => {
+			try {
+				return await deps.search.searchLexical({...searchArgs, text, mode})
+			} catch (error) {
+				if (lexicalDefiniteRefusal(error)) return decline("definite_refusal")
+				if (lexicalBusyRefusal(error)) return decline("refused_busy")
+				throw error
+			}
+		}
 		// Enough over-fetch that dropping the excluded types still leaves a page.
-		const bm25 = await deps.search.searchLexical({...searchArgs, text: plan.query, mode: BM25})
+		const bm25 = await runLexical(plan.query, BM25)
+		if (!Array.isArray(bm25)) return bm25
 		if (signal.aborted) return decline("timeout")
 		const hits = await withoutExcludedTypes(readCards, geoSpaceIds, bm25, plan.first)
 		const token = finalToken(plan.query)
 		if (hits.length < plan.first && token !== null) {
-			const typeahead = await deps.search.searchLexical({...searchArgs, text: token, mode: "typeahead"})
+			const typeahead = await runLexical(token, "typeahead")
+			if (!Array.isArray(typeahead)) return typeahead
 			if (signal.aborted) return decline("timeout")
 			const seen = new Set(bm25)
 			const fresh = typeahead.filter((id) => !seen.has(id))

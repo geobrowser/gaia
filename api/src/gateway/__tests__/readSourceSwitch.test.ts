@@ -19,7 +19,7 @@ import {
 	renderReadSourceSwitchMetrics,
 } from "../readSourceSwitch"
 import {createSearchResolver} from "../searchServe"
-import {__resetServeMetricsForTests} from "../serveMetrics"
+import {__resetServeMetricsForTests, renderServeMetrics} from "../serveMetrics"
 
 const json = (body: unknown) =>
 	new Request("http://api/graphql", {
@@ -382,9 +382,93 @@ describe("readSourceSwitch", () => {
 		for (const reason of ["timeout", "overloaded", "client_failed", "bad_request", "error", "id_map"]) {
 			expect(isGeoDbErrorReason(reason), reason).toBe(true)
 		}
-		for (const reason of ["selection", "args", "filter", "not_enabled", "legacy_id", "unmapped_space"]) {
+		for (const reason of [
+			"selection",
+			"args",
+			"filter",
+			"not_enabled",
+			"legacy_id",
+			"unmapped_space",
+			"refused_busy",
+			"definite_refusal",
+			"unsupported_selection",
+			"mismatch",
+		]) {
 			expect(isGeoDbErrorReason(reason), reason).toBe(false)
 		}
+	})
+
+	it("does not trip auto-revert or count client_failed on search lexicalBusyRefusal or lexicalDefiniteRefusal", async () => {
+		let now = 1_000
+		const warn = vi.fn()
+		writeConfig({fields: {search: "on"}})
+		const sw = createReadSourceSwitch({
+			path: filePath,
+			defaults: new Map([["search", "shadow"]]),
+			refreshMs: 1_000,
+			now: () => now,
+			log: {info: vi.fn(), warn},
+			autoRevert: {windowMs: 60_000, minSamples: 3, maxErrorRate: 0.25, maxLatencyMs: 250},
+		})
+		await sw.refreshIfDue()
+
+		let nextErr: Error | null = null
+		const searchResolver = createSearchResolver("search", {
+			geoSpaceOf: Object.assign(async () => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {
+				all: async () => ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+			}),
+			search: {
+				searchLexical: async () => {
+					if (nextErr) throw nextErr
+					return ["11111111111141118111111111111111"]
+				},
+			},
+			readCards: async () => [],
+			gaiaIdsOf: async (ids) => new Map(ids.map((id) => [id, id])),
+			enabled: () => sw.effectiveMode("search") === "on",
+		})
+		const gateway = createGateway({
+			config: readGatewayConfig({GRAPHQL_GATEWAY: "on", GRAPHQL_GATEWAY_FIELDS: "search=shadow"}),
+			delegate: vi.fn(async () => new Response(JSON.stringify({data: {search: [{id: "pg"}]}}))),
+			runtimeResolvers: new Map([["search", searchResolver]]),
+			readSourceSwitch: sw,
+		})
+		const searchReq = () => json({query: 'query S { search(query: "earth", first: 5) { id } }', operationName: "S"})
+
+		// Every-Space typeahead busy refusal -> refused_busy decline, never trips auto-revert.
+		nextErr = new GeoDbError("client_failed", "refused: ResourceExhausted ResourceExhausted")
+		for (let i = 0; i < 4; i++) {
+			expect(await (await gateway(searchReq(), {})).json()).toEqual({data: {search: [{id: "pg"}]}})
+		}
+		expect(sw.isReverted("search")).toBe(false)
+		expect(renderServeMetrics()).toContain(
+			'gaia_api_gateway_serve_fallback_total{field="search",reason="refused_busy"} 4',
+		)
+		expect(renderServeMetrics()).toContain(
+			'gaia_api_gateway_serve_fallback_total{field="search",reason="client_failed"} 0',
+		)
+
+		// DefiniteRefusal for an unsupported query shape -> definite_refusal decline, never trips auto-revert.
+		nextErr = new GeoDbError("client_failed", "refused: DefiniteRefusal DefiniteRefusal")
+		for (let i = 0; i < 4; i++) {
+			expect(await (await gateway(searchReq(), {})).json()).toEqual({data: {search: [{id: "pg"}]}})
+		}
+		expect(sw.isReverted("search")).toBe(false)
+		expect(warn).not.toHaveBeenCalled()
+		expect(renderServeMetrics()).toContain(
+			'gaia_api_gateway_serve_fallback_total{field="search",reason="definite_refusal"} 4',
+		)
+		expect(renderServeMetrics()).toContain(
+			'gaia_api_gateway_serve_fallback_total{field="search",reason="client_failed"} 0',
+		)
+
+		// A real client_failed (e.g. ResourceExhausted with stage diagnostics) DOES count as failure and trips auto-revert.
+		nextErr = new GeoDbError("client_failed", "refused: ResourceExhausted opening")
+		for (let i = 0; i < 4; i++) {
+			await gateway(searchReq(), {})
+		}
+		expect(sw.isReverted("search")).toBe(true)
+		expect(warn).toHaveBeenCalledTimes(1)
 	})
 
 	it("persists auto-revert latch to ConfigMap so every replica honours it across restarts and deleting the key resets it", async () => {
