@@ -94,6 +94,13 @@ pub fn set_local_statement_timeout_sql(timeout_ms: u64) -> String {
     format!("SET LOCAL statement_timeout = {timeout_ms}")
 }
 
+fn protected_property_uuids() -> Vec<Uuid> {
+    sdk::core::ids::PROTECTED_PROPERTY_IDS
+        .iter()
+        .map(|id| Uuid::parse_str(id).expect("invalid protected property ID"))
+        .collect()
+}
+
 impl Storage {
     pub async fn new(database_url: &str) -> Result<Self, IndexerError> {
         let timeout_ms = statement_timeout_ms();
@@ -555,6 +562,88 @@ impl Storage {
         )
         .bind(&ids)
         .bind(&space_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Apply `DeleteEntity` ops: remove, from `space_id`, every value the entities hold and every
+    /// relation that leaves them. This is what `geodb-feeder` does to geo-db (`delete_entity`
+    /// retracts the entity's cells there), so the two stores agree on which entities exist.
+    ///
+    /// Kept on purpose: the `entities` row (it is global, not per space, and other spaces may
+    /// still hold the entity), relations that point *at* the entity, the relations and values of
+    /// the entity's reified relation entities, and anything protected the same way edits protect
+    /// it (system relations, `PROTECTED_PROPERTY_IDS` values).
+    pub async fn delete_entities(
+        &self,
+        entity_ids: &[Uuid],
+        space_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if entity_ids.is_empty() {
+            return Ok(());
+        }
+        let protected = protected_property_uuids();
+
+        sqlx::query(
+            "DELETE FROM values
+             WHERE space_id = $1 AND entity_id = ANY($2::uuid[]) AND property_id <> ALL($3::uuid[])",
+        )
+        .bind(space_id)
+        .bind(entity_ids)
+        .bind(&protected)
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM relations
+             WHERE space_id = $1 AND from_entity_id = ANY($2::uuid[]) AND relations.is_system = false",
+        )
+        .bind(space_id)
+        .bind(entity_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Close the open `value_versions` / `relation_versions` rows of entities deleted by
+    /// `delete_entities`, at `version_key`, so history shows them ending with the edit.
+    pub async fn close_entity_versions(
+        &self,
+        entity_ids: &[Uuid],
+        space_id: Uuid,
+        version_key: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if entity_ids.is_empty() {
+            return Ok(());
+        }
+        let protected = protected_property_uuids();
+
+        sqlx::query(
+            "UPDATE value_versions SET valid_to_key = $1
+             WHERE valid_to_key IS NULL AND space_id = $2
+               AND entity_id = ANY($3::uuid[]) AND property_id <> ALL($4::uuid[])",
+        )
+        .bind(version_key)
+        .bind(space_id)
+        .bind(entity_ids)
+        .bind(&protected)
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE relation_versions SET valid_to_key = $1
+             WHERE valid_to_key IS NULL AND space_id = $2
+               AND from_entity_id = ANY($3::uuid[])
+               AND relation_id NOT IN (SELECT id FROM relations WHERE is_system = true)",
+        )
+        .bind(version_key)
+        .bind(space_id)
+        .bind(entity_ids)
         .execute(&mut **tx)
         .await?;
 

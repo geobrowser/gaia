@@ -1415,10 +1415,14 @@ async fn process_message(
                 + set_relations.len()
                 + update_relations.len()
                 + unset_relations.len()
-                + delete_relations.len();
+                + delete_relations.len()
+                + result.deleted_entities.len();
 
             // Bulk insert all operations (live tables)
             storage.insert_entities(&result.entities, &mut tx).await?;
+            storage
+                .delete_entities(&result.deleted_entities, result.space_id, &mut tx)
+                .await?;
             storage.insert_values(&set_values, &mut tx).await?;
             storage.delete_values(&delete_value_ids, &mut tx).await?;
             storage.insert_relations(&set_relations, &mut tx).await?;
@@ -1445,6 +1449,14 @@ async fn process_message(
                     )
                     .await?
                 {
+                    storage
+                        .close_entity_versions(
+                            &result.deleted_entities,
+                            result.space_id,
+                            version_key,
+                            &mut tx,
+                        )
+                        .await?;
                     storage
                         .insert_value_versions(&values_for_versioning, version_key, &mut tx)
                         .await?;
@@ -1913,10 +1925,14 @@ async fn process_block(
                         + set_relations.len()
                         + update_relations.len()
                         + unset_relations.len()
-                        + delete_relations.len();
+                        + delete_relations.len()
+                        + result.deleted_entities.len();
 
                     // Bulk insert all operations (live tables)
                     storage.insert_entities(&result.entities, &mut tx).await?;
+                    storage
+                        .delete_entities(&result.deleted_entities, result.space_id, &mut tx)
+                        .await?;
                     storage.insert_values(&set_values, &mut tx).await?;
                     storage.delete_values(&delete_value_ids, &mut tx).await?;
                     storage.insert_relations(&set_relations, &mut tx).await?;
@@ -1943,6 +1959,14 @@ async fn process_block(
                             )
                             .await?
                         {
+                            storage
+                                .close_entity_versions(
+                                    &result.deleted_entities,
+                                    result.space_id,
+                                    version_key,
+                                    &mut tx,
+                                )
+                                .await?;
                             storage
                                 .insert_value_versions(&values_for_versioning, version_key, &mut tx)
                                 .await?;
