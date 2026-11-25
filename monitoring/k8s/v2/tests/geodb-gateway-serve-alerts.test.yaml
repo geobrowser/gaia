@@ -12,6 +12,7 @@ tests:
       - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayShadowFailing, exp_alerts: []}
 
   # Registered at zero when the field is switched on, before any traffic.
   - name: silent at zero
@@ -25,10 +26,15 @@ tests:
         values: '0x60'
       - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entity"}'
         values: '0x60'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="failed"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="mismatch"}'
+        values: '0x60'
     alert_rule_test:
       - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayShadowFailing, exp_alerts: []}
 
   # search: 10 operations a minute, 3 of them fall back on a geo-db timeout, 7 are answered by geo-db.
   # entity: 10 a minute, 5 of them decline because the query is not one geo-db answers (args): not a failure.
@@ -239,4 +245,221 @@ tests:
                 error-rate or latency threshold, and it stays on Postgres until an operator clears
                 reverted.entity in ConfigMap geodb-read-source. Check the reason with
                 sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
+
+  # GatewayShadowFailing: exact 30m for-duration boundary, pure mismatch, multi-pod sum by (field),
+  # exact 500 threshold boundary, transient >500 burst shorter than 30m, non-failure results, and window expiry.
+  # search: pure mismatch, 0x30 baseline then +20/min for 60m (crosses >500 at 56m -> pending 30m -> fires at 86m, clears at 95m).
+  # entity: two pods each at +10/min (300/30m alone, 600/30m combined) fire once for entity and clear at 95m.
+  # entities: +30/min for 30m crosses >500 at 47m and drops below 500 at 74m (26m pending < 30m for) -> stays silent.
+  # relations: single jump to 500 (exact threshold == 500, not > 500) -> stays silent.
+  # searchConnection: definite_refusal and match at +100/min -> excluded, stays silent.
+  - name: shadow failing respects 30m for boundary, pure mismatch, multi-pod sum, and clears after window expiry
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="search", result="mismatch"}'
+        values: '0x30 20+20x59 1200x40'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="failed", pod="api-0"}'
+        values: '0x30 10+10x59 600x40'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="mismatch", pod="api-1"}'
+        values: '0x30 10+10x59 600x40'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entities", result="failed"}'
+        values: '0x30 30+30x29 900x70'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="relations", result="failed"}'
+        values: '0x30 500x100'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="searchConnection", result="definite_refusal"}'
+        values: '0x30 100+100x99'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="searchConnection", result="match"}'
+        values: '0x30 100+100x99'
+    alert_rule_test:
+      - {eval_time: 73m, alertname: GatewayShadowFailing, exp_alerts: []}
+      - {eval_time: 85m, alertname: GatewayShadowFailing, exp_alerts: []}
+      - eval_time: 86m
+        alertname: GatewayShadowFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway shadow reads of entity are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="entity"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="entity"}[30m])).
+                RUNBOOK section 7.
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: search}
+            exp_annotations:
+              summary: Gateway shadow reads of search are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="search"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="search"}[30m])).
+                RUNBOOK section 7.
+      - eval_time: 94m
+        alertname: GatewayShadowFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway shadow reads of entity are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="entity"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="entity"}[30m])).
+                RUNBOOK section 7.
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: search}
+            exp_annotations:
+              summary: Gateway shadow reads of search are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="search"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="search"}[30m])).
+                RUNBOOK section 7.
+      - {eval_time: 95m, alertname: GatewayShadowFailing, exp_alerts: []}
+
+  # GatewayServeFallbackHigh: mixed refused_busy + definite_refusal with a 10% timeout rate stays silent,
+  # while a separate field crossing >10% failure-class respects the 5m for boundary and clears after the 15m window.
+  # search: 10 ops/min (4 refused_busy, 4 definite_refusal, 1 timeout -> 10% failure-class, not > 0.1).
+  # entity: 10 ops/min; 15m healthy, then 15m of 20% timeout (crosses >10% at 23m, fires at 28m, clears at 37m).
+  - name: mixed refused_busy and definite_refusal stay silent while failure-class burst respects 5m for and clears
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="geodb"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="postgres"}'
+        values: '0+9x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="refused_busy"}'
+        values: '0+4x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="definite_refusal"}'
+        values: '0+4x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="timeout"}'
+        values: '0+1x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="geodb"}'
+        values: '0+10x15 158+8x14 280+10x30'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="entity", source="postgres"}'
+        values: '0x15 2+2x14 30x30'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="entity", reason="timeout"}'
+        values: '0x15 2+2x14 30x30'
+    alert_rule_test:
+      - {eval_time: 27m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+      - eval_time: 28m
+        alertname: GatewayServeFallbackHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: More than 10% of served entity operations are falling back to Postgres on a geo-db failure
+              description: >-
+                The field is in mode on but geo-db is failing queries it could have answered (timeout,
+                overloaded, client_failed, bad_request, error, id_map). Break it down with
+                sum by (reason) (increase(gaia_api_gateway_serve_fallback_total{field="entity"}[15m])).
+                RUNBOOK section 13.
+      - eval_time: 36m
+        alertname: GatewayServeFallbackHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: More than 10% of served entity operations are falling back to Postgres on a geo-db failure
+              description: >-
+                The field is in mode on but geo-db is failing queries it could have answered (timeout,
+                overloaded, client_failed, bad_request, error, id_map). Break it down with
+                sum by (reason) (increase(gaia_api_gateway_serve_fallback_total{field="entity"}[15m])).
+                RUNBOOK section 13.
+      - {eval_time: 37m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+
+  # GatewayReadSourceAutoReverted: exact 1m for-duration boundary, single-scrape transient blip ignored,
+  # per-field isolation when multiple fields latch/clear independently, and immediate clear on reset to 0.
+  - name: read-source auto-revert respects 1m for boundary, ignores 1-scrape blip, isolates fields, and clears on reset
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entity", pod="api-0"}'
+        values: '0x5 1x20 0x15'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="search", pod="api-0"}'
+        values: '0x5 1 0x35'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="relations", pod="api-0"}'
+        values: '0x10 1x30'
+    alert_rule_test:
+      - {eval_time: 5m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
+      - {eval_time: 6m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
+      - eval_time: 7m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway field entity auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched entity back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.entity in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
+      - eval_time: 11m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway field entity auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched entity back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.entity in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
+      - eval_time: 12m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway field entity auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched entity back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.entity in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: relations}
+            exp_annotations:
+              summary: Gateway field relations auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched relations back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.relations in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="relations"}[1h])).
+                RUNBOOK section 13.
+      - eval_time: 26m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway field entity auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched entity back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.entity in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: relations}
+            exp_annotations:
+              summary: Gateway field relations auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched relations back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.relations in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="relations"}[1h])).
+                RUNBOOK section 13.
+      - eval_time: 27m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: relations}
+            exp_annotations:
+              summary: Gateway field relations auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched relations back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.relations in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="relations"}[1h])).
                 RUNBOOK section 13.

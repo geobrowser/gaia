@@ -1079,3 +1079,49 @@ tests:
       - {eval_time: 400m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
       - {eval_time: 600m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
       - {eval_time: 600m, alertname: GeoDbMigrateJobFailed, exp_alerts: []}
+
+  - name: single store fold refusal fires immediately without fencing, isolates namespace and job, and clears right after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fold_refused_total{namespace="gaia", job="geodb"}'
+        values: '0x20 1x30'
+      - series: 'geodb_store_fenced{namespace="gaia", job="geodb"}'
+        values: '0x50'
+      - series: 'geodb_store_fold_refused_total{namespace="other", job="geodb"}'
+        values: '0+5x50'
+      - series: 'geodb_store_fold_refused_total{namespace="gaia", job="other"}'
+        values: '0+5x50'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+      - eval_time: 21m
+        alertname: GeoDbStoreFoldRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused an atomic Branch fold during Phase 1 staging in the last 15m
+              description: >-
+                geodb_store_fold_refused_total rose above 0 (must stay 0). Phase 1 staging rejected a
+                commitSerial Branch fold before any log write or shared mutation, so the store did not fence
+                (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
+                owner-capacity metrics to find why staging refused the fold.
+      - {eval_time: 21m, alertname: GeoDbStoreFenced, exp_alerts: []}
+      - eval_time: 34m
+        alertname: GeoDbStoreFoldRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused an atomic Branch fold during Phase 1 staging in the last 15m
+              description: >-
+                geodb_store_fold_refused_total rose above 0 (must stay 0). Phase 1 staging rejected a
+                commitSerial Branch fold before any log write or shared mutation, so the store did not fence
+                (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
+                owner-capacity metrics to find why staging refused the fold.
+      - {eval_time: 35m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+
+  - name: flat non-zero store fold refusal counter stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fold_refused_total{namespace="gaia", job="geodb"}'
+        values: '5x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
