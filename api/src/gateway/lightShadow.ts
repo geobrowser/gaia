@@ -141,6 +141,13 @@ type LightList = {
 	 * the target's own fields (`relationsList(filter: {typeId: {is: R}}, first: 3) { toEntity { name } }`): the filter's
 	 * Types, one of which each row has. Each row is checked as "geo-db holds a relation of one of these Types" (like
 	 * `typeOnly`), and the target's fields are `nested_entity`.
+	 *
+	 * Why the target's `valuesList` cannot be compared here: the shadow sees only a clone of the response body, never
+	 * PostGraphile's rows, so a `toEntityId` the client did not select is not available to it (the delegate is an
+	 * opaque `Response`). Without the id no target can be tied to a geo-db relation, and matching by value content
+	 * would be a weaker check than the id-keyed `target` of a row that selects `toEntityId`. Two ways to compare it:
+	 * the client selects `toEntityId` (plus carrying `target` on the type-filter branch of planLightList), or geo-db
+	 * returns each relation's target values in one read (also what serving the shape would need).
 	 */
 	typeOnlyOf?: string[]
 	/**
