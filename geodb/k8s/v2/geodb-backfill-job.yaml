@@ -64,7 +64,7 @@ spec:
       initContainers:
         # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:9f00466957
+          image: registry.digitalocean.com/geo/geodb:727c925f8e
           imagePullPolicy: IfNotPresent
           command:
             - sh
