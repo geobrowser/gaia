@@ -997,6 +997,9 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 										budget: wideReadBudget,
 										multiSpace: geoDbCardConfig.multiSpaceReads === true,
 										backlinks: geoDbCardConfig.backlinkReads === true,
+										derivedFields: geoDbCardConfig.derivedFields === true,
+										relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+										relationFacets: geoDbCardConfig.relationFacets === true,
 										...(geoDbCardConfig.everySpaceReads === true
 											? {
 													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
