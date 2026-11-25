@@ -115,7 +115,8 @@ type LightList = {
 	projection?: boolean
 	/**
 	 * A relations list filtered by `typeId` (`is` or `in`) that selects no type: the filter's Types, one of which each
-	 * row has. Its rows are checked as "held under one of these Types" (`typeless`), not as exact statements.
+	 * row has. Its rows are checked as "held under one of these Types" (`typeless`), not as exact statements. When the
+	 * rows select the target id and its `valuesList`, `target` holds those values to geo-db's card of the target.
 	 */
 	typeFilter?: string[]
 	/**
@@ -500,6 +501,8 @@ function planLightList(
 	} else if (!has("typeId") && has("toEntityId") && options.relationsTypeFilter && typeFilterOf(filter)) {
 		// The filter says which Types the rows hold; the answer does not say which one each does.
 		uncompared.add("filter_completeness")
+		// With the target id selected, the target's own values are held to geo-db's card of that target.
+		const target = planTargetValues(field, fragments, resolved)
 		return {
 			kind,
 			key: responseKeyOf(field),
@@ -507,6 +510,7 @@ function planLightList(
 			rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
 			spaceKey: rows.columns.spaceId ?? null,
 			typeFilter: typeFilterOf(filter) as string[],
+			...(target ? {target} : {}),
 		}
 	} else if (has("typeId") && !has("toEntityId") && selectsTarget(field, fragments)) {
 		uncompared.add("nested_entity")
@@ -1397,6 +1401,8 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				if (typeof toEntityId !== "string") return null
 				if (list.typeFilter) {
 					typeless.push({types: list.typeFilter, to: toEntityId, space})
+					const own = list.target ? targetValuesOf(node, list.target) : null
+					if (own) targetValues.push({to: toEntityId, values: own})
 					if (list.rows.names.toEntity)
 						push(nested, "toEntity", {
 							id: toEntityId,
