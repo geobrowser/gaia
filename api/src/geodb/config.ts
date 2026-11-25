@@ -93,6 +93,15 @@ export type GeoDbCardConfig = {
 	 */
 	countOnly?: boolean
 	/**
+	 * Let the `relationsConnection` shadow compare an operation that asks only `totalCount` by two caller-side routes: a
+	 * `typeId` + `toEntityId` target set is one geo-db relations count read a target (`.args = .{ .type, .to, .count = true }`, at most
+	 * 20 targets), the `scanned` statements summed and compared with `totalCount` (a row count, so never `members`, the distinct
+	 * from-entities); a `fromEntityId` + one `spaceId` + `typeId` filter is the from entity's card, its statements of those Types
+	 * counted. Needs a serve whose store has the relations count form (geo-db 7001ee8cf0) for the first route: an older one refuses
+	 * it (counted `unsupported_selection` / `count_refused`). Off by default. GEODB_RELATIONS_COUNT_SHADOW=on.
+	 */
+	relationsCount?: boolean
+	/**
 	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
 	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
 	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
@@ -191,6 +200,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
 		typeScan: env.GEODB_TYPE_SCAN_SHADOW?.trim().toLowerCase() === "on",
 		countOnly: env.GEODB_COUNT_ONLY_SHADOW?.trim().toLowerCase() === "on",
+		relationsCount: env.GEODB_RELATIONS_COUNT_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		relationFacets: env.GEODB_RELATION_FACETS_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",

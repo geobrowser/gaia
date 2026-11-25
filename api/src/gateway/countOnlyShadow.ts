@@ -25,7 +25,7 @@ export const isCountRefusal = (error: unknown): boolean =>
 	error instanceof GeoDbError && error.reason === "client_failed" && /\bMalformedRequest\b/.test(error.message)
 
 /** PostGraphile's `totalCount` of each root, or null when the response holds none of them (an error, a null, a non-integer). */
-export function totalCountsOf(body: unknown, plan: CountOnlyPlan): Map<string, number> | null {
+export function totalCountsOf(body: unknown, plan: {roots: readonly {key: string}[]}): Map<string, number> | null {
 	if (typeof body !== "object" || body === null) return null
 	const root = body as {errors?: unknown; data?: unknown}
 	if (root.errors !== undefined || typeof root.data !== "object" || root.data === null) return null
@@ -41,6 +41,31 @@ export function totalCountsOf(body: unknown, plan: CountOnlyPlan): Map<string, n
 	return counts
 }
 
+/**
+ * The geo-db scope of a count over gaia `spaceIds`: the mapped Spaces, or `"every"` (a `*` line) for null, which needs the every-Space
+ * reads (`allGeoSpaces`). Several Spaces need `multiSpace`; an unmapped one, or more than a line holds, is unsupported.
+ */
+export async function geoScopeOf(
+	deps: EntityShadowDeps,
+	spaceIds: string[] | null,
+): Promise<{ok: true; geoSpaceIds: string[] | "every"} | {ok: false; outcome: LightOutcome}> {
+	if (spaceIds === null) {
+		// Every Space the session reads, one `*` line; the same flag as the every-Space card reads.
+		if (!deps.allGeoSpaces) return {ok: false, outcome: {result: "unsupported", reason: "no_space"}}
+		return {ok: true, geoSpaceIds: "every"}
+	}
+	if (spaceIds.length > MAX_LINE_SPACES) return {ok: false, outcome: {result: "unsupported", reason: "many_spaces"}}
+	if (spaceIds.length > 1 && deps.multiSpace !== true)
+		return {ok: false, outcome: {result: "unsupported", reason: "no_space"}}
+	const mapped: string[] = []
+	for (const space of spaceIds) {
+		const geo = await deps.geoSpaceOf(space)
+		if (!geo) return {ok: false, outcome: {result: "unsupported", reason: "unmapped_space"}}
+		mapped.push(geo)
+	}
+	return {ok: true, geoSpaceIds: [...new Set(mapped)]}
+}
+
 /** Reads one root's count from geo-db. */
 async function readRoot(
 	deps: EntityShadowDeps,
@@ -49,24 +74,9 @@ async function readRoot(
 ): Promise<{ok: true; count: TypeCount} | {ok: false; outcome: LightOutcome}> {
 	const readTypeCount = deps.geoDb.readTypeCount?.bind(deps.geoDb)
 	if (!readTypeCount) return {ok: false, outcome: {result: "skip"}}
-	let geoSpaceIds: string[] | "every"
-	if (root.spaceIds === null) {
-		// Every Space the session reads, one `*` line; the same flag as the every-Space card reads.
-		if (!deps.allGeoSpaces) return {ok: false, outcome: {result: "unsupported", reason: "no_space"}}
-		geoSpaceIds = "every"
-	} else {
-		if (root.spaceIds.length > MAX_LINE_SPACES)
-			return {ok: false, outcome: {result: "unsupported", reason: "many_spaces"}}
-		if (root.spaceIds.length > 1 && deps.multiSpace !== true)
-			return {ok: false, outcome: {result: "unsupported", reason: "no_space"}}
-		const mapped: string[] = []
-		for (const space of root.spaceIds) {
-			const geo = await deps.geoSpaceOf(space)
-			if (!geo) return {ok: false, outcome: {result: "unsupported", reason: "unmapped_space"}}
-			mapped.push(geo)
-		}
-		geoSpaceIds = [...new Set(mapped)]
-	}
+	const scope = await geoScopeOf(deps, root.spaceIds)
+	if (!scope.ok) return scope
+	const geoSpaceIds = scope.geoSpaceIds
 	if (deps.budget && !deps.budget.tryAcquire(1))
 		return {ok: false, outcome: {result: "unsupported", reason: "throttled"}}
 	const started = performance.now()
