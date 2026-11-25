@@ -399,6 +399,11 @@ spec:
             # reads). Off until the feeder writes them (GEODB_RELATION_FACETS) and a backfill has run.
             - name: GEODB_RELATION_FACETS_SHADOW
               value: "off"
+            # Shadow `relationsConnection` grouped distinct-count facets (`groupedAggregates(groupBy: [TO_ENTITY_ID])`)
+            # against geo-db's grouped relations form (#1749). Independent of GEODB_RELATION_FACETS_SHADOW (card-claims
+            # compare). Shadow only; off by default.
+            - name: GEODB_RELATION_GROUPED_FACETS_SHADOW
+              value: "off"
             # Compare a totalCount-only relationsConnection against geo-db's relations count form (summed scanned per target, or
             # the from entity's card). Shadow only; never changes a response (gaia#1745). Only the literal "on" enables it.
             - name: GEODB_RELATIONS_COUNT_SHADOW
