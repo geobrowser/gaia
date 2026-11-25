@@ -1,0 +1,22 @@
+name: pg-only-edits detector tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/check-pg-only-edits.py'
+      - 'scripts/test_check_pg_only_edits.py'
+      - '.github/workflows/pg-only-edits-detector.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/check-pg-only-edits.py'
+      - 'scripts/test_check_pg_only_edits.py'
+      - '.github/workflows/pg-only-edits-detector.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest scripts/test_check_pg_only_edits.py
