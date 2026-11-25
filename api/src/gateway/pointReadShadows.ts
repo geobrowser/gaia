@@ -77,6 +77,7 @@ import {
 	type UnsupportedReason,
 } from "./metrics"
 import {mismatchPartsOf} from "./mismatchParts"
+import {analyzeRelationsCount, checkRelationsCount} from "./relationsCountShadow"
 
 export const ENTITIES_FIELD = "entities"
 export const RELATION_FIELD = "relation"
@@ -897,6 +898,30 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 	const shadow: FieldShadow = async ({params, document, classification, response}) => {
 		try {
 			const analysis = analyzePointRead(field, document, classification.operationName, params.variables)
+			if (!analysis.ok && analysis.reason === "count_only" && field === RELATIONS_CONNECTION_FIELD) {
+				// `totalCount` alone: a target set's summed relations counts or a from entity's card (relationsCountShadow.ts).
+				const counted =
+					deps.relationsCount === true
+						? analyzeRelationsCount(document, classification.operationName, params.variables)
+						: null
+				if (counted?.ok) {
+					let countBody: unknown
+					try {
+						countBody = await response.json()
+					} catch {
+						return
+					}
+					countLight(deps, field, await checkRelationsCount(deps, counted.plan, countBody, label), {
+						operationName: classification.operationName,
+					})
+					return
+				}
+				const reason = counted ? counted.reason : analysis.reason
+				recordGatewayShadow(field, "unsupported_selection")
+				recordGatewayUnsupported(field, reason)
+				noteUnsupported(deps, field, reason, document, classification.operationName, params.variables)
+				return
+			}
 			if (!analysis.ok) {
 				// A card-shaped selection is not what was asked: `entities` also has a light form (lightShadow.ts).
 				const light =

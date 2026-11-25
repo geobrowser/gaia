@@ -1026,6 +1026,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							typeScan: geoDbCardConfig.typeScan === true,
 							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 							relationFacets: geoDbCardConfig.relationFacets === true,
+							relationsCount: geoDbCardConfig.relationsCount === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {
 										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,

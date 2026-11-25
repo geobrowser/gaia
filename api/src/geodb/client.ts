@@ -178,6 +178,13 @@ export type GeoDbCardClient = {
 	 */
 	readTypeCount?(args: TypeCountRequest): Promise<TypeCount>
 	/**
+	 * The statements of one relation property naming one target (`relations` root, `.args = .{ .type, .to, .count = true }`, geo-db's
+	 * relations count form, 7001ee8cf0) across the Spaces named, or every Space the session reads (`"every"`, a `*` line): the pages the
+	 * tool fetched summed, `scanned` the statements (one a relation row), `members` the distinct from-entities. Needs a store with the
+	 * form, which an older one refuses (`client_failed`, `MalformedRequest`). Absent on a client that cannot do it.
+	 */
+	readRelationCount?(args: RelationCountRequest): Promise<TypeCount>
+	/**
 	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
 	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
 	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
@@ -210,6 +217,16 @@ export type TypeCountRequest = {
 	typeId: string
 	/** Keep the members holding a statement of `property` (a `Reference` property) naming any of `targets` (1 to `MAX_COUNT_TARGETS`). */
 	where?: {property: string; targets: string[]}
+	timeoutMs?: number
+}
+
+export type RelationCountRequest = {
+	/** The Spaces to count in (distinct, 32 hex digits), or `"every"` for the `*` line. */
+	geoSpaceIds: string[] | "every"
+	/** The relation property (its Type, 32 hex digits). */
+	typeId: string
+	/** The one target the statements name (32 hex digits). */
+	toEntityId: string
 	timeoutMs?: number
 }
 
@@ -385,6 +402,11 @@ export function typeCountDocument(request: Pick<TypeCountRequest, "typeId" | "wh
 		: ""
 	const term = where ? `, .where = .{ .@"${where.property}" = .{ ${operand} } }` : ""
 	return `.{ .version = 1, .select = .{ .n = .{ .field = "entities", .args = .{ .type = "${request.typeId}", .count = true${term} } } } }`
+}
+
+/** The geoql document for the relations count form: one relation property's statements naming one target. Ids are 32 hex digits. */
+export function relationCountDocument(request: Pick<RelationCountRequest, "typeId" | "toEntityId">): string {
+	return `.{ .version = 1, .select = .{ .n = .{ .field = "relations", .args = .{ .type = "${request.typeId}", .to = "${request.toEntityId}", .count = true } } } }`
 }
 
 /**
@@ -1244,6 +1266,33 @@ export function createPipeGeoDbClient(
 			const scope = geoSpaceIds === "every" ? "*" : geoSpaceIds.join(",")
 			const rows = await submit(
 				`${scope}\t${typeCountDocument({typeId, where})}\n`,
+				NO_ENTITY,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				true,
+			)
+			return rows[0] as unknown as TypeCount
+		},
+		async readRelationCount({geoSpaceIds, typeId, toEntityId, timeoutMs}) {
+			if (geoSpaceIds !== "every") {
+				if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+					throw new GeoDbError("bad_request", "1 to 1024 space ids")
+				if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+					throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			}
+			if (!HEX32.test(typeId) || !HEX32.test(toEntityId))
+				throw new GeoDbError("bad_request", "the relation type and target must be 32 hex digits")
+			const scope = geoSpaceIds === "every" ? "*" : geoSpaceIds.join(",")
+			const rows = await submit(
+				`${scope}\t${relationCountDocument({typeId, toEntityId})}\n`,
 				NO_ENTITY,
 				false,
 				false,
