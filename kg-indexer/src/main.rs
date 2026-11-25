@@ -1394,6 +1394,9 @@ async fn process_message(
         .execute(&mut *tx)
         .await?;
 
+    // Delete counters are recorded only after the commit, so a rollback or a retried
+    // transaction never counts rows that were not written.
+    let mut pending_deletes: Vec<storage::EditWriteOutcome> = Vec::new();
     let ops = match msg {
         KgMessage::BlockSummary(_) => 0,
         KgMessage::Edit(edit) => {
@@ -1402,8 +1405,9 @@ async fn process_message(
             let outcome = storage
                 .write_edit(&edit, result, edit_name.as_deref(), created_by_id, &mut tx)
                 .await?;
-            record_entity_deletes(&outcome);
-            outcome.ops
+            let ops = outcome.ops;
+            pending_deletes.push(outcome);
+            ops
         }
         KgMessage::SpaceAddressUpdated(updated) => {
             // Address-only update for an EXISTING space. Deliberately does not
@@ -1635,6 +1639,9 @@ async fn process_message(
     };
 
     tx.commit().await?;
+    for outcome in &pending_deletes {
+        record_entity_deletes(outcome);
+    }
 
     Ok(ops)
 }
@@ -1699,6 +1706,8 @@ async fn process_block(
         .execute(&mut *tx)
         .await?;
     let mut total_ops = 0;
+    // Recorded after the commit below, never inside the transaction (see process_message).
+    let mut pending_deletes: Vec<storage::EditWriteOutcome> = Vec::new();
     let tx_start = Instant::now();
     let mut pending_space_topics: HashMap<uuid::Uuid, Option<uuid::Uuid>> = HashMap::new();
 
@@ -1829,8 +1838,9 @@ async fn process_block(
                     let outcome = storage
                         .write_edit(edit, result, edit_name.as_deref(), created_by_id, &mut tx)
                         .await?;
-                    record_entity_deletes(&outcome);
-                    outcome.ops
+                    let ops = outcome.ops;
+                    pending_deletes.push(outcome);
+                    ops
                 }
                 KgMessage::SpaceAddressUpdated(updated) => {
                     // Address-only update for an existing space; never inserts.
@@ -2176,6 +2186,10 @@ async fn process_block(
         db_commit_span.record("otel.status_code", "ERROR");
         db_commit_span.record("otel.status_message", e.to_string().as_str());
         return Err(e.into());
+    }
+
+    for outcome in &pending_deletes {
+        record_entity_deletes(outcome);
     }
 
     // Commit Kafka offsets for all processed messages
