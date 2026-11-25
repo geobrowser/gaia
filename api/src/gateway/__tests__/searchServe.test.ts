@@ -1,6 +1,7 @@
 import {parse} from "graphql"
 import {describe, expect, it, vi} from "vitest"
 import {conformingId} from "../../geodb/card"
+import {GeoDbError} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
 import {createGateway, type ResolveContext} from "../gateway"
 import {createSearchResolver, planSearchServe, type SearchServeDeps} from "../searchServe"
@@ -206,6 +207,42 @@ describe("createSearchResolver", () => {
 		expect(await createSearchResolver("search", many.deps)(context("search", q))).toEqual({
 			ok: false,
 			reason: "many_spaces",
+		})
+	})
+	it("declines refused_busy and definite_refusal without treating them as geo-db failures", async () => {
+		const busy = make([A]).deps
+		busy.search = {
+			searchLexical: async () => {
+				throw new GeoDbError("client_failed", "refused: ResourceExhausted ResourceExhausted")
+			},
+		}
+		expect(await createSearchResolver("search", busy)(context("search", S))).toEqual({
+			ok: false,
+			reason: "refused_busy",
+		})
+
+		const busyOnTypeahead = make([A]).deps
+		busyOnTypeahead.search = {
+			searchLexical: async ({mode}) => {
+				if (mode === "typeahead")
+					throw new GeoDbError("client_failed", "refused: ResourceExhausted ResourceExhausted")
+				return [A]
+			},
+		}
+		expect(await createSearchResolver("search", busyOnTypeahead)(context("search", S))).toEqual({
+			ok: false,
+			reason: "refused_busy",
+		})
+
+		const definite = make([A]).deps
+		definite.search = {
+			searchLexical: async () => {
+				throw new GeoDbError("client_failed", "refused: DefiniteRefusal DefiniteRefusal")
+			},
+		}
+		expect(await createSearchResolver("search", definite)(context("search", S))).toEqual({
+			ok: false,
+			reason: "definite_refusal",
 		})
 	})
 	it("lets a geo-db failure through for the gateway to count", async () => {

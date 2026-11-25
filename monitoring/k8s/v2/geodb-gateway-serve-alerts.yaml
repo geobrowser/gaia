@@ -6,9 +6,10 @@
 # The series exist only once a field is served, so both rules stay silent with every field off or in
 # shadow: no samples, and the floor of 20 operations needs real traffic.
 #
-#   GatewayServeFallbackHigh  failure-class fallbacks over 10% of at least 20 operations in 15m, per field
-#   GatewayServeLatencyHigh   served p99 over the 250 ms serve timeout, at least 20 served in 15m, per field
-#   GatewayShadowFailing      shadow reads of a field failed or mismatched over 500 in 30m, sustained 30m
+#   GatewayServeFallbackHigh       failure-class fallbacks over 10% of at least 20 operations in 15m, per field
+#   GatewayServeLatencyHigh        served p99 over the 250 ms serve timeout, at least 20 served in 15m, per field
+#   GatewayReadSourceAutoReverted  runtime read-source switch latched a field back to Postgres (gaia_api_gateway_read_source_reverted == 1)
+#   GatewayShadowFailing           shadow reads of a field failed or mismatched over 500 in 30m, sustained 30m
 #
 # GatewayShadowFailing reads gaia_api_gateway_shadow_total{field,result}, the shadow path, not the served one.
 # It counts result failed and mismatch only: refused_busy (the typeahead share was taken, load not a fault) and
@@ -18,8 +19,9 @@
 #
 # Failure-class reasons are geo-db failing a query it could have answered: timeout, overloaded,
 # client_failed, bad_request, error, and id_map (the reverse id map could not be read). The other
-# reasons (args, selection, filter and so on) are the translator declining a query shape by design and
-# are not alerted here; ranked_read_fallback has its own counters (GeoDbRankedReadsServeFallbackHigh).
+# reasons (args, selection, filter, definite_refusal, refused_busy and so on) are the translator or
+# serve declining a query shape or shedding busy typeahead by design and are not alerted here;
+# ranked_read_fallback has its own counters (GeoDbRankedReadsServeFallbackHigh).
 # The denominator is served_total over both sources: every operation of a served field lands in
 # exactly one of them.
 #
@@ -74,6 +76,23 @@ spec:
               timeout (GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS, default 250), so operations are near the point
               where they hand over to Postgres. See histogram_quantile(0.99, sum by (le)
               (rate(gaia_api_gateway_serve_seconds_bucket{field="{{ $labels.field }}", outcome="served"}[15m]))).
+              RUNBOOK section 13.
+
+        - alert: GatewayReadSourceAutoReverted
+          expr: |
+            max by (field) (gaia_api_gateway_read_source_reverted{namespace="gaia", job="api"}) > 0
+          for: 1m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: Gateway field {{ $labels.field }} auto-reverted from geo-db back to Postgres
+            description: >-
+              The runtime read-source switch latched {{ $labels.field }} back to Postgres after crossing the auto-revert
+              error-rate or latency threshold, and it stays on Postgres until an operator clears
+              reverted.{{ $labels.field }} in ConfigMap geodb-read-source. Check the reason with
+              sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="{{ $labels.field }}"}[1h])).
               RUNBOOK section 13.
 
         - alert: GatewayShadowFailing

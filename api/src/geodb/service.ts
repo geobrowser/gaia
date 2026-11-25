@@ -6,7 +6,7 @@
  *   is logged when the two differ. The shadow read never delays or fails the response.
  */
 
-import {ENTITY_CARDS_FIELD, type ReadSourceSwitch} from "../gateway/readSourceSwitch"
+import {ENTITY_CARDS_FIELD, isGeoDbErrorReason, type ReadSourceSwitch} from "../gateway/readSourceSwitch"
 import type {CardStatement, GeoCardRow, RelationRow, ValueRow} from "./card"
 import {conformingId, diffCards, ENTITY_TIME_PROPERTIES, isEmptyDiff, statementsFromPostgres} from "./card"
 import type {GeoDbCardClient} from "./client"
@@ -275,7 +275,7 @@ export async function resolveCard(
 			recordFallback(reason)
 			recordServed("postgres")
 			deps.readSourceSwitch?.recordOutcome(ENTITY_CARDS_FIELD, {
-				kind: reason === "unmapped_space" ? "declined" : "failure",
+				kind: isGeoDbErrorReason(reason) ? "failure" : "declined",
 				latencyMs: performance.now() - started,
 			})
 			deps.log.warn("geodb card read failed, falling back to postgres", {

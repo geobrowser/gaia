@@ -29,6 +29,9 @@ export const SERVE_FALLBACK_REASONS = [
 	"unmapped_space",
 	"legacy_id",
 	"empty",
+	// geo-db declined the query text by design (DefiniteRefusal) or shed an every-Space typeahead under load (ResourceExhausted with no diagnostics).
+	"definite_refusal",
+	"refused_busy",
 	// The read this resolver needs is not switched on for this process (a GEODB_* flag), so geo-db was not asked.
 	"not_enabled",
 	// The reverse id map (geodb/idMap.ts) could not be read.

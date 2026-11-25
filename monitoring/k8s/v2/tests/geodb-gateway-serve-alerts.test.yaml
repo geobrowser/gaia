@@ -11,6 +11,7 @@ tests:
     alert_rule_test:
       - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
 
   # Registered at zero when the field is switched on, before any traffic.
   - name: silent at zero
@@ -22,9 +23,12 @@ tests:
         values: '0x60'
       - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="entity", reason="timeout"}'
         values: '0x60'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entity"}'
+        values: '0x60'
     alert_rule_test:
       - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
       - {eval_time: 30m, alertname: GatewayServeLatencyHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GatewayReadSourceAutoReverted, exp_alerts: []}
 
   # search: 10 operations a minute, 3 of them fall back on a geo-db timeout, 7 are answered by geo-db.
   # entity: 10 a minute, 5 of them decline because the query is not one geo-db answers (args): not a failure.
@@ -189,3 +193,50 @@ tests:
                 sum by (result) (increase(gaia_api_gateway_shadow_total{field="search"}[30m])) and
                 sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="search"}[30m])).
                 RUNBOOK section 7.
+
+  # refused_busy and definite_refusal are non-failure declines and must never fire GatewayServeFallbackHigh.
+  - name: refused_busy and definite_refusal fallbacks stay silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="geodb"}'
+        values: '0+2x60'
+      - series: 'gaia_api_gateway_served_total{namespace="gaia", job="api", field="search", source="postgres"}'
+        values: '0+8x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="refused_busy"}'
+        values: '0+4x60'
+      - series: 'gaia_api_gateway_serve_fallback_total{namespace="gaia", job="api", field="search", reason="definite_refusal"}'
+        values: '0+4x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GatewayServeFallbackHigh, exp_alerts: []}
+
+  # gaia_api_gateway_read_source_reverted: 1 when latched back to Postgres after an auto-revert, 0 when normal.
+  # entity: latched (1) fires for that field only. entities: normal (0) stays silent.
+  # search: latched for 10m then cleared (0) resolves and does not fire at 30m.
+  - name: read-source auto-revert latch fires per field and resolves when cleared
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entity", pod="api-0"}'
+        values: '1x60'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entity", pod="api-1"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="entities", pod="api-0"}'
+        values: '0x60'
+      - series: 'gaia_api_gateway_read_source_reverted{namespace="gaia", job="api", field="search", pod="api-0"}'
+        values: '1x10 0x50'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: GatewayReadSourceAutoReverted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+              field: entity
+            exp_annotations:
+              summary: Gateway field entity auto-reverted from geo-db back to Postgres
+              description: >-
+                The runtime read-source switch latched entity back to Postgres after crossing the auto-revert
+                error-rate or latency threshold, and it stays on Postgres until an operator clears
+                reverted.entity in ConfigMap geodb-read-source. Check the reason with
+                sum by (reason) (increase(gaia_api_gateway_read_source_auto_revert_total{field="entity"}[1h])).
+                RUNBOOK section 13.
