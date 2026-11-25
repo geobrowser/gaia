@@ -58,6 +58,10 @@
 #                             construction while the sts is scaled to 0 (a migrate window); a planned roll that
 #                             reopens a big store slowly can be covered with an Alertmanager silence on alertname.
 #   GeoDbServeRestarting      the serve container restarted 3 or more times in 30m (a crash loop)
+#   GeoDbMigrateJobFailed     a geodb-migrate-* Job has a failed pod (kube_job_status_failed > 0) for 5m
+#   GeoDbMigrateJobRunningLong
+#                             a geodb-migrate-* Job has been active for more than 4h (a rev-10 migrate of a
+#                             15G store takes about 1.5-2h; the deadline leaves 2x margin)
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -639,6 +643,46 @@ spec:
               The serve container is crash-looping or being killed. Read `kubectl -n gaia logs geodb-0 -c serve --previous`
               and the last state (OOMKilled, a store that fails to open, a fenced store). A single restart for a pin roll
               does not reach 3.
+
+    # Offline migrate Jobs (geodb-migrate-<rev>, run by hand with sts/geodb scaled to 0). Nothing else watches them:
+    # serve is down by design, so GeoDbServeNotReady is silent and no serve series exist. kube-state-metrics labels
+    # the Job as job_name (its own "job" label is kube-state-metrics), so match on job_name. A Job that is running
+    # inside its window is not an alert.
+    - name: geodb.migrate.jobs
+      rules:
+        - alert: GeoDbMigrateJobFailed
+          expr: |
+            max by (namespace, job_name) (kube_job_status_failed{namespace="gaia", job_name=~"geodb-migrate.*"}) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: a geodb-migrate Job has a failed pod
+            description: >-
+              A geodb-migrate-* Job has at least one failed pod, so the store may be half migrated and sts/geodb
+              must stay scaled to 0. Read `kubectl -n gaia logs job/<job_name>` and `kubectl -n gaia describe job
+              <job_name>` (an OOMKill, a full volume, a store that fails to open, a missed deadline). Delete the Job
+              once understood; the alert clears when the Job is gone.
+
+        - alert: GeoDbMigrateJobRunningLong
+          expr: |
+            max by (namespace, job_name) (kube_job_status_active{namespace="gaia", job_name=~"geodb-migrate.*"}) > 0
+              and
+            (time() - max by (namespace, job_name) (kube_job_status_start_time{namespace="gaia", job_name=~"geodb-migrate.*"})) > 4 * 3600
+          for: 5m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: a geodb-migrate Job has been running for more than 4h
+            description: >-
+              A geodb-migrate-* Job has been active for over 4h. A rev-10 migrate of a 15G store takes about 1.5-2h,
+              so this is past twice the normal run and is probably stuck or thrashing. Check the pod log for
+              progress and `kubectl -n gaia top pod`, and the volume's free space. serve stays down until the Job
+              completes, so decide whether to wait or abort and restore from a snapshot.
 
     # The pool's peaks are reset-on-window gauges: one point row per scrape shows only that minute. These keep
     # the 5m peak beside it for dashboards and for reading an incident back. Silent while the series are absent.

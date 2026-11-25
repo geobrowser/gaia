@@ -1011,3 +1011,69 @@ tests:
                 and the last state (OOMKilled, a store that fails to open, a fenced store). A single restart for a pin roll
                 does not reach 3.
       - {eval_time: 50m, alertname: GeoDbServeRestarting, exp_alerts: []}
+
+  - name: a failed geodb-migrate Job fires after 5m and clears when the Job is deleted
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '0x5 1x30 _x30'
+      # An unrelated Job that fails must not match.
+      - series: 'kube_job_status_failed{namespace="gaia", job_name="geodb-snapshot-1"}'
+        values: '3x65'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbMigrateJobFailed, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbMigrateJobFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia, job_name: geodb-migrate-rev10}
+            exp_annotations:
+              summary: a geodb-migrate Job has a failed pod
+              description: >-
+                A geodb-migrate-* Job has at least one failed pod, so the store may be half migrated and sts/geodb
+                must stay scaled to 0. Read `kubectl -n gaia logs job/<job_name>` and `kubectl -n gaia describe job
+                <job_name>` (an OOMKill, a full volume, a store that fails to open, a missed deadline). Delete the Job
+                once understood; the alert clears when the Job is gone.
+      - {eval_time: 50m, alertname: GeoDbMigrateJobFailed, exp_alerts: []}
+
+  - name: a geodb-migrate Job running inside 4h stays silent, past 4h fires, and clears on completion
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_active{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '1x300 0x60'
+      - series: 'kube_job_status_start_time{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '0x360'
+      # Another long-running Job must not match.
+      - series: 'kube_job_status_active{namespace="gaia", job_name="geodb-snapshot-1"}'
+        values: '1x360'
+      - series: 'kube_job_status_start_time{namespace="gaia", job_name="geodb-snapshot-1"}'
+        values: '0x360'
+    alert_rule_test:
+      - {eval_time: 120m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+      - {eval_time: 240m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+      - {eval_time: 244m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+      - eval_time: 250m
+        alertname: GeoDbMigrateJobRunningLong
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, job_name: geodb-migrate-rev10}
+            exp_annotations:
+              summary: a geodb-migrate Job has been running for more than 4h
+              description: >-
+                A geodb-migrate-* Job has been active for over 4h. A rev-10 migrate of a 15G store takes about 1.5-2h,
+                so this is past twice the normal run and is probably stuck or thrashing. Check the pod log for
+                progress and `kubectl -n gaia top pod`, and the volume's free space. serve stays down until the Job
+                completes, so decide whether to wait or abort and restore from a snapshot.
+      - {eval_time: 320m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+
+  - name: a geodb-migrate Job that completes in 2h never fires either rule
+    interval: 1m
+    input_series:
+      - series: 'kube_job_status_active{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '1x120 0x240'
+      - series: 'kube_job_status_failed{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '0x360'
+      - series: 'kube_job_status_start_time{namespace="gaia", job_name="geodb-migrate-rev10"}'
+        values: '0x360'
+    alert_rule_test:
+      - {eval_time: 100m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+      - {eval_time: 300m, alertname: GeoDbMigrateJobRunningLong, exp_alerts: []}
+      - {eval_time: 300m, alertname: GeoDbMigrateJobFailed, exp_alerts: []}
