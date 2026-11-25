@@ -22,6 +22,7 @@
 
 import type {SelectionSetNode} from "graphql"
 import type {DerivedReader} from "../geodb/derived"
+import {noteReadFailure} from "../geodb/failReason"
 import {argsOf, fieldsOf, parseOperation, responseKeyOf, Unsupported} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
 import {noteUnsupported} from "./lightShadow"
@@ -165,7 +166,9 @@ export async function runMetas(reader: DerivedReader, plan: MetasPlan, body: unk
 		}
 		if (rows.length > MAX_SAMPLED_ROWS) uncompared.push("sampled_rows")
 		return {result: mismatches > 0 ? "mismatch" : "match", uncompared, detail: {rows: compared, mismatches}}
-	} catch {
+	} catch (error) {
+		// The derived reader is not the pool, so nothing else notes why its read failed; without this every failure is `other`.
+		noteReadFailure(error)
 		return {result: "failed"}
 	}
 }

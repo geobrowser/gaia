@@ -19,12 +19,18 @@ export type FailReason = (typeof FAIL_REASONS)[number]
 /** The message of the `client_failed` a pool throws while it backs off after a worker that never started. */
 export const BACKING_OFF_MESSAGE = "geodb-client is not starting; backing off"
 
+/** The message of the `client_failed` the derived reader throws while it backs off after a worker that never started. */
+export const DERIVED_BACKING_OFF_MESSAGE = "geodb-client derived pipe is backing off after a failed start"
+
 export function failReason(error: unknown): FailReason {
 	// Duck-typed so this file does not import the client (which imports it).
 	if (!(error instanceof Error) || error.name !== "GeoDbError") return "other"
 	const reason = (error as Error & {reason?: unknown}).reason
 	if (reason === "timeout") return "timeout"
-	if (reason === "client_failed") return error.message === BACKING_OFF_MESSAGE ? "cooling_down" : "client_failed"
+	if (reason === "client_failed")
+		return error.message === BACKING_OFF_MESSAGE || error.message === DERIVED_BACKING_OFF_MESSAGE
+			? "cooling_down"
+			: "client_failed"
 	return "other"
 }
 

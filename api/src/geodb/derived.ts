@@ -26,6 +26,7 @@
 import {spawn as nodeSpawn} from "node:child_process"
 import {GeoDbError, type PipeChild, type SpawnPipe} from "./client"
 import type {GeoDbCardConfig} from "./config"
+import {DERIVED_BACKING_OFF_MESSAGE} from "./failReason"
 
 /** One derived row as `get` answers it. */
 export type DerivedRow = {
@@ -587,10 +588,7 @@ export function createDerivedReader(
 		retireStale()
 		if (!child) {
 			if (now() < backoffUntil) {
-				const error = new GeoDbError(
-					"client_failed",
-					"geodb-client derived pipe is backing off after a failed start",
-				)
+				const error = new GeoDbError("client_failed", DERIVED_BACKING_OFF_MESSAGE)
 				for (const p of queue.splice(0)) p.reject(error)
 				return
 			}
