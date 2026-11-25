@@ -720,6 +720,19 @@ $K delete job geodb-replay-edit
 $K scale deployment/geodb-feeder --replicas=1
 ```
 
+**`replay_edit` and this Job are a pair; running one alone leaves the stores apart.** The kg-indexer tool writes Postgres only,
+so after it runs geo-db holds none of the edit until this Job does. Edit `6a1398bd` (version key 125690:0, Space `88883e1e`) was
+replayed to Postgres with no twin: 45 of the Space's 49 entities were never in geo-db. `replay_edit` now ends every run with a
+`POSTGRES ONLY` banner that prints this Job's arguments (`--uri`, `--space`, `--block`, `--sequence`, `--created-at`, `--edit`);
+run the dry run from that banner in the same sitting.
+
+To find edits whose twin was skipped, run `scripts/check-pg-only-edits.py` (read only; its docstring has the three steps):
+`list` the sequence-0 edits since a cutoff from the public GraphQL, `sql` prints the Postgres read that names each edit's
+(edit, Space, entity) pairs, and `check` compares them with the feeder's `known-entities.log` and `space-map.json` (both read with
+`cat`). Sequence 0 only names candidates (a live edit first in its block has it too); an edit is a repair item when `check`
+lists it. Its rows carry the arguments for this Job; the CID is not in `edit_versions` (read it from the `ipfs_cache` URI of the
+edit, or pass `--cids`).
+
 Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
 The Job's `GEODB_*` flags copy `geodb-feeder.yaml`'s; change them together. The `updatedAt` it compares is the row written
 under `GEODB_ENTITY_TIMES` (§2e), whose value it reads as microseconds since the epoch.

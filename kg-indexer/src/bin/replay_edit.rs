@@ -36,6 +36,9 @@
 //!     --block 162685 \
 //!     [--sequence 0] \
 //!     [--created-at 1752781200]
+//!
+//! This writes Postgres ONLY. It ends by printing the paired `geodb-replay-edit` command
+//! (geodb/RUNBOOK.md section 2b-quater); geo-db does not get the edit until that Job runs.
 
 use std::env;
 
@@ -43,6 +46,7 @@ use grc_20::decode_edit;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::knowledge::HermesEdit;
 use kg_indexer::error::IndexerError;
+use kg_indexer::geodb_twin::{twin_notice, TwinArgs};
 use kg_indexer::handlers;
 use kg_indexer::models::values::ValueChangeType;
 use kg_indexer::storage::Storage;
@@ -262,5 +266,18 @@ async fn main() -> Result<(), IndexerError> {
 
     tx.commit().await?;
     println!("Done.");
+    // Always last, on every path (a fresh write and an already-versioned rerun alike): geo-db has
+    // not got this edit until the paired geodb-replay-edit Job runs.
+    println!(
+        "{}",
+        twin_notice(&TwinArgs {
+            uri: &args.uri,
+            space: &args.space.simple().to_string(),
+            block: args.block,
+            sequence: args.sequence,
+            created_at: args.created_at,
+            edit_id: &result.edit_id.simple().to_string(),
+        })
+    );
     Ok(())
 }
