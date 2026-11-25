@@ -937,6 +937,11 @@ async fn replay_edit_binary_behaves_like_the_live_path() {
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // The twin banner is printed last, flag on.
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("POSTGRES ONLY. geo-db has NOT received edit"), "{stdout}");
+    assert!(stdout.contains("DeleteEntity applied"), "{stdout}");
+
     // Same removals ...
     for source in ["values", "relations", "value_versions", "relation_versions"] {
         assert_eq!(
@@ -986,6 +991,9 @@ async fn replay_edit_binary_behaves_like_the_live_path() {
         .output()
         .expect("run replay_edit");
     assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("POSTGRES ONLY. geo-db has NOT received edit"), "{stdout}");
+    assert!(stdout.contains("DeleteEntity would delete"), "{stdout}");
     assert_eq!(
         values_of(&live, e3, replay_space).await,
         2,

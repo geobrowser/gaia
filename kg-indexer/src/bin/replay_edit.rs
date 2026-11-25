@@ -189,6 +189,8 @@ async fn main() -> Result<(), IndexerError> {
     };
     let created_by_id = edit.authors.first().and_then(|a| Uuid::from_slice(a).ok());
 
+    // `write_edit` consumes `result`; the twin notice below needs the id.
+    let edit_id_for_notice = result.edit_id;
     let outcome = storage
         .write_edit(&edit, result, name, created_by_id, &mut tx)
         .await?;
@@ -223,7 +225,7 @@ async fn main() -> Result<(), IndexerError> {
             block: args.block,
             sequence: args.sequence,
             created_at: args.created_at,
-            edit_id: &result.edit_id.simple().to_string(),
+            edit_id: &edit_id_for_notice.simple().to_string(),
         })
     );
     Ok(())
