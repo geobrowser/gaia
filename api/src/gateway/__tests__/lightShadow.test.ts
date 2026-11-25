@@ -3,13 +3,16 @@ import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
 import {GeoDbError, holdersDocument} from "../../geodb/client"
+import {readGatewayConfig} from "../config"
 import {
 	createEntitiesConnectionShadow,
 	createEntitiesOrderedConnectionShadow,
 	createEntitiesOrderedShadow,
+	ENTITIES_CONNECTION_FIELD,
 	ENTITIES_ORDERED_CONNECTION_FIELD,
 } from "../entitiesConnectionShadow"
 import {createEntityShadow, createHoldersGate, type HoldersGate, isEmptyFilter} from "../entityShadow"
+import {createGateway, createShadowTracker} from "../gateway"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {createPointReadShadows} from "../pointReadShadows"
@@ -2576,6 +2579,428 @@ describe("entitiesConnection with the light selection", () => {
 			{data: {}},
 		)
 		expect(results()).toEqual({unsupported_selection: 1})
+	})
+
+	describe("multi-root documents", () => {
+		const SPACE_B = "00000000-0000-4000-8000-00000000002b"
+		const CLAIM_TYPE = "11111111-1111-4111-8111-111111111111"
+		const NAME_PROP = "a126ca53-0c8e-48d5-b888-82c734c38935"
+		const HIDDEN_PROP = "22222222-2222-4222-8222-222222222222"
+		const UNPLACING_PROP = "33333333-3333-4333-8333-333333333333"
+		const DATE_PROP = "44444444-4444-4444-8444-444444444444"
+		const AVATAR_REL = "55555555-5555-4555-8555-555555555555"
+		const IMAGE_URL_PROP = "66666666-6666-4666-8666-666666666666"
+		const ABOUT_REL = "77777777-7777-4777-8777-777777777777"
+		const TARGET_ID = "88888888-8888-4888-8888-888888888888"
+		const TYPES_PROP = "8f151ba4de204e3c9cb499ddf96f48f1"
+
+		const entConnRoot = (alias: string, rootArgs = args) =>
+			connection(rootArgs).replace("entitiesConnection(", `${alias}entitiesConnection(`)
+
+		it("shadows an aliased entitiesConnection beside another root field", async () => {
+			const entities = list(2)
+			const q = entConnRoot("items: ").replace(
+				"items: entitiesConnection(",
+				`space(id: "${SPACE_A}") { id } items: entitiesConnection(`,
+			)
+			const ok = setup(outputsFor(entities))
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {space: {id: SPACE_A}, items: {nodes: entities}}},
+			)
+			expect(results()).toEqual({match: 1})
+
+			__resetGatewayMetricsForTests()
+			const wrong = clone(entities)
+			;(wrong[0] as Entity).name = "different"
+			const bad = setup(outputsFor(entities))
+			await call(
+				createEntitiesConnectionShadow({...bad.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {space: {id: SPACE_A}, items: {nodes: wrong}}},
+			)
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("shadows an unaliased entitiesConnection beside another root field", async () => {
+			const entities = list(1)
+			const q = connection(args).replace("entitiesConnection(", `entity(id: "${HEX}") { id } entitiesConnection(`)
+			const ok = setup(outputsFor(entities))
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {entity: {id: HEX}, entitiesConnection: {nodes: entities}}},
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("extracts entitiesConnection from a root fragment beside another root field", async () => {
+			const entities = list(1)
+			const body = connection(args)
+			const open = body.indexOf("entitiesConnection(")
+			const close = body.lastIndexOf("}")
+			const fieldSrc = body.slice(open, close)
+			const q = `query Q { space(id: "${SPACE_A}") { id } ...E } fragment E on Query { items: ${fieldSrc} }`
+			const ok = setup(outputsFor(entities))
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {space: {id: SPACE_A}, items: {nodes: entities}}},
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("compares multiple aliased entitiesConnection roots independently", async () => {
+			const all = list(2)
+			const first = [all[0] as Entity]
+			const second = [all[1] as Entity]
+			const body = connection(args)
+			const open = body.indexOf("entitiesConnection(")
+			const close = body.lastIndexOf("}")
+			const fieldSrc = body.slice(open, close)
+			const q = `query Q { claims: ${fieldSrc} others: ${fieldSrc} }`
+
+			const ok = setup(outputsFor(all))
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {claims: {nodes: first}, others: {nodes: second}}},
+			)
+			expect(results()).toEqual({match: 1})
+
+			// Mismatch only in the second alias fails the operation.
+			__resetGatewayMetricsForTests()
+			const wrongSecond = clone(second)
+			;(wrongSecond[0] as Entity).name = "mismatch"
+			const bad = setup(outputsFor(all))
+			await call(
+				createEntitiesConnectionShadow({...bad.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {claims: {nodes: first}, others: {nodes: wrongSecond}}},
+			)
+			expect(results()).toEqual({mismatch: 1})
+
+			// Empty first alias (skip) + matching second alias still counts as match.
+			__resetGatewayMetricsForTests()
+			const half = setup(outputsFor(all))
+			await call(
+				createEntitiesConnectionShadow({...half.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {claims: {nodes: []}, others: {nodes: second}}},
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("compares a nodes alias beside a totalCount-only alias and counts total_count uncompared", async () => {
+			const entities = list(1)
+			const body = connection(args)
+			const open = body.indexOf("entitiesConnection(")
+			const close = body.lastIndexOf("}")
+			const fieldSrc = body.slice(open, close)
+			const q = `query Q { items: ${fieldSrc} counts: entitiesConnection(${args}) { totalCount } }`
+			const ok = setup(outputsFor(entities))
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, derivedFields: false}) as never,
+				q,
+				{},
+				{data: {items: {nodes: entities}, counts: {totalCount: 1}}},
+			)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({total_count: 1})
+		})
+
+		it("reports honest unsupported reasons instead of not_single_root for multi-root entitiesConnection", async () => {
+			const qBadArg = `query Q { space(id: "${SPACE_A}") { id } items: entitiesConnection(bogus: 1) { nodes { id name spaceIds } } }`
+			const s1 = setup({})
+			await call(createEntitiesConnectionShadow(s1.deps) as never, qBadArg, {}, {data: {}})
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(renderGatewayMetrics()).toContain(
+				`gaia_api_gateway_shadow_unsupported_total{field="entitiesConnection",reason="args"} 1`,
+			)
+
+			__resetGatewayMetricsForTests()
+			const qNoConn = `query Q { space(id: "${SPACE_A}") { id } entity(id: "${HEX}") { id } }`
+			const s2 = setup({})
+			await call(createEntitiesConnectionShadow(s2.deps) as never, qNoConn, {}, {data: {}})
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(renderGatewayMetrics()).toContain(
+				`gaia_api_gateway_shadow_unsupported_total{field="entitiesConnection",reason="not_single_root"} 1`,
+			)
+		})
+
+		it("runs through createGateway on a multi-root document without altering the response", async () => {
+			const entities = list(1)
+			const q = entConnRoot("items: ").replace(
+				"items: entitiesConnection(",
+				`space(id: "${SPACE_A}") { id } items: entitiesConnection(`,
+			)
+			const multiAnswer = {data: {space: {id: SPACE_A}, items: {nodes: entities}}}
+			const s = setup(outputsFor(entities))
+			const shadow = createEntitiesConnectionShadow({...s.deps, derivedFields: false})
+			const tracker = createShadowTracker()
+			const gateway = createGateway({
+				config: readGatewayConfig({
+					GRAPHQL_GATEWAY: "on",
+					GRAPHQL_GATEWAY_FIELDS: `${ENTITIES_CONNECTION_FIELD}=shadow`,
+					GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+				}),
+				delegate: async () =>
+					new Response(JSON.stringify(multiAnswer), {
+						status: 200,
+						headers: {"content-type": "application/json"},
+					}),
+				shadows: new Map([[ENTITIES_CONNECTION_FIELD, shadow]]),
+				trackShadow: tracker.track,
+				random: () => 0,
+			})
+			const response = await gateway(
+				new Request("http://api/graphql", {
+					method: "POST",
+					headers: {"content-type": "application/json"},
+					body: JSON.stringify({query: q}),
+				}),
+				{},
+			)
+			expect(await response.json()).toEqual(multiAnswer)
+			await tracker.settled()
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("compares GraphClaimsAbout (after cursor + relations.some with spaceId + placed propertyId notIn)", async () => {
+			const query = `query GraphClaimsAbout(
+				$id: UUID!, $aboutPropertyIds: [UUID!], $spaceIds: [UUID!], $claimTypeId: UUID!,
+				$namePropertyId: UUID!, $unplacingPropertyIds: [UUID!], $hiddenPropertyId: UUID!,
+				$first: Int, $after: Cursor
+			) {
+				entitiesConnection(
+					first: $first
+					after: $after
+					orderBy: [CREATED_AT_DESC, ID_ASC]
+					filter: {
+						typeIds: {anyEqualTo: $claimTypeId}
+						spaceIds: {overlaps: $spaceIds}
+						and: [{relations: {some: {typeId: {in: $aboutPropertyIds}, toEntityId: {is: $id}, spaceId: {in: $spaceIds}}}}]
+					}
+				) {
+					nodes {
+						id name spaceIds
+						names: valuesList(filter: {propertyId: {is: $namePropertyId}}) { spaceId text }
+						placed: valuesList(filter: {propertyId: {notIn: $unplacingPropertyIds}}) { spaceId }
+						hidden: valuesList(filter: {propertyId: {is: $hiddenPropertyId}}) { spaceId text boolean }
+					}
+					pageInfo { hasNextPage endCursor }
+				}
+			}`
+			const variables = {
+				id: TARGET_ID,
+				aboutPropertyIds: [ABOUT_REL],
+				spaceIds: [SPACE_A],
+				claimTypeId: CLAIM_TYPE,
+				namePropertyId: NAME_PROP,
+				unplacingPropertyIds: [UNPLACING_PROP],
+				hiddenPropertyId: HIDDEN_PROP,
+				first: 20,
+				after: "cursor-1",
+			}
+			// Without relationsTypeFilter, untyped/notIn value lists remain honestly unsupported as `selection`.
+			expect(analyzeLightEntities(parse(query), "GraphClaimsAbout", variables, {connection: true})).toEqual({
+				ok: false,
+				reason: "selection",
+			})
+			const planned = analyzeLightEntities(parse(query), "GraphClaimsAbout", variables, {
+				connection: true,
+				relationsTypeFilter: true,
+			})
+			expect(planned.ok).toBe(true)
+			if (planned.ok) {
+				expect(planned.plan.order).toBeNull()
+				expect(planned.plan.claims).toEqual([
+					{kind: "type", typeIds: [CLAIM_TYPE.replaceAll("-", "")]},
+					{
+						kind: "edge",
+						typeIds: [ABOUT_REL.replaceAll("-", "")],
+						toEntityIds: [TARGET_ID.replaceAll("-", "")],
+					},
+				])
+			}
+
+			const entId = HEX
+			const geoRows = [
+				`${conformingId("entity", NAME_PROP)}\tClaim one\ts1\t${entId}\t1`,
+				`${TYPES_PROP}\t${conformingId("entity", CLAIM_TYPE)}\ts2\t${entId}\t1`,
+				`${conformingId("entity", ABOUT_REL)}\t${conformingId("entity", TARGET_ID)}\ts3\t${entId}\t1`,
+			].join("\n")
+			const pgNode = {
+				id: entId,
+				name: "Claim one",
+				spaceIds: [SPACE_A],
+				names: [{spaceId: SPACE_A, text: "Claim one"}],
+				placed: [{spaceId: SPACE_A}],
+				hidden: [],
+			}
+
+			const ok = setup({[geoSpace(SPACE_A)]: `${geoRows}\n`})
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, relationsTypeFilter: true}) as never,
+				query,
+				variables,
+				{data: {entitiesConnection: {nodes: [pgNode], pageInfo: {hasNextPage: true, endCursor: "cursor-2"}}}},
+			)
+			expect(results()).toEqual({match: 1})
+
+			// If `placed` names a space where geo-db holds only an excluded property, flag a mismatch.
+			__resetGatewayMetricsForTests()
+			const onlyExcludedGeo = [
+				`${conformingId("entity", UNPLACING_PROP)}\tsome val\ts1\t${entId}\t1`,
+				`${TYPES_PROP}\t${conformingId("entity", CLAIM_TYPE)}\ts2\t${entId}\t1`,
+				`${conformingId("entity", ABOUT_REL)}\t${conformingId("entity", TARGET_ID)}\ts3\t${entId}\t1`,
+			].join("\n")
+			const badPlaced = setup({[geoSpace(SPACE_A)]: `${onlyExcludedGeo}\n`})
+			await call(
+				createEntitiesConnectionShadow({...badPlaced.deps, relationsTypeFilter: true}) as never,
+				query,
+				variables,
+				{
+					data: {
+						entitiesConnection: {
+							nodes: [{...pgNode, name: null, names: [], placed: [{spaceId: SPACE_A}]}],
+							pageInfo: {hasNextPage: false, endCursor: null},
+						},
+					},
+				},
+			)
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("compares GraphNeighbourhoodNodes (two aliased entitiesConnection roots with placed notIn and derivedFields)", async () => {
+			const query = `query GraphNeighbourhoodNodes(
+				$first: Int, $ids: [UUID!], $claimTypeIds: [UUID!],
+				$namePropertyId: UUID!, $datePropertyIds: [UUID!], $hiddenPropertyId: UUID!,
+				$avatarPropertyId: UUID!, $imageUrlPropertyId: UUID!, $unplacingPropertyIds: [UUID!]
+			) {
+				claims: entitiesConnection(first: $first, filter: {id: {in: $ids}, typeIds: {overlaps: $claimTypeIds}}) {
+					nodes {
+						id name spaceIds agrees disagrees
+						names: valuesList(filter: {propertyId: {is: $namePropertyId}}) { spaceId text }
+						dates: valuesList(filter: {propertyId: {in: $datePropertyIds}}) { datetime date }
+						types { id name }
+						hidden: valuesList(filter: {propertyId: {is: $hiddenPropertyId}}) { text boolean }
+						relationsList(filter: {typeId: {in: [$avatarPropertyId]}}) {
+							typeId
+							toEntity { valuesList(filter: {propertyId: {is: $imageUrlPropertyId}}) { text } }
+						}
+						placed: valuesList(filter: {propertyId: {notIn: $unplacingPropertyIds}}) { spaceId }
+					}
+				}
+				others: entitiesConnection(first: $first, filter: {id: {in: $ids}, not: {typeIds: {overlaps: $claimTypeIds}}}) {
+					nodes {
+						id name spaceIds agrees disagrees
+						names: valuesList(filter: {propertyId: {is: $namePropertyId}}) { spaceId text }
+						dates: valuesList(filter: {propertyId: {in: $datePropertyIds}}) { datetime date }
+						types { id name }
+						hidden: valuesList(filter: {propertyId: {is: $hiddenPropertyId}}) { text boolean }
+						relationsList(filter: {typeId: {in: [$avatarPropertyId]}}) {
+							typeId
+							toEntity { valuesList(filter: {propertyId: {is: $imageUrlPropertyId}}) { text } }
+						}
+					}
+				}
+			}`
+			const id1 = HEX
+			const id2 = `01${HEX.slice(2)}`
+			const variables = {
+				first: 10,
+				ids: [id1, id2],
+				claimTypeIds: [CLAIM_TYPE],
+				namePropertyId: NAME_PROP,
+				datePropertyIds: [DATE_PROP],
+				hiddenPropertyId: HIDDEN_PROP,
+				avatarPropertyId: AVATAR_REL,
+				imageUrlPropertyId: IMAGE_URL_PROP,
+				unplacingPropertyIds: [UNPLACING_PROP],
+			}
+			const geo = [
+				`${conformingId("entity", NAME_PROP)}\tClaim A\ts1\t${id1}\tName\t-\t1`,
+				`${TYPES_PROP}\t${conformingId("entity", CLAIM_TYPE)}\ts2\t${id1}\tTypes\tClaim\t1`,
+				`${conformingId("entity", AVATAR_REL)}\t${conformingId("entity", TARGET_ID)}\ts3\t${id1}\tAvatar\t-\t1`,
+				`${conformingId("entity", NAME_PROP)}\tEntity B\ts4\t${id2}\tName\t-\t1`,
+			].join("\n")
+			const ok = setup({[geoSpace(SPACE_A)]: `${geo}\n`, [geoSpace(SPACE_B)]: ""})
+			await call(
+				createEntitiesConnectionShadow({...ok.deps, relationsTypeFilter: true, derivedFields: true}) as never,
+				query,
+				variables,
+				{
+					data: {
+						claims: {
+							nodes: [
+								{
+									id: id1,
+									name: "Claim A",
+									spaceIds: [SPACE_A],
+									agrees: 3,
+									disagrees: 1,
+									names: [{spaceId: SPACE_A, text: "Claim A"}],
+									dates: [],
+									types: [{id: CLAIM_TYPE, name: "Claim"}],
+									hidden: [],
+									relationsList: [
+										{typeId: AVATAR_REL, toEntity: {valuesList: [{text: "https://img"}]}},
+									],
+									placed: [{spaceId: SPACE_A}],
+								},
+							],
+						},
+						others: {
+							nodes: [
+								{
+									id: id2,
+									name: "Entity B",
+									spaceIds: [SPACE_A],
+									agrees: 0,
+									disagrees: 0,
+									names: [{spaceId: SPACE_A, text: "Entity B"}],
+									dates: [],
+									types: [],
+									hidden: [],
+									relationsList: [],
+								},
+							],
+						},
+					},
+				},
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("keeps honest selection unsupported for after-cursor queries with unidentifiable relation rows", () => {
+			const query = `query ($after: Cursor, $t: UUID!, $r: UUID!, $to: UUID!) {
+				entitiesConnection(first: 200, after: $after, filter: {typeIds: {overlaps: [$t]}, relations: {some: {typeId: {is: $r}, toEntityId: {is: $to}}}}) {
+					totalCount
+					pageInfo { hasNextPage endCursor }
+					nodes {
+						id name createdAt spaceIds
+						relations(filter: {typeId: {is: $r}, toEntityId: {is: $to}}) { nodes { id spaceId } }
+					}
+				}
+			}`
+			expect(
+				analyzeLightEntities(
+					parse(query),
+					null,
+					{after: "c", t: CLAIM_TYPE, r: ABOUT_REL, to: TARGET_ID},
+					{connection: true, relationsTypeFilter: true},
+				),
+			).toEqual({ok: false, reason: "selection"})
+		})
 	})
 })
 
