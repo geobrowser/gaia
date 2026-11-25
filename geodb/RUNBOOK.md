@@ -421,6 +421,13 @@ Why it is safe to run against a live replica (full argument in `geodb-feeder/src
 - **Idempotence.** A cursor on the volume (`/data/feeder/backfill/`) records the finished batches. A rerun
   after a crash resumes from the last finished batch; the batch that was in flight is marked, and its
   entities are all read back from geo-db first, so nothing they already got is written twice.
+- **A loaded Space can be stale.** `loaded` (absent `loaded: false` in `geodb-space-map`) means the cursor passed the end of
+  the entity list the backfill froze when it first reached the Space (`entities-<space>.txt`); it says nothing about
+  what Postgres holds now. Rows that reach Postgres outside the edit topic (an operator replay or repair) are never
+  seen by the feeder and never by a rerun. `BACKFILL_RELIST=1` (with `BACKFILL_SPACES=<ids>`) reads the list again,
+  appends the entities Postgres gained, and the Space shows `loaded: false` until they are written. Audit: compare
+  `entitiesConnection(spaceId:){totalCount}` on the public GraphQL with the Space's lines in
+  `/data/feeder/known-entities.log`; Postgres entities whose only rows are `DERIVED_PROPERTIES` are expected misses.
 - **Spaces.** A gaia Space with no geo-db Space is founded exactly as the feeder founds it
   (`geodb-client found`, same sealer), up to `BACKFILL_SPACE_CAP` (192, under serve's `spaces = 256`), and
   the space map (`geodb-space-map`) is republished before the Job exits.
