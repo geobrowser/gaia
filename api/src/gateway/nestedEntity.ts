@@ -304,6 +304,27 @@ export type NestedVerdict =
 const setOf = (ids: string[]) => new Set(ids.map((id) => conformingId("entity", id)))
 
 /**
+ * The Spaces to read the nested cards in: the deduplicated geo-db Spaces the items list (their `spaceIds` and their
+ * lists' Spaces) that geo-db has loaded, when every item lists some and every one maps; else every loaded Space. A
+ * narrowed read cannot see a Space PostGraphile did not list, so the `spaceIds` extra-Space check sees only the listed ones.
+ */
+async function nestedScope(deps: EntityShadowDeps, nested: NestedEntities, loaded: string[]) {
+	const every = scopeOfSpaces(loaded)
+	const known = new Set(loaded)
+	const wanted = new Set<string>()
+	for (const item of nested.items) {
+		if (!item.spaceIds || item.spaceIds.length === 0) return every
+		const listed = [...item.spaceIds, ...item.lists.flatMap(({list}) => (list.space === null ? [] : [list.space]))]
+		for (const space of listed) {
+			const geo = await deps.geoSpaceOf(space)
+			if (!geo || !known.has(geo)) return every
+			wanted.add(geo)
+		}
+	}
+	return wanted.size === 0 ? every : [...wanted].sort()
+}
+
+/**
  * Judges the nested entities PostGraphile named against one batched card read of them across every Space.
  * `{read: false}` when it cannot be read (too many entities, no every-Space reads, no batch client, an empty budget, a
  * failed read): nothing is counted and `nested_entity` stays. Never throws.
@@ -324,7 +345,7 @@ export async function checkNestedEntities(
 		const started = performance.now()
 		let rows: GeoCardRow[]
 		try {
-			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids})
+			rows = await readCards({geoSpaceIds: await nestedScope(deps, nested, spaces), entityIds: ids})
 			observeGeoDbRead((performance.now() - started) / 1000, "ok")
 		} catch (error) {
 			observeGeoDbRead((performance.now() - started) / 1000, "error")

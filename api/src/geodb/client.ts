@@ -115,7 +115,16 @@ export type GeoDbCardClient = {
 	 * more are read as several, in parallel. Needs a store from geo-db 8df213cbac or later, which an older one refuses.
 	 * Absent on a client that cannot do it.
 	 */
-	readCards?(args: {geoSpaceIds: GeoSpaceScope; entityIds: string[]; names?: boolean}): Promise<GeoCardRow[]>
+	readCards?(args: {
+		geoSpaceIds: GeoSpaceScope
+		entityIds: string[]
+		names?: boolean
+		/**
+		 * Read this property's statements alone (`.args.property`, geo-db ISS-590-263), so the store reads no other
+		 * property's detached value. A caller that inspects one property must pass it.
+		 */
+		property?: string
+	}): Promise<GeoCardRow[]>
 	/**
 	 * The Spaces among `geoSpaceIds` that hold at least one active statement of `entityId` (`.args.holders = true`, geo-db
 	 * ISS-581-803), ascending by Space id, one read in place of a card read a Space. At most 4096 are answered, else the
@@ -332,10 +341,11 @@ export function holdersDocument(entityId: string): string {
 }
 
 /** The geoql document for the cards of 1..32 entities (`.args.ids`). Ids are 32 hex digits, so nothing needs escaping. */
-export function cardsDocument(entityIds: string[], options: {names?: boolean} = {}): string {
+export function cardsDocument(entityIds: string[], options: {names?: boolean; property?: string} = {}): string {
 	const names = options.names ? ", .names = true" : ""
+	const property = options.property ? `, .property = "${options.property}"` : ""
 	const ids = entityIds.map((id) => `"${id}"`).join(", ")
-	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .ids = .{ ${ids} }${names} } } } }`
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .ids = .{ ${ids} }${names}${property} } } } }`
 }
 
 /** The geoql document for the legacy-id lookup of 1..32 original ids (`.args.by_legacy`). Ids are 32 hex digits, so nothing needs escaping. */
@@ -1081,12 +1091,14 @@ export function createPipeGeoDbClient(
 				timeoutMs,
 			)
 		},
-		async readCards({geoSpaceIds, entityIds, names = false}) {
+		async readCards({geoSpaceIds, entityIds, names = false, property}) {
 			const scope = scopeCell(geoSpaceIds)
 			if (entityIds.length === 0) throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
 			if (scope instanceof GeoDbError) throw scope
 			if (!entityIds.every((id) => HEX32.test(id)))
 				throw new GeoDbError("bad_request", "ids must be 32 hex digits")
+			if (property !== undefined && !HEX32.test(property))
+				throw new GeoDbError("bad_request", "the property must be 32 hex digits")
 			const distinct = [...new Set(entityIds)]
 			const chunks: string[][] = []
 			for (let at = 0; at < distinct.length; at += MAX_CARD_IDS)
@@ -1094,7 +1106,7 @@ export function createPipeGeoDbClient(
 			const answers = await Promise.all(
 				chunks.map((chunk) =>
 					submit(
-						`${scope.cell}\t${cardsDocument(chunk, {names})}\n`,
+						`${scope.cell}\t${cardsDocument(chunk, {names, property})}\n`,
 						NO_ENTITY,
 						names,
 						scope.multi,

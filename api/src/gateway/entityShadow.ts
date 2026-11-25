@@ -1668,7 +1668,7 @@ export async function readNames(
 		const started = performance.now()
 		let rows: GeoCardRow[]
 		try {
-			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids})
+			rows = await readCards({geoSpaceIds: scopeOfSpaces(spaces), entityIds: ids, property: NAME_PROPERTY})
 			observeGeoDbRead((performance.now() - started) / 1000, "ok")
 		} catch (error) {
 			observeGeoDbRead((performance.now() - started) / 1000, "error")
