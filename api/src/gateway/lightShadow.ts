@@ -35,6 +35,7 @@ import {
 	type RelationRow,
 	statementsFromPostgres,
 	type ValueRow,
+	valueKey,
 } from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
 import {askGeoDbCards} from "../geodb/service"
@@ -122,6 +123,12 @@ type LightList = {
 	 * which each row has. Its rows are checked as "held under one of these Properties" (`untypedValues`).
 	 */
 	propertyFilter?: string[]
+	/**
+	 * A values list filtered by `propertyId` (`notIn` or `notEqualTo`) that selects no property (e.g.
+	 * `placed: valuesList(filter: {propertyId: {notIn: $unplacingPropertyIds}}) { spaceId }`): geo-db must hold a
+	 * value statement in that Space whose Property is not in this excluded list (`excludedValues`).
+	 */
+	excludedPropertyFilter?: string[]
 	/**
 	 * A relations list that selects each row's type and a `toEntity` object with no id (only fields the card cannot
 	 * settle, such as its `valuesList`): the rows carry no target to look up, so each is checked as "geo-db holds a
@@ -386,8 +393,21 @@ function reverseFilterOf(filter: unknown, key: "typeId" | "propertyId"): {props:
 	return props ? {props} : undefined
 }
 
+/** The Properties a values list's filter excludes (`propertyId: {notIn}` or `{notEqualTo}`), or null when it names none. */
+function excludedPropertyFilterOf(filter: unknown): string[] | null {
+	const clause = asRecord(asRecord(filter)?.propertyId)
+	if (!clause) return null
+	const ids =
+		typeof clause.notEqualTo === "string" ? [clause.notEqualTo] : Array.isArray(clause.notIn) ? clause.notIn : null
+	if (!ids || ids.length > MAX_EXCLUDED_PROPERTIES) return null
+	if (!ids.every((id) => typeof id === "string" && isValidUuid(id))) return null
+	return [...new Set((ids as string[]).map((id) => normalizeUuid(id)))]
+}
+
 /** Most Types a typeless relations list's filter may name; a wider one is not planned. */
 const MAX_TYPE_FILTER = 20
+/** Most excluded Properties a `propertyId: {notIn}` values list may name. */
+const MAX_EXCLUDED_PROPERTIES = 64
 
 /** Whether the relation rows select a `toEntity` object (in the row, or in a connection's `nodes`). */
 function selectsTarget(field: FieldNode, fragments: Map<string, SelectionSetNode>): boolean {
@@ -449,9 +469,22 @@ function planLightList(
 	const has = (column: string) => rows.columns[column] !== undefined || rows.nested[column] !== undefined
 	if (kind === "values") {
 		if (!has("propertyId")) {
-			// The filter says which Properties the rows hold; the answer does not say which one each does.
+			// The filter says which Properties the rows hold (or exclude); the answer does not say which one each does.
 			const propertyFilter = options.relationsTypeFilter ? typeFilterOf(filter, "propertyId") : null
-			if (!propertyFilter) refuse("selection")
+			if (propertyFilter) {
+				uncompared.add("filter_completeness")
+				uncompared.add("partial_values")
+				return {
+					kind,
+					key: responseKeyOf(field),
+					nodesKey,
+					rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
+					spaceKey: rows.columns.spaceId ?? null,
+					propertyFilter,
+				}
+			}
+			const excludedPropertyFilter = options.relationsTypeFilter ? excludedPropertyFilterOf(filter) : null
+			if (!excludedPropertyFilter) refuse("selection")
 			uncompared.add("filter_completeness")
 			uncompared.add("partial_values")
 			return {
@@ -460,7 +493,7 @@ function planLightList(
 				nodesKey,
 				rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
 				spaceKey: rows.columns.spaceId ?? null,
-				propertyFilter: propertyFilter as string[],
+				excludedPropertyFilter: excludedPropertyFilter as string[],
 			}
 		}
 		if (!VALUE_COLUMNS.every(has)) uncompared.add("partial_values")
@@ -555,7 +588,9 @@ function planTargetValues(
 	if (!toEntity || !values) return null
 	try {
 		const list = planLightList(values, fragments, resolved, new Set())
-		return list.kind === "values" && !list.propertyFilter ? {key: responseKeyOf(toEntity), values: list} : null
+		return list.kind === "values" && !list.propertyFilter && !list.excludedPropertyFilter
+			? {key: responseKeyOf(toEntity), values: list}
+			: null
 	} catch (error) {
 		if (error instanceof Unsupported) return null
 		throw error
@@ -745,9 +780,10 @@ function readFilter(
 				const targets = uuids(
 					typeof to?.is === "string" ? [to.is] : Array.isArray(to?.in) && to.in.length > 0 ? to.in : null,
 				)
-				if (some && Object.keys(some).length === 2 && types && targets)
+				if (some && types && targets) {
 					claims.push({kind: "edge", typeIds: [...new Set(types)], toEntityIds: [...new Set(targets)]})
-				else exact = false
+					if (Object.keys(some).length !== 2) exact = false
+				} else exact = false
 			} else exact = false
 		}
 	}
@@ -905,6 +941,163 @@ function isCountOnly(root: FieldNode, fragments: Map<string, SelectionSetNode>):
 	return fields.length > 0 && fields.every((f) => f.name.value === "totalCount" && isPlainField(f))
 }
 
+/** Most `entitiesConnection` roots compared in one multi-root document (beyond this, earlier roots are sampled). */
+export const MAX_MULTI_ENTITIES_CONNECTION_ROOTS = 8
+
+/** One or more comparable `entitiesConnection` roots extracted from a single- or multi-root document. */
+export type LightEntitiesMultiPlan = {
+	plans: LightEntitiesPlan[]
+	/** Extra uncompared reasons from sibling roots (e.g. a `totalCount`-only alias or `metas`). */
+	uncompared: UncomparedReason[]
+}
+
+function planEntitiesRoot(
+	root: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Record<string, unknown>,
+	sentinel: boolean,
+	options: {
+		entitiesBatch?: boolean
+		relationsTypeFilter?: boolean
+		derivedFields?: boolean
+		connection?: boolean
+		ordered?: boolean
+	},
+): LightAnalysis<LightEntitiesPlan> {
+	if (!root.selectionSet) return {ok: false, reason: "selection"}
+	const args = argsOf(root, resolved)
+	for (const arg of Object.keys(args))
+		if (options.ordered) {
+			if (!ORDERED_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
+		} else if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
+	const after = args.after
+	if (after !== undefined && after !== null && typeof after !== "string") refuse("args")
+	const uncompared = new Set<UncomparedReason>()
+	if (sentinel) uncompared.add("metas_cursor")
+	let entitySet = root.selectionSet
+	let nodesKey: string | null = null
+	let edges: {edgesKey: string; nodeKey: string} | undefined
+	if (options.connection) {
+		let nodes: FieldNode | null = null
+		let edgeField: FieldNode | null = null
+		let edgeNode: FieldNode | null = null
+		for (const child of fieldsOf(root.selectionSet, fragments)) {
+			const name = child.name.value
+			if (name === "__typename") continue
+			if (name === "totalCount" && isPlainField(child)) uncompared.add("total_count")
+			else if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
+			else if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField)
+				nodes = child
+			else if (name === "edges" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField) {
+				// `edges { node { .. } cursor }`: the node is the entity; the cursor is PostGraphile's own.
+				edgeField = child
+				for (const inner of fieldsOf(child.selectionSet, fragments)) {
+					const innerName = inner.name.value
+					if (innerName === "__typename" || (innerName === "cursor" && isPlainField(inner))) continue
+					if (innerName === "node" && inner.selectionSet && !inner.arguments?.length && !edgeNode)
+						edgeNode = inner
+					else refuse("selection")
+				}
+			} else refuse("selection")
+		}
+		// Nothing but `totalCount` (the topic page's counters, often several aliased roots): no card to judge.
+		if (!nodes && !edgeField && uncompared.has("total_count")) return {ok: false, reason: "count_only"}
+		if (edgeField && edgeNode?.selectionSet) {
+			entitySet = edgeNode.selectionSet
+			edges = {edgesKey: responseKeyOf(edgeField), nodeKey: responseKeyOf(edgeNode)}
+		} else if (nodes?.selectionSet) {
+			entitySet = nodes.selectionSet
+			nodesKey = responseKeyOf(nodes)
+		} else return {ok: false, reason: "selection"}
+	}
+	for (const arg of ["first", "offset"])
+		if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
+	const {claims, ids, exact} = readFilter(args.filter, uncompared)
+	// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
+	const readOrder = readOrderBy(args.orderBy, uncompared)
+	const order = after === undefined || after === null ? readOrder : null
+	let propertyOrder: PropertyOrder | null = null
+	let spaceIds: string[] | null
+	if (options.ordered) {
+		const read = readOrderedArgs(args, claims, uncompared)
+		spaceIds = read.spaces
+		propertyOrder = read.order
+	} else spaceIds = readRootArgs(args, claims, uncompared)
+	const {card, lists, everySpace} = planLightEntity(entitySet, fragments, resolved, uncompared, {
+		everySpace: spaceIds === null,
+		rootSpaces: spaceIds !== null,
+		projections: options.entitiesBatch === true,
+		relationsTypeFilter: options.relationsTypeFilter === true,
+		derivedFields: options.derivedFields === true,
+	})
+	if (!card.idKey) return {ok: false, reason: "selection"}
+	uncompared.add("sampled_rows")
+	return {
+		ok: true,
+		plan: {
+			kind: "entities",
+			key: responseKeyOf(root),
+			card,
+			lists,
+			claims,
+			ids,
+			spaceIds,
+			everySpace,
+			order,
+			ordered: options.ordered === true || (args.orderBy !== undefined && args.orderBy !== null),
+			exactFilter: !options.ordered && exact && args.systemTypeId == null && args.systemTypeIds == null,
+			first: typeof args.first === "number" ? args.first : null,
+			offset: typeof args.offset === "number" ? args.offset : null,
+			...(nodesKey !== null ? {nodesKey} : {}),
+			...(edges ? {edges} : {}),
+			...(options.ordered ? {propertyOrder} : {}),
+			uncompared: [...uncompared],
+		},
+	}
+}
+
+/**
+ * Extracts and plans every `entitiesConnection` root of a single- or multi-root document independently (including root
+ * fragments and aliased response keys). A `totalCount`-only alias beside a comparable `nodes`/`edges` alias counts
+ * `total_count` uncompared; if every `entitiesConnection` root is count-only, returns `count_only`; if any non-count-only
+ * `entitiesConnection` root has an unsupported shape, returns that honest reason instead of `not_single_root`.
+ */
+export function analyzeLightEntitiesConnection(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+	options: {
+		entitiesBatch?: boolean
+		relationsTypeFilter?: boolean
+		derivedFields?: boolean
+	} = {},
+): LightAnalysis<LightEntitiesMultiPlan> {
+	try {
+		const parsed = parseOperation(document, operationName, variables)
+		const {fragments, variables: resolved} = parsed
+		const sentinel = parsed.roots.some((r) => r.name.value === METAS_FIELD)
+		const connRoots = parsed.roots.filter((r) => r.name.value === "entitiesConnection")
+		if (connRoots.length === 0) return {ok: false, reason: "not_single_root"}
+		if (connRoots.every((r) => isCountOnly(r, fragments))) return {ok: false, reason: "count_only"}
+		const extraUncompared = new Set<UncomparedReason>()
+		if (sentinel) extraUncompared.add("metas_cursor")
+		const plans: LightEntitiesPlan[] = []
+		for (const root of connRoots) {
+			if (isCountOnly(root, fragments)) {
+				extraUncompared.add("total_count")
+				continue
+			}
+			const planned = planEntitiesRoot(root, fragments, resolved, sentinel, {...options, connection: true})
+			if (!planned.ok) return planned
+			if (plans.length < MAX_MULTI_ENTITIES_CONNECTION_ROOTS) plans.push(planned.plan)
+		}
+		if (plans.length === 0) return {ok: false, reason: "count_only"}
+		return {ok: true, plan: {plans, uncompared: [...extraUncompared]}}
+	} catch (error) {
+		return {ok: false, reason: error instanceof Unsupported ? error.reason : "selection"}
+	}
+}
+
 export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
@@ -943,96 +1136,7 @@ export function analyzeLightEntities(
 		)
 			return {ok: false, reason: "count_only"}
 		if (roots.length !== 1 || !root || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
-		if (!root.selectionSet) return {ok: false, reason: "selection"}
-		const args = argsOf(root, resolved)
-		for (const arg of Object.keys(args))
-			if (options.ordered) {
-				if (!ORDERED_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
-			} else if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
-		const after = args.after
-		if (after !== undefined && after !== null && typeof after !== "string") refuse("args")
-		const uncompared = new Set<UncomparedReason>()
-		if (sentinel) uncompared.add("metas_cursor")
-		let entitySet = root.selectionSet
-		let nodesKey: string | null = null
-		let edges: {edgesKey: string; nodeKey: string} | undefined
-		if (options.connection) {
-			let nodes: FieldNode | null = null
-			let edgeField: FieldNode | null = null
-			let edgeNode: FieldNode | null = null
-			for (const child of fieldsOf(root.selectionSet, fragments)) {
-				const name = child.name.value
-				if (name === "__typename") continue
-				if (name === "totalCount" && isPlainField(child)) uncompared.add("total_count")
-				else if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
-				else if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField)
-					nodes = child
-				else if (name === "edges" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField) {
-					// `edges { node { .. } cursor }`: the node is the entity; the cursor is PostGraphile's own.
-					edgeField = child
-					for (const inner of fieldsOf(child.selectionSet, fragments)) {
-						const innerName = inner.name.value
-						if (innerName === "__typename" || (innerName === "cursor" && isPlainField(inner))) continue
-						if (innerName === "node" && inner.selectionSet && !inner.arguments?.length && !edgeNode)
-							edgeNode = inner
-						else refuse("selection")
-					}
-				} else refuse("selection")
-			}
-			// Nothing but `totalCount` (the topic page's counters, often several aliased roots): no card to judge.
-			if (!nodes && !edgeField && uncompared.has("total_count")) return {ok: false, reason: "count_only"}
-			if (edgeField && edgeNode?.selectionSet) {
-				entitySet = edgeNode.selectionSet
-				edges = {edgesKey: responseKeyOf(edgeField), nodeKey: responseKeyOf(edgeNode)}
-			} else if (nodes?.selectionSet) {
-				entitySet = nodes.selectionSet
-				nodesKey = responseKeyOf(nodes)
-			} else return {ok: false, reason: "selection"}
-		}
-		for (const arg of ["first", "offset"])
-			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
-		const {claims, ids, exact} = readFilter(args.filter, uncompared)
-		// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
-		const readOrder = readOrderBy(args.orderBy, uncompared)
-		const order = after === undefined || after === null ? readOrder : null
-		let propertyOrder: PropertyOrder | null = null
-		let spaceIds: string[] | null
-		if (options.ordered) {
-			const read = readOrderedArgs(args, claims, uncompared)
-			spaceIds = read.spaces
-			propertyOrder = read.order
-		} else spaceIds = readRootArgs(args, claims, uncompared)
-		const {card, lists, everySpace} = planLightEntity(entitySet, fragments, resolved, uncompared, {
-			everySpace: spaceIds === null,
-			rootSpaces: spaceIds !== null,
-			projections: options.entitiesBatch === true,
-			relationsTypeFilter: options.relationsTypeFilter === true,
-			derivedFields: options.derivedFields === true,
-		})
-		if (!card.idKey) return {ok: false, reason: "selection"}
-		uncompared.add("sampled_rows")
-		return {
-			ok: true,
-			plan: {
-				kind: "entities",
-				key: responseKeyOf(root),
-				card,
-				lists,
-				claims,
-				ids,
-				spaceIds,
-				everySpace,
-				order,
-				ordered: options.ordered === true || (args.orderBy !== undefined && args.orderBy !== null),
-				exactFilter: !options.ordered && exact && args.systemTypeId == null && args.systemTypeIds == null,
-				first: typeof args.first === "number" ? args.first : null,
-				offset: typeof args.offset === "number" ? args.offset : null,
-				...(nodesKey !== null ? {nodesKey} : {}),
-				...(edges ? {edges} : {}),
-				...(options.ordered ? {propertyOrder} : {}),
-				uncompared: [...uncompared],
-			},
-		}
+		return planEntitiesRoot(root, fragments, resolved, sentinel, options)
 	} catch (error) {
 		return {ok: false, reason: error instanceof Unsupported ? error.reason : "selection"}
 	}
@@ -1131,6 +1235,8 @@ type LightCard = {
 	targetValues: {to: string; values: ValueRow[]}[]
 	/** Value rows of a `propertyId`-filtered list that selects no property: held under one of `props`. */
 	untypedValues: {props: string[]; row: ValueRow; space: string | null}[]
+	/** Value rows of a `propertyId: {notIn}` / `{notEqualTo}` list that selects no property: held under a non-excluded Property. */
+	excludedValues: {excluded: string[]; row: ValueRow; hasValue: boolean; space: string | null}[]
 	/** What each reverse-checkable list returned: its kind and filter, how many rows, its `first`, and the rows' properties (values) or (type, target) pairs (relations). */
 	reverse: {kind: "values" | "relations"; props: string[] | null; first: number; rows: string[]}[]
 }
@@ -1193,6 +1299,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const typeOnly: LightCard["typeOnly"] = []
 	const targetValues: LightCard["targetValues"] = []
 	const untypedValues: LightCard["untypedValues"] = []
+	const excludedValues: LightCard["excludedValues"] = []
 	const reverse: LightCard["reverse"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
@@ -1226,6 +1333,23 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				if (list.rows.propertyInfo) propertyInfo.incomplete = true
 				untypedValues.push({
 					props: list.propertyFilter,
+					row: {
+						property_id: "",
+						text: orNull(read(node, list.rows, "text")),
+						integer: orNull(read(node, list.rows, "integer")),
+						float: orNull(read(node, list.rows, "float")),
+						decimal: orNull(read(node, list.rows, "decimal")),
+						boolean: orNull(read(node, list.rows, "boolean")),
+						datetime: orNull(read(node, list.rows, "datetime")),
+						date: orNull(read(node, list.rows, "date")),
+					},
+					space,
+				})
+			} else if (list.kind === "values" && list.excludedPropertyFilter) {
+				if (list.rows.propertyInfo) propertyInfo.incomplete = true
+				excludedValues.push({
+					excluded: list.excludedPropertyFilter,
+					hasValue: VALUE_COLUMNS.some((c) => list.rows.columns[c] !== undefined),
 					row: {
 						property_id: "",
 						text: orNull(read(node, list.rows, "text")),
@@ -1341,6 +1465,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		typeOnly,
 		targetValues,
 		untypedValues,
+		excludedValues,
 		reverse,
 	}
 }
@@ -1349,7 +1474,13 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 function lightSpaces(light: LightCard, extra: string[] | null): string[] | null {
 	const spaces = new Set<string>(light.card.spaceIds ?? [])
 	if (!light.card.spaceIds)
-		for (const s of [...light.valueSpaces, ...light.relationSpaces, ...light.typeOnly.map((row) => row.space)])
+		for (const s of [
+			...light.valueSpaces,
+			...light.relationSpaces,
+			...light.typeOnly.map((row) => row.space),
+			...light.untypedValues.map((row) => row.space),
+			...light.excludedValues.map((row) => row.space),
+		])
 			if (s) spaces.add(s)
 	for (const s of extra ?? []) spaces.add(s)
 	return spaces.size > 0 ? [...spaces] : null
@@ -1453,7 +1584,7 @@ export async function checkLight(
 	// ids differ for every Space founded under a legacy id); a Space geo-db has not loaded cannot be judged.
 	const rowSpaces = new Set<string>()
 	for (const s of [...light.valueSpaces, ...light.relationSpaces]) if (s) rowSpaces.add(s)
-	for (const row of [...light.typeless, ...light.typeOnly, ...light.untypedValues])
+	for (const row of [...light.typeless, ...light.typeOnly, ...light.untypedValues, ...light.excludedValues])
 		if (row.space) rowSpaces.add(row.space)
 	const geoSpaceFor = new Map<string, string>()
 	for (const space of rowSpaces) {
@@ -1525,6 +1656,41 @@ export async function checkLight(
 			return diffCards(statementsFromPostgres([one], []), pool, {skipEmptyText: true}).onlyPostgres.length === 0
 		})
 		if (!held) missing.push({space: row.space, prop: row.props.join("|"), norm: String(row.row.text ?? "")})
+	}
+	// A value row filtered by `propertyId: {notIn}` / `{notEqualTo}` with no property selected: when value columns were
+	// selected, geo-db must hold that value under some non-excluded Property; when only `spaceId` was selected (e.g.
+	// `placed: valuesList(filter: {propertyId: {notIn: ..}}) { spaceId }`), geo-db must hold at least one non-excluded,
+	// non-derived value statement in that Space.
+	for (const row of light.excludedValues) {
+		const pool = rowsIn(row.space)
+		const excluded = new Set(row.excluded.map((id) => conformingId("entity", id)))
+		const valueRows = pool.filter(
+			(held) =>
+				!DERIVED_PROPERTIES.has(held.prop) &&
+				!MEMBERSHIP_PROPERTIES.has(held.prop) &&
+				!ENTITY_TIME_PROPERTIES.has(held.prop) &&
+				!REFERENCE_RAW.test(held.raw) &&
+				held.raw !== "" &&
+				!excluded.has(held.prop),
+		)
+		let held: boolean
+		if (row.hasValue) {
+			const key = valueKey(row.row)
+			held =
+				key === null
+					? true
+					: valueRows.some((candidate) => {
+							const one = {...row.row, property_id: candidate.prop}
+							return (
+								diffCards(statementsFromPostgres([one], []), [candidate], {skipEmptyText: true})
+									.onlyPostgres.length === 0
+							)
+						})
+		} else {
+			held = valueRows.length > 0
+		}
+		if (!held)
+			missing.push({space: row.space, prop: `!${row.excluded.join("|")}`, norm: String(row.row.text ?? "")})
 	}
 	// A relation target's own values, held in geo-db's card of the target: all the targets in one batch read.
 	let targetsCompared = false
@@ -1912,4 +2078,69 @@ export async function runLight(
 			uncompared.delete(reason)
 	for (const r of backlinkUncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}
+}
+
+/**
+ * Runs the comparison for one or more `entitiesConnection` roots extracted from a single- or multi-root document.
+ * Each root is compared independently via `runLight`; any mismatch fails the operation, otherwise any unsupported or
+ * failed root is reported, otherwise matching roots combine into one match with merged `uncompared` reasons.
+ */
+export async function runLightEntitiesMulti(
+	deps: EntityShadowDeps,
+	multiPlan: LightEntitiesMultiPlan,
+	body: unknown,
+	label: string,
+): Promise<LightOutcome> {
+	if (multiPlan.plans.length === 1 && multiPlan.uncompared.length === 0) {
+		return runLight(deps, multiPlan.plans[0] as LightEntitiesPlan, body, label)
+	}
+	const outcomes: {key: string; outcome: LightOutcome}[] = []
+	for (const plan of multiPlan.plans) {
+		outcomes.push({key: plan.key, outcome: await runLight(deps, plan, body, label)})
+	}
+	const mismatched: {key: string; uncompared: UncomparedReason[]; detail: Record<string, unknown>}[] = []
+	const matched: {uncompared: UncomparedReason[]; detail: Record<string, unknown>}[] = []
+	let unsupported: {result: "unsupported"; reason: UnsupportedReason} | null = null
+	let failed = false
+	for (const {key, outcome} of outcomes) {
+		if (outcome.result === "mismatch")
+			mismatched.push({key, uncompared: outcome.uncompared, detail: outcome.detail})
+		else if (outcome.result === "match") matched.push({uncompared: outcome.uncompared, detail: outcome.detail})
+		else if (outcome.result === "unsupported") unsupported ??= outcome
+		else if (outcome.result === "failed") failed = true
+	}
+	if (mismatched.length > 0) {
+		const uncompared = new Set<UncomparedReason>(multiPlan.uncompared)
+		const parts = new Set<MismatchPart>()
+		for (const m of mismatched) {
+			for (const r of m.uncompared) uncompared.add(r)
+			const rawParts = m.detail.parts
+			if (Array.isArray(rawParts)) for (const p of rawParts) parts.add(p as MismatchPart)
+		}
+		return {
+			result: "mismatch",
+			uncompared: [...uncompared],
+			detail: {
+				roots: outcomes.length,
+				mismatches: mismatched.length,
+				firstKey: mismatched[0]?.key,
+				first: mismatched[0]?.detail,
+				parts: [...parts],
+			},
+		}
+	}
+	if (unsupported) return unsupported
+	if (failed) return {result: "failed"}
+	if (matched.length === 0) return {result: "skip"}
+	const uncompared = new Set<UncomparedReason>(multiPlan.uncompared)
+	let entities = 0
+	for (const m of matched) {
+		for (const r of m.uncompared) uncompared.add(r)
+		if (typeof m.detail.entities === "number") entities += m.detail.entities
+	}
+	return {
+		result: "match",
+		uncompared: [...uncompared],
+		detail: {roots: matched.length, entities},
+	}
 }

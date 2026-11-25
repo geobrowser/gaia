@@ -83,6 +83,11 @@ export type BackfillOptions = {
 	legacyMap?: boolean
 	/** Stop after this many entities this run (0: no limit). For a measured first run. */
 	maxEntities: number
+	/**
+	 * Read each visited Space's entity list again and append what Postgres gained since the list was frozen
+	 * (BACKFILL_RELIST=1). Without it a finished Space is skipped forever, whatever Postgres holds now.
+	 */
+	relist?: boolean
 }
 
 export type BackfillDeps = {
@@ -116,6 +121,8 @@ export type BackfillStats = {
 	skippedRows: number
 	excludedRows: number
 	stoppedAtLimit: boolean
+	/** Entities appended to a frozen list because Postgres gained them after it was taken (relist only). */
+	entitiesRelisted: number
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -142,6 +149,20 @@ class BackfillState {
 		const ids = await source.listEntities(space)
 		writeFileDurable(path, ids.map((i) => `${i}\n`).join(""))
 		return ids
+	}
+
+	/**
+	 * Append the entities Postgres lists now and the frozen list lacks. The frozen prefix is untouched, so the
+	 * cursor still indexes the same entities; the new ones go on the end (sorted), and the Space stops counting
+	 * as loaded (`backfilledSpaces`) until the cursor reaches them. Entities Postgres dropped stay on the list.
+	 */
+	async relist(source: BackfillSource, space: string, frozen: string[]): Promise<{ids: string[]; added: number}> {
+		const have = new Set(frozen.map(compactId))
+		const fresh = (await source.listEntities(space)).filter((i) => !have.has(compactId(i)))
+		if (fresh.length === 0) return {ids: frozen, added: 0}
+		const ids = [...frozen, ...fresh]
+		writeFileDurable(`${this.dir}/entities-${space}.txt`, ids.map((i) => `${i}\n`).join(""))
+		return {ids, added: fresh.length}
 	}
 }
 
@@ -177,6 +198,7 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 		skippedRows: 0,
 		excludedRows: 0,
 		stoppedAtLimit: false,
+		entitiesRelisted: 0,
 	}
 	const pacedDb: ApplyDeps["db"] = {
 		waitReady: (t?: number) => deps.db.waitReady(t),
@@ -195,7 +217,13 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 
 	for (const space of plan) {
 		if (deps.signal?.aborted) throw new Error("shutting down")
-		const ids = await state.entities(deps.source, space)
+		let ids = await state.entities(deps.source, space)
+		if (opts.relist) {
+			const r = await state.relist(deps.source, space, ids)
+			ids = r.ids
+			stats.entitiesRelisted += r.added
+			if (r.added > 0) log("warn", "backfill relist: Postgres holds entities the frozen list lacked", {space, added: r.added, entities: ids.length})
+		}
 		const start = state.cursor.done[space] ?? 0
 		if (start >= ids.length) continue
 		let record = deps.store.spaces[space]

@@ -1042,11 +1042,156 @@ describe("relationsConnection shadow", () => {
 		})
 	})
 
-	it("refuses several roots in one document", () => {
-		const query = `query Q($t: UUID!) { a: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } b: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } }`
-		expect(analyzePointRead("relationsConnection", parse(query), null, {t: REL_TYPE})).toEqual({
-			ok: false,
-			reason: "not_single_root",
+	describe("multi-root documents", () => {
+		const SLICE_NODE = "nodes { toEntityId }"
+		const ROW_NODE = "nodes { fromEntityId spaceId typeId toEntityId }"
+
+		it("extracts and shadows an aliased relationsConnection beside another root field", async () => {
+			const query = `query Q($s: UUID!, $f: UUID!, $t: UUID!) {
+  space(id: $s) { id }
+  rels: relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t}, spaceId: {is: $s}}) { ${SLICE_NODE} }
+}`
+			const v = {s: SPACE, f: FROM, t: REL_TYPE}
+			const a = analyzePointRead("relationsConnection", parse(query), null, v)
+			expect(a.ok).toBe(true)
+			if (a.ok && a.plan.field === "relations") expect(a.plan.key).toBe("rels")
+
+			const ok = setup(geo(TARGET))
+			await go(ok.shadows, query, {data: {space: {id: SPACE}, rels: {nodes: [{toEntityId: TARGET}]}}}, v)
+			expect(totals("relationsConnection")).toEqual({match: 1})
+
+			__resetGatewayMetricsForTests()
+			const bad = setup(geo(PERSON))
+			await go(bad.shadows, query, {data: {space: {id: SPACE}, rels: {nodes: [{toEntityId: TARGET}]}}}, v)
+			expect(totals("relationsConnection")).toEqual({mismatch: 1})
+		})
+
+		it("extracts relationsConnection from a root fragment beside another root field", async () => {
+			const query = `query Q($s: UUID!, $f: UUID!, $t: UUID!) {
+  space(id: $s) { id }
+  ...R
+}
+fragment R on Query {
+  rels: relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t}, spaceId: {is: $s}}) { ${SLICE_NODE} }
+}`
+			const v = {s: SPACE, f: FROM, t: REL_TYPE}
+			const ok = setup(geo(TARGET))
+			await go(ok.shadows, query, {data: {space: {id: SPACE}, rels: {nodes: [{toEntityId: TARGET}]}}}, v)
+			expect(totals("relationsConnection")).toEqual({match: 1})
+		})
+
+		it("compares multiple aliased relationsConnection roots in one document", async () => {
+			const query = `query Q($s: UUID!, $f: UUID!, $t1: UUID!, $t2: UUID!) {
+  first: relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t1}, spaceId: {is: $s}}) { ${SLICE_NODE} }
+  second: relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t2}, spaceId: {is: $s}}) { ${SLICE_NODE} }
+}`
+			const v = {s: SPACE, f: FROM, t1: REL_TYPE, t2: TYPES}
+			const bothGeo = {
+				[hex(FROM)]: [
+					`${REL_TYPE}\t${hex(TARGET)}\ts1\t${hex(FROM)}\t1`,
+					`${TYPES}\t${PERSON}\ts2\t${hex(FROM)}\t1`,
+				],
+			}
+			const ok = setup(bothGeo)
+			await go(
+				ok.shadows,
+				query,
+				{data: {first: {nodes: [{toEntityId: TARGET}]}, second: {nodes: [{toEntityId: PERSON}]}}},
+				v,
+			)
+			expect(totals("relationsConnection")).toEqual({match: 1})
+			// One card read serves both slices for the same fromEntity and space.
+			expect(ok.readCard).toHaveBeenCalledTimes(1)
+
+			// If only the second alias mismatches, the operation is a mismatch.
+			__resetGatewayMetricsForTests()
+			const bad = setup(bothGeo)
+			await go(
+				bad.shadows,
+				query,
+				{data: {first: {nodes: [{toEntityId: TARGET}]}, second: {nodes: [{toEntityId: A}]}}},
+				v,
+			)
+			expect(totals("relationsConnection")).toEqual({mismatch: 1})
+		})
+
+		it("compares a nodes alias beside a count-only alias and counts relation_count uncompared", async () => {
+			const query = `query Q($s: UUID!, $f: UUID!, $t: UUID!) {
+  items: relationsConnection(filter: {fromEntityId: {is: $f}, typeId: {is: $t}, spaceId: {is: $s}}) { ${SLICE_NODE} }
+  counts: relationsConnection(filter: {typeId: {is: $t}}) { aggregates { distinctCount { id } } }
+}`
+			const v = {s: SPACE, f: FROM, t: REL_TYPE}
+			const ok = setup(geo(TARGET))
+			await go(
+				ok.shadows,
+				query,
+				{data: {items: {nodes: [{toEntityId: TARGET}]}, counts: {aggregates: {distinctCount: {id: 1}}}}},
+				v,
+			)
+			expect(totals("relationsConnection")).toEqual({match: 1})
+			expect(totals("relationsConnection", "gaia_api_gateway_shadow_uncompared_total")).toMatchObject({
+				relation_count: 1,
+			})
+		})
+
+		it("caps total compared items across multiple aliased relationsConnection roots and marks sampled_rows", async () => {
+			const query = `query Q($t: UUID!) {
+  a: relationsConnection(filter: {typeId: {is: $t}}) { ${ROW_NODE} }
+  b: relationsConnection(filter: {typeId: {is: $t}}) { ${ROW_NODE} }
+}`
+			const targets = Array.from({length: 15}, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`)
+			const targets2 = Array.from(
+				{length: 15},
+				(_, i) => `00000000-0000-4000-8000-${String(i + 100).padStart(12, "0")}`,
+			)
+			const ok = setup({
+				[hex(FROM)]: [...targets, ...targets2].map((t) => `${REL_TYPE}\t${hex(t)}\ts\t${hex(FROM)}\t1`),
+			})
+			const mk = (ts: string[]) =>
+				ts.map((to) => ({fromEntityId: FROM, spaceId: SPACE, typeId: REL_TYPE, toEntityId: to}))
+			await go(ok.shadows, query, {data: {a: {nodes: mk(targets)}, b: {nodes: mk(targets2)}}}, {t: REL_TYPE})
+			expect(totals("relationsConnection")).toEqual({match: 1})
+			expect(totals("relationsConnection", "gaia_api_gateway_shadow_uncompared_total")).toMatchObject({
+				sampled_rows: 1,
+			})
+		})
+
+		it.each([
+			[
+				"aggregates beside space",
+				`query Q($s: UUID!, $t: UUID!) { space(id: $s) { id } c: relationsConnection(filter: {typeId: {is: $t}}) { aggregates { distinctCount { id } } } }`,
+				"count_only",
+			],
+			[
+				"two count-only aliases",
+				`query Q($t: UUID!) { a: relationsConnection(filter: {typeId: {is: $t}}) { totalCount } b: relationsConnection(filter: {typeId: {is: $t}}) { aggregates { distinctCount { id } } } }`,
+				"count_only",
+			],
+			[
+				"nodes without edge columns beside space",
+				`query Q($s: UUID!, $t: UUID!) { space(id: $s) { id } a: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } }`,
+				"selection",
+			],
+			[
+				"two aliases without edge columns",
+				`query Q($t: UUID!) { a: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } b: relationsConnection(filter: {typeId: {is: $t}}) { nodes { id } } }`,
+				"selection",
+			],
+			[
+				"bad filter beside space",
+				`query Q($s: UUID!) { space(id: $s) { id } a: relationsConnection(filter: {position: {is: "x"}}) { ${ROW_NODE} } }`,
+				"filter",
+			],
+			[
+				"document with no relationsConnection root",
+				`query Q($s: UUID!) { space(id: $s) { id } }`,
+				"not_single_root",
+			],
+		])("reports honest unsupported reason for %s", (_, query, reason) => {
+			expect(analyzePointRead("relationsConnection", parse(query), null, {s: SPACE, t: REL_TYPE})).toEqual({
+				ok: false,
+				reason,
+			})
 		})
 	})
 
@@ -1119,6 +1264,39 @@ describe("relationsConnection shadow", () => {
 			)
 			expect(await response.json()).toEqual(answer)
 			expect(totals("relationsConnection")).toEqual({match: 1})
+		})
+
+		it("shadows relationsConnection inside a multi-root gateway request without altering the response", async () => {
+			const query = `query Multi($id: UUID!, $s: UUID!, $t: UUID!) {
+  entity(id: $id) { id }
+  rels: relationsConnection(filter: {fromEntityId: {is: $id}, typeId: {is: $t}, spaceId: {is: $s}}) {
+    nodes { toEntityId }
+  }
+}`
+			const multiAnswer = {data: {entity: {id: FROM}, rels: {nodes: [{toEntityId: TARGET}]}}}
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const readCard = vi.fn(async () => rowsFromGeoDbOutput(geo(TARGET)[hex(FROM)]?.join("\n") ?? "", hex(FROM)))
+			const shadows = createPointReadShadows({
+				geoDb: {readCard},
+				geoSpaceOf: async (space) => (space === hex(SPACE) ? GEO_SPACE : null),
+				log,
+			})
+			const entityShadow = vi.fn(async () => {})
+			const gateway = createGateway({
+				config: readGatewayConfig({
+					GRAPHQL_GATEWAY: "on",
+					GRAPHQL_GATEWAY_FIELDS: "entity=shadow,relationsConnection=shadow",
+					GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+				}),
+				delegate: () => Response.json(multiAnswer),
+				shadows: new Map([...shadows, ["entity", entityShadow]]),
+			})
+			const response = await gateway(request(query, {id: FROM, s: SPACE, t: REL_TYPE}), {})
+			expect(response.status).toBe(200)
+			expect(await response.json()).toEqual(multiAnswer)
+			await settle()
+			expect(totals("relationsConnection")).toEqual({match: 1})
+			expect(entityShadow).not.toHaveBeenCalled()
 		})
 	})
 })

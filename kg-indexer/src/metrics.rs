@@ -25,6 +25,8 @@ pub const BLOCKS_DROPPED: &str = "kg_indexer_blocks_dropped_total";
 pub const MESSAGES_UNPARSEABLE: &str = "kg_indexer_messages_unparseable_total";
 pub const PG_WRITES_SKIPPED: &str = "kg_indexer_pg_writes_skipped_total";
 pub const HALTED: &str = "kg_indexer_halted";
+pub const DELETE_ENTITY_OPS: &str = "kg_indexer_delete_entity_entities_total";
+pub const DELETE_ENTITY_ROWS: &str = "kg_indexer_delete_entity_rows_total";
 
 /// A unit of work skipped because `KG_INDEXER_PG_WRITES` is off.
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +94,22 @@ pub fn register() {
     for site in PgWriteSite::ALL {
         metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
     }
+    metrics::describe_counter!(
+        DELETE_ENTITY_OPS,
+        "Entities named by DeleteEntity ops, by mode: applied (KG_INDEXER_APPLY_DELETE_ENTITY on, rows \
+         deleted and archived) or would_delete (off, nothing written)"
+    );
+    metrics::describe_counter!(
+        DELETE_ENTITY_ROWS,
+        "Rows a DeleteEntity op removed (mode=applied) or would have removed (mode=would_delete), by \
+         kind: values, relations, value_versions, relation_versions"
+    );
+    for mode in ["applied", "would_delete"] {
+        metrics::counter!(DELETE_ENTITY_OPS, "mode" => mode).absolute(0);
+        for kind in ["values", "relations", "value_versions", "relation_versions"] {
+            metrics::counter!(DELETE_ENTITY_ROWS, "mode" => mode, "kind" => kind).absolute(0);
+        }
+    }
     metrics::counter!(BLOCKS_PROCESSED).absolute(0);
     metrics::counter!(EVENTS_PROCESSED).absolute(0);
     metrics::counter!(BATCH_RETRIES).absolute(0);
@@ -108,6 +126,24 @@ pub fn block_processed(event_count: u64) {
 
 pub fn pg_write_skipped(site: PgWriteSite) {
     metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
+}
+
+/// Count the outcome of an edit's `DeleteEntity` ops (see `Storage::write_edit`).
+pub fn entity_deletes(entities: u64, report: &crate::storage::DeleteReport) {
+    let mode = if report.applied {
+        "applied"
+    } else {
+        "would_delete"
+    };
+    metrics::counter!(DELETE_ENTITY_OPS, "mode" => mode).increment(entities);
+    for (kind, n) in [
+        ("values", report.values),
+        ("relations", report.relations),
+        ("value_versions", report.value_versions),
+        ("relation_versions", report.relation_versions),
+    ] {
+        metrics::counter!(DELETE_ENTITY_ROWS, "mode" => mode, "kind" => kind).increment(n);
+    }
 }
 
 pub fn batch_retried() {
@@ -156,6 +192,8 @@ mod tests {
             "kg_indexer_pg_writes_skipped_total{site=\"block\"} 0",
             "kg_indexer_pg_writes_skipped_total{site=\"message\"} 0",
             "kg_indexer_pg_writes_skipped_total{site=\"tally_tick\"} 0",
+            "kg_indexer_delete_entity_entities_total{mode=\"would_delete\"} 0",
+            "kg_indexer_delete_entity_rows_total{mode=\"applied\",kind=\"values\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

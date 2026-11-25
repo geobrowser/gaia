@@ -116,6 +116,10 @@ spec:
               value: "0"
             - name: BACKFILL_SPACE_CAP
               value: "1700"
+            # "1" re-reads each visited Space's entity list from Postgres and appends entities it gained since the
+            # list was frozen (a Space marked loaded is otherwise never revisited). Set it for a repair run.
+            - name: BACKFILL_RELIST
+              value: "0"
             # The journals of what geo-db holds are kept in memory; they grow with the backfill.
             - name: NODE_OPTIONS
               value: "--max-old-space-size=2048"

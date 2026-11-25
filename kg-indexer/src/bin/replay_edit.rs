@@ -44,7 +44,6 @@ use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::knowledge::HermesEdit;
 use kg_indexer::error::IndexerError;
 use kg_indexer::handlers;
-use kg_indexer::models::values::ValueChangeType;
 use kg_indexer::storage::Storage;
 use uuid::Uuid;
 
@@ -169,107 +168,43 @@ async fn main() -> Result<(), IndexerError> {
         .execute(&mut *tx)
         .await?;
 
-    let result = handlers::edits::handle_edit(&edit)?;
+    // The same write path as the live consumer (`Storage::write_edit`), including how it treats
+    // `DeleteEntity` under `KG_INDEXER_APPLY_DELETE_ENTITY`.
+    let result = handlers::edits::handle_edit_for(&edit, storage.apply_delete_entity())?;
+    let edit_id = result.edit_id;
 
-    let values_for_versioning = result.values.clone();
-    let relations_for_versioning = result.relations.clone();
+    // Mirror main.rs's extract_edit_metadata exactly, so a replayed
+    // edit's stored name matches what the real Kafka consumer would
+    // have written for the same payload.
+    let name = if edit.name.is_empty() {
+        None
+    } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
+        Some(&edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)])
+    } else {
+        Some(edit.name.as_str())
+    };
+    let created_by_id = edit.authors.first().and_then(|a| Uuid::from_slice(a).ok());
 
-    let (set_values, delete_values): (Vec<_>, Vec<_>) = result
-        .values
-        .into_iter()
-        .partition(|v| matches!(v.change_type, ValueChangeType::Set));
-    let delete_value_ids: Vec<_> = delete_values
-        .into_iter()
-        .map(|v| (v.id, v.space_id))
-        .collect();
-
-    let mut set_relations = Vec::new();
-    let mut update_relations = Vec::new();
-    let mut unset_relations = Vec::new();
-    let mut delete_relations = Vec::new();
-    for op in result.relations {
-        match op {
-            kg_indexer::models::relations::RelationOp::Create(r) => set_relations.push(r),
-            kg_indexer::models::relations::RelationOp::Update(r) => update_relations.push(r),
-            kg_indexer::models::relations::RelationOp::Unset(r) => unset_relations.push(r),
-            kg_indexer::models::relations::RelationOp::Delete(r) => {
-                delete_relations.push((r.id, r.space_id))
-            }
-        }
+    let outcome = storage
+        .write_edit(&edit, result, name, created_by_id, &mut tx)
+        .await?;
+    if outcome.entities_deleted > 0 {
+        println!(
+            "DeleteEntity {}: {} entities, {:?}",
+            if outcome.deletes.applied {
+                "applied"
+            } else {
+                "would delete (KG_INDEXER_APPLY_DELETE_ENTITY is off)"
+            },
+            outcome.entities_deleted,
+            outcome.deletes
+        );
     }
-
-    let ops = result.entities.len()
-        + set_values.len()
-        + delete_value_ids.len()
-        + set_relations.len()
-        + update_relations.len()
-        + unset_relations.len()
-        + delete_relations.len();
-
-    storage.insert_entities(&result.entities, &mut tx).await?;
-
-    storage
-        .delete_entities(&result.deleted_entities, result.space_id, &mut tx)
-        .await?;
-    storage.insert_values(&set_values, &mut tx).await?;
-    storage.delete_values(&delete_value_ids, &mut tx).await?;
-    storage.insert_relations(&set_relations, &mut tx).await?;
-    storage.update_relations(&update_relations, &mut tx).await?;
-    storage
-        .unset_relation_fields(&unset_relations, &mut tx)
-        .await?;
-    storage.delete_relations(&delete_relations, &mut tx).await?;
-
-    if let Some(meta) = edit.meta.as_ref() {
-        // Mirror main.rs's extract_edit_metadata exactly, so a replayed
-        // edit's stored name matches what the real Kafka consumer would
-        // have written for the same payload.
-        let name = if edit.name.is_empty() {
-            None
-        } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
-            Some(&edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)])
-        } else {
-            Some(edit.name.as_str())
-        };
-        let created_by_id = edit.authors.first().and_then(|a| Uuid::from_slice(a).ok());
-
-        if let Some(version_key) = storage
-            .insert_edit_version(
-                result.edit_id,
-                meta.block_number as i64,
-                meta.sequence as i64,
-                meta.created_at as i64,
-                name,
-                created_by_id,
-                &mut tx,
-            )
-            .await?
-        {
-            storage
-                .close_entity_versions(
-                    &result.deleted_entities,
-                    result.space_id,
-                    version_key,
-                    &mut tx,
-                )
-                .await?;
-            storage
-                .insert_value_versions(&values_for_versioning, version_key, &mut tx)
-                .await?;
-            storage
-                .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
-                .await?;
-            println!("Wrote {ops} operations, version_key={version_key}");
-        } else {
-            // The entities/values/relations upserts above already ran in
-            // this transaction (idempotent no-ops if this edit was replayed
-            // before) — only the version-tracking rows are skipped here, so
-            // "nothing written" would overstate what this branch means.
-            println!(
-                "edit_id {} already has a version — skipped value/relation version rows (live-table writes above already ran, idempotently)",
-                result.edit_id
-            );
-        }
+    match outcome.version_key {
+        Some(version_key) => println!("Wrote {} operations, version_key={version_key}", outcome.ops),
+        None => println!(
+            "edit_id {edit_id} already has a version (or carries no metadata) — skipped value/relation version rows (live-table writes above already ran, idempotently)"
+        ),
     }
 
     tx.commit().await?;

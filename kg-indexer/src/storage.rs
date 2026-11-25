@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 use crate::error::{HandlerError, IndexerError};
+use crate::handlers::edits::EditResult;
 use crate::models::{
     entities::EntityItem,
     governance::{
@@ -17,6 +18,7 @@ use crate::models::{
     subspaces::{SubspaceItem, SubspaceTopicItem},
     values::{ValueChangeType, ValueOp},
 };
+use hermes_schema::pb::knowledge::HermesEdit;
 
 #[derive(Clone)]
 pub struct Storage {
@@ -25,6 +27,9 @@ pub struct Storage {
     /// advances past each message (cutover switch, plan 10.22). Read by `main.rs`, which skips
     /// whole blocks, messages and tally ticks; the `Storage` methods themselves do not check it.
     pg_writes: bool,
+    /// `KG_INDEXER_APPLY_DELETE_ENTITY`, default off. Off: a `DeleteEntity` op is counted and
+    /// logged but removes nothing (see `delete_entities`).
+    apply_delete_entity: bool,
 }
 
 /// Parse `KG_INDEXER_PG_WRITES`. Unset, empty or anything but an explicit off value means on,
@@ -94,6 +99,67 @@ pub fn set_local_statement_timeout_sql(timeout_ms: u64) -> String {
     format!("SET LOCAL statement_timeout = {timeout_ms}")
 }
 
+/// What `Storage::write_edit` did.
+#[derive(Clone, Debug)]
+pub struct EditWriteOutcome {
+    pub edit_id: Uuid,
+    pub space_id: Uuid,
+    /// How many entities the edit's `DeleteEntity` ops named.
+    pub entities_deleted: usize,
+    /// Operation count, as the consumer reports it.
+    pub ops: usize,
+    pub deletes: DeleteReport,
+    /// The version key this call opened, or None when the edit was already versioned or has no metadata.
+    // Read by `replay_edit` and the tests; the consumer binary does not need it.
+    #[allow(dead_code)]
+    pub version_key: Option<i64>,
+}
+
+/// The edit a `DeleteEntity` came from, recorded with every archived row.
+#[derive(Clone, Copy, Debug)]
+pub struct DeletingEdit {
+    pub edit_id: Uuid,
+    pub block_number: i64,
+    /// `meta.created_at` of the edit.
+    pub created_at: i64,
+}
+
+/// What a `DeleteEntity` removed (`applied`), or with the switch off, would have removed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeleteReport {
+    pub applied: bool,
+    pub values: u64,
+    pub relations: u64,
+    pub value_versions: u64,
+    pub relation_versions: u64,
+}
+
+impl DeleteReport {
+    pub fn merge(mut self, other: DeleteReport) -> DeleteReport {
+        self.values += other.values;
+        self.relations += other.relations;
+        self.value_versions += other.value_versions;
+        self.relation_versions += other.relation_versions;
+        self
+    }
+}
+
+async fn count_rows<'q>(
+    query: sqlx::query::QueryScalar<'q, Postgres, i64, sqlx::postgres::PgArguments>,
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+) -> Result<u64, IndexerError> {
+    Ok(query.fetch_one(&mut **tx).await?.max(0) as u64)
+}
+
+/// Parse `KG_INDEXER_APPLY_DELETE_ENTITY`. Unlike `KG_INDEXER_PG_WRITES` this is off unless it
+/// is set to an explicit on value: it deletes data, so a typo must not turn it on.
+pub fn apply_delete_entity_from(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "on" | "yes")
+    )
+}
+
 fn protected_property_uuids() -> Vec<Uuid> {
     sdk::core::ids::PROTECTED_PROPERTY_IDS
         .iter()
@@ -129,7 +195,25 @@ impl Storage {
             pg_writes: pg_writes_enabled_from(
                 std::env::var("KG_INDEXER_PG_WRITES").ok().as_deref(),
             ),
+            apply_delete_entity: apply_delete_entity_from(
+                std::env::var("KG_INDEXER_APPLY_DELETE_ENTITY")
+                    .ok()
+                    .as_deref(),
+            ),
         }
+    }
+
+    /// Override `KG_INDEXER_APPLY_DELETE_ENTITY` (the env var sets the default).
+    #[allow(dead_code)] // used by tests and operator bins; `main.rs` compiles this file as its own module
+    pub fn with_apply_delete_entity(mut self, on: bool) -> Self {
+        self.apply_delete_entity = on;
+        self
+    }
+
+    /// True when `DeleteEntity` ops delete rows; false when they are only counted.
+    #[allow(dead_code)]
+    pub fn apply_delete_entity(&self) -> bool {
+        self.apply_delete_entity
     }
 
     /// Override the Postgres-writes switch (the env var sets the default).
@@ -568,9 +652,128 @@ impl Storage {
         Ok(())
     }
 
+    /// Write one decoded edit to the live tables and, once per `edit_id`, to the version tables.
+    ///
+    /// This is the single write path for an edit: the live consumer's two entry points
+    /// (`process_message`, `process_block`) and the `replay_edit` operator bin all call it, so a
+    /// replayed edit cannot drift from a live one. Order matters: entities, then the
+    /// `DeleteEntity` removals, then the edit's remaining value and relation ops (writes made after
+    /// a delete in the same edit must survive it; `handle_edit` already dropped those before it).
+    pub async fn write_edit(
+        &self,
+        edit: &HermesEdit,
+        result: EditResult,
+        name: Option<&str>,
+        created_by_id: Option<Uuid>,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<EditWriteOutcome, IndexerError> {
+        // Keep copies for versioned writes before partitioning
+        let values_for_versioning = result.values.clone();
+        let relations_for_versioning = result.relations.clone();
+
+        let (set_values, delete_values): (Vec<_>, Vec<_>) = result
+            .values
+            .into_iter()
+            .partition(|v| matches!(v.change_type, ValueChangeType::Set));
+        let delete_value_ids: Vec<_> = delete_values
+            .into_iter()
+            .map(|v| (v.id, v.space_id))
+            .collect();
+
+        let mut set_relations = Vec::new();
+        let mut update_relations = Vec::new();
+        let mut unset_relations = Vec::new();
+        let mut delete_relations = Vec::new();
+        for op in result.relations {
+            match op {
+                RelationOp::Create(r) => set_relations.push(r),
+                RelationOp::Update(r) => update_relations.push(r),
+                RelationOp::Unset(r) => unset_relations.push(r),
+                RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
+            }
+        }
+
+        let ops = result.entities.len()
+            + set_values.len()
+            + delete_value_ids.len()
+            + set_relations.len()
+            + update_relations.len()
+            + unset_relations.len()
+            + delete_relations.len()
+            + result.deleted_entities.len();
+
+        let deleting_edit = DeletingEdit {
+            edit_id: result.edit_id,
+            block_number: edit.meta.as_ref().map_or(0, |m| m.block_number as i64),
+            created_at: edit.meta.as_ref().map_or(0, |m| m.created_at as i64),
+        };
+
+        // Bulk insert all operations (live tables)
+        self.insert_entities(&result.entities, tx).await?;
+        let mut version_written = None;
+        let mut deletes = self
+            .delete_entities(&result.deleted_entities, result.space_id, deleting_edit, tx)
+            .await?;
+        self.insert_values(&set_values, tx).await?;
+        self.delete_values(&delete_value_ids, tx).await?;
+        self.insert_relations(&set_relations, tx).await?;
+        self.update_relations(&update_relations, tx).await?;
+        self.unset_relation_fields(&unset_relations, tx).await?;
+        self.delete_relations(&delete_relations, tx).await?;
+
+        // Versioned writes (temporal tables)
+        // Only write versions if this edit hasn't been processed before (idempotency)
+        if let Some(meta) = edit.meta.as_ref() {
+            if let Some(version_key) = self
+                .insert_edit_version(
+                    result.edit_id,
+                    meta.block_number as i64,
+                    meta.sequence as i64,
+                    meta.created_at as i64,
+                    name,
+                    created_by_id,
+                    tx,
+                )
+                .await?
+            {
+                let closed = self
+                    .close_entity_versions(
+                        &result.deleted_entities,
+                        result.space_id,
+                        version_key,
+                        deleting_edit,
+                        tx,
+                    )
+                    .await?;
+                version_written = Some(version_key);
+                deletes = deletes.merge(closed);
+                self.insert_value_versions(&values_for_versioning, version_key, tx)
+                    .await?;
+                self.insert_relation_versions(&relations_for_versioning, version_key, tx)
+                    .await?;
+            }
+        }
+
+        Ok(EditWriteOutcome {
+            edit_id: result.edit_id,
+            space_id: result.space_id,
+            entities_deleted: result.deleted_entities.len(),
+            ops,
+            deletes,
+            version_key: version_written,
+        })
+    }
+
     /// Apply `DeleteEntity` ops: remove, from `space_id`, every value the entities hold and every
     /// relation that leaves them. This is what `geodb-feeder` does to geo-db (`delete_entity`
     /// retracts the entity's cells there), so the two stores agree on which entities exist.
+    ///
+    /// Every row removed is first copied to `kg_archive.deleted_entity_rows` in the same
+    /// transaction (see migration 0129), so the delete is reversible with
+    /// `kg_archive.restore_deleted_entities(edit_id)`.
+    ///
+    /// With `KG_INDEXER_APPLY_DELETE_ENTITY` off (the default) nothing is written: the report
+    /// says what would have been removed.
     ///
     /// Kept on purpose: the `entities` row (it is global, not per space, and other spaces may
     /// still hold the entity), relations that point *at* the entity, the relations and values of
@@ -580,74 +783,186 @@ impl Storage {
         &self,
         entity_ids: &[Uuid],
         space_id: Uuid,
+        edit: DeletingEdit,
         tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<(), IndexerError> {
+    ) -> Result<DeleteReport, IndexerError> {
+        let mut report = DeleteReport {
+            applied: self.apply_delete_entity,
+            ..DeleteReport::default()
+        };
         if entity_ids.is_empty() {
-            return Ok(());
+            return Ok(report);
         }
         let protected = protected_property_uuids();
 
-        sqlx::query(
-            "DELETE FROM values
-             WHERE space_id = $1 AND entity_id = ANY($2::uuid[]) AND property_id <> ALL($3::uuid[])",
-        )
-        .bind(space_id)
-        .bind(entity_ids)
-        .bind(&protected)
-        .execute(&mut **tx)
-        .await?;
+        if !self.apply_delete_entity {
+            report.values = count_rows(
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM values
+                     WHERE space_id = $1 AND entity_id = ANY($2::uuid[]) AND property_id <> ALL($3::uuid[])",
+                )
+                .bind(space_id)
+                .bind(entity_ids)
+                .bind(&protected),
+                tx,
+            )
+            .await?;
+            report.relations = count_rows(
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM relations
+                     WHERE space_id = $1 AND from_entity_id = ANY($2::uuid[]) AND is_system = false",
+                )
+                .bind(space_id)
+                .bind(entity_ids),
+                tx,
+            )
+            .await?;
+            return Ok(report);
+        }
 
-        sqlx::query(
-            "DELETE FROM relations
-             WHERE space_id = $1 AND from_entity_id = ANY($2::uuid[]) AND relations.is_system = false",
+        report.values = count_rows(
+            sqlx::query_scalar(
+                "WITH d AS (
+                     DELETE FROM values
+                     WHERE space_id = $1 AND entity_id = ANY($2::uuid[]) AND property_id <> ALL($3::uuid[])
+                     RETURNING *
+                 ), a AS (
+                     INSERT INTO kg_archive.deleted_entity_rows
+                         (source, edit_id, block_number, edit_created_at, space_id, entity_id, row_data)
+                     SELECT 'values', $4, $5, $6, d.space_id, d.entity_id, to_jsonb(d) FROM d
+                     RETURNING 1
+                 ) SELECT count(*) FROM a",
+            )
+            .bind(space_id)
+            .bind(entity_ids)
+            .bind(&protected)
+            .bind(edit.edit_id)
+            .bind(edit.block_number)
+            .bind(edit.created_at),
+            tx,
         )
-        .bind(space_id)
-        .bind(entity_ids)
-        .execute(&mut **tx)
         .await?;
-
-        Ok(())
+        report.relations = count_rows(
+            sqlx::query_scalar(
+                "WITH d AS (
+                     DELETE FROM relations
+                     WHERE space_id = $1 AND from_entity_id = ANY($2::uuid[]) AND relations.is_system = false
+                     RETURNING *
+                 ), a AS (
+                     INSERT INTO kg_archive.deleted_entity_rows
+                         (source, edit_id, block_number, edit_created_at, space_id, entity_id, row_data)
+                     SELECT 'relations', $3, $4, $5, d.space_id, d.from_entity_id, to_jsonb(d) FROM d
+                     RETURNING 1
+                 ) SELECT count(*) FROM a",
+            )
+            .bind(space_id)
+            .bind(entity_ids)
+            .bind(edit.edit_id)
+            .bind(edit.block_number)
+            .bind(edit.created_at),
+            tx,
+        )
+        .await?;
+        Ok(report)
     }
 
     /// Close the open `value_versions` / `relation_versions` rows of entities deleted by
-    /// `delete_entities`, at `version_key`, so history shows them ending with the edit.
+    /// `delete_entities`, at `version_key`, so history shows them ending with the edit. Each closed
+    /// row is archived first, like `delete_entities`; off, it only counts them.
     pub async fn close_entity_versions(
         &self,
         entity_ids: &[Uuid],
         space_id: Uuid,
         version_key: i64,
+        edit: DeletingEdit,
         tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<(), IndexerError> {
+    ) -> Result<DeleteReport, IndexerError> {
+        let mut report = DeleteReport {
+            applied: self.apply_delete_entity,
+            ..DeleteReport::default()
+        };
         if entity_ids.is_empty() {
-            return Ok(());
+            return Ok(report);
         }
         let protected = protected_property_uuids();
 
-        sqlx::query(
-            "UPDATE value_versions SET valid_to_key = $1
-             WHERE valid_to_key IS NULL AND space_id = $2
-               AND entity_id = ANY($3::uuid[]) AND property_id <> ALL($4::uuid[])",
-        )
-        .bind(version_key)
-        .bind(space_id)
-        .bind(entity_ids)
-        .bind(&protected)
-        .execute(&mut **tx)
-        .await?;
+        if !self.apply_delete_entity {
+            report.value_versions = count_rows(
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM value_versions
+                     WHERE valid_to_key IS NULL AND space_id = $1
+                       AND entity_id = ANY($2::uuid[]) AND property_id <> ALL($3::uuid[])",
+                )
+                .bind(space_id)
+                .bind(entity_ids)
+                .bind(&protected),
+                tx,
+            )
+            .await?;
+            report.relation_versions = count_rows(
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM relation_versions rv
+                     WHERE rv.valid_to_key IS NULL AND rv.space_id = $1
+                       AND rv.from_entity_id = ANY($2::uuid[])
+                       AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.id = rv.relation_id AND r.is_system)",
+                )
+                .bind(space_id)
+                .bind(entity_ids),
+                tx,
+            )
+            .await?;
+            return Ok(report);
+        }
 
-        sqlx::query(
-            "UPDATE relation_versions SET valid_to_key = $1
-             WHERE valid_to_key IS NULL AND space_id = $2
-               AND from_entity_id = ANY($3::uuid[])
-               AND relation_id NOT IN (SELECT id FROM relations WHERE is_system = true)",
+        report.value_versions = count_rows(
+            sqlx::query_scalar(
+                "WITH u AS (
+                     UPDATE value_versions SET valid_to_key = $1
+                     WHERE valid_to_key IS NULL AND space_id = $2
+                       AND entity_id = ANY($3::uuid[]) AND property_id <> ALL($4::uuid[])
+                     RETURNING *
+                 ), a AS (
+                     INSERT INTO kg_archive.deleted_entity_rows
+                         (source, edit_id, block_number, edit_created_at, space_id, entity_id, closed_to_key, row_data)
+                     SELECT 'value_versions', $5, $6, $7, u.space_id, u.entity_id, $1, to_jsonb(u) FROM u
+                     RETURNING 1
+                 ) SELECT count(*) FROM a",
+            )
+            .bind(version_key)
+            .bind(space_id)
+            .bind(entity_ids)
+            .bind(&protected)
+            .bind(edit.edit_id)
+            .bind(edit.block_number)
+            .bind(edit.created_at),
+            tx,
         )
-        .bind(version_key)
-        .bind(space_id)
-        .bind(entity_ids)
-        .execute(&mut **tx)
         .await?;
-
-        Ok(())
+        report.relation_versions = count_rows(
+            sqlx::query_scalar(
+                "WITH u AS (
+                     UPDATE relation_versions rv SET valid_to_key = $1
+                     WHERE rv.valid_to_key IS NULL AND rv.space_id = $2
+                       AND rv.from_entity_id = ANY($3::uuid[])
+                       AND NOT EXISTS (SELECT 1 FROM relations r WHERE r.id = rv.relation_id AND r.is_system)
+                     RETURNING rv.*
+                 ), a AS (
+                     INSERT INTO kg_archive.deleted_entity_rows
+                         (source, edit_id, block_number, edit_created_at, space_id, entity_id, closed_to_key, row_data)
+                     SELECT 'relation_versions', $4, $5, $6, u.space_id, u.from_entity_id, $1, to_jsonb(u) FROM u
+                     RETURNING 1
+                 ) SELECT count(*) FROM a",
+            )
+            .bind(version_key)
+            .bind(space_id)
+            .bind(entity_ids)
+            .bind(edit.edit_id)
+            .bind(edit.block_number)
+            .bind(edit.created_at),
+            tx,
+        )
+        .await?;
+        Ok(report)
     }
 
     pub async fn insert_spaces(
@@ -2288,5 +2603,24 @@ mod statement_budget_tests {
     fn budget_is_applied_with_set_local_never_a_session_set() {
         let sql = set_local_statement_timeout_sql(300_000);
         assert_eq!(sql, "SET LOCAL statement_timeout = 300000");
+    }
+}
+
+#[cfg(test)]
+mod apply_delete_entity_flag_tests {
+    use super::*;
+
+    #[test]
+    fn off_unless_explicitly_on() {
+        assert!(!apply_delete_entity_from(None), "unset is off");
+        for off in ["", "0", "false", "off", "no", "ture", "2", "enabled"] {
+            assert!(
+                !apply_delete_entity_from(Some(off)),
+                "{off:?} must stay off"
+            );
+        }
+        for on in ["1", "true", "TRUE", " on ", "Yes"] {
+            assert!(apply_delete_entity_from(Some(on)), "{on:?} must turn it on");
+        }
     }
 }
