@@ -119,7 +119,7 @@ impl PollCursorShadow {
     }
 
     /// Reads `name` from geo-db and counts it against what Postgres answered. Never fails the caller.
-    pub async fn observe(&self, name: &str, pg: Option<(DateTime<Utc>, i64)>) {
+    pub async fn observe(&self, name: &str, pg: Option<(DateTime<Utc>, i64)>) -> Option<Outcome> {
         let key = mirror_key(name).into_bytes();
         match self.reader.get_many(self.collection, &[key]).await {
             Ok(got) => {
@@ -140,13 +140,37 @@ impl PollCursorShadow {
                         "geo-db poll cursor differs from Postgres"
                     );
                 }
+                Some(outcome)
             }
             Err(e) => {
                 metrics::counter!(TOTAL, "result" => "failed").increment(1);
                 warn!(event = "geodb_poll_cursor_shadow.read_failed", cursor = name, error = %e, "shadow read failed");
+                None
             }
         }
     }
+}
+
+/// Observes a fixed startup poll cursor (such as `proposal_rejected_floor`) against geo-db and,
+/// when the shadow reports `missing_in_geodb` with the cursor mirror enabled, backfills it once
+/// into collection 10 so subsequent restarts match from the first read. Never fails the caller.
+pub async fn observe_and_backfill(
+    name: &str,
+    pg: (DateTime<Utc>, i64),
+    shadow: Option<&PollCursorShadow>,
+    mirror: Option<&geodb_cursor::CursorMirror>,
+) -> Option<Outcome> {
+    let outcome = shadow?.observe(name, Some(pg)).await;
+    if let (Some(Outcome::MissingInGeodb), Some(mirror)) = (outcome, mirror) {
+        let (cursor, block) = mirror_parts(pg.0, pg.1);
+        info!(
+            event = "geodb_poll_cursor_shadow.backfill_mirror",
+            cursor = name,
+            "backfilling missing poll cursor into geo-db from Postgres"
+        );
+        mirror.mirror(&mirror_key(name), &cursor, block).await;
+    }
+    outcome
 }
 
 #[cfg(test)]
@@ -265,11 +289,167 @@ mod tests {
     #[tokio::test]
     async fn a_dead_pipe_is_swallowed() {
         let shadow = fake("exit 1");
-        shadow
-            .observe(
-                "entity_votes_threshold",
-                Some((ts("2026-01-01T00:00:00Z"), 1)),
-            )
-            .await;
+        assert_eq!(
+            shadow
+                .observe(
+                    "entity_votes_threshold",
+                    Some((ts("2026-01-01T00:00:00Z"), 1)),
+                )
+                .await,
+            None
+        );
+    }
+
+    fn fake_store_pair(dir: &std::path::Path) -> (PollCursorShadow, geodb_cursor::CursorMirror) {
+        let val_file = dir.join("value.hex");
+        let puts_log = dir.join("puts.log");
+        let script = format!(
+            r#"echo ready
+while IFS=$(printf '\t') read -r cmd col a b c d; do
+  case "$cmd" in
+    put)
+      printf '%s\t%s\t%s\n' "$col" "$c" "$d" >> '{}'
+      printf '%s' "${{d#hex:}}" > '{}'
+      printf '+10\napplied: 1'
+      ;;
+    get)
+      if [ -f '{}' ]; then
+        v=$(cat '{}')
+        body="00000000000000000000000000000000$(printf '\t')0$(printf '\t')$v"
+        printf '+%d\n%s' "${{#body}}" "$body"
+      else
+        printf '+4\nnone'
+      fi
+      ;;
+  esac
+done"#,
+            puts_log.display(),
+            val_file.display(),
+            val_file.display(),
+            val_file.display(),
+        );
+        let cfg = Config {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            collection: 10,
+            timeout: Duration::from_millis(1500),
+            cooldown: Duration::from_secs(60),
+        };
+        let shadow = PollCursorShadow::new(DerivedReader::new(cfg.clone()), 10);
+        let mirror = geodb_cursor::CursorMirror::new(cfg);
+        (shadow, mirror)
+    }
+
+    #[tokio::test]
+    async fn missing_rejection_floor_is_backfilled_once_so_restarts_match() {
+        let dir =
+            std::env::temp_dir().join(format!("poll-shadow-backfill-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let puts_log = dir.join("puts.log");
+        let (shadow, mirror) = fake_store_pair(&dir);
+        let pg = (ts("2026-11-10T08:00:00Z"), 0);
+
+        // First startup read: Postgres has proposal_rejected_floor, geo-db does not.
+        let first = observe_and_backfill(
+            crate::storage::REJECTION_FLOOR_CURSOR,
+            pg,
+            Some(&shadow),
+            Some(&mirror),
+        )
+        .await;
+        assert_eq!(first, Some(Outcome::MissingInGeodb));
+
+        // The mirror wrote the cursor once into collection 10.
+        let puts = std::fs::read_to_string(&puts_log).unwrap_or_default();
+        let put_lines: Vec<&str> = puts.lines().collect();
+        let expected_hex: String = "0:2026-11-10T08:00:00.000000Z"
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            put_lines,
+            vec![format!(
+                "10\tnotification_poll:proposal_rejected_floor\thex:{expected_hex}"
+            )]
+        );
+
+        // Subsequent restart: geo-db now matches on the first read and does not mirror again.
+        let second = observe_and_backfill(
+            crate::storage::REJECTION_FLOOR_CURSOR,
+            pg,
+            Some(&shadow),
+            Some(&mirror),
+        )
+        .await;
+        assert_eq!(second, Some(Outcome::Match));
+        let puts_after = std::fs::read_to_string(&puts_log).unwrap_or_default();
+        assert_eq!(puts_after.lines().count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn backfill_is_skipped_when_mirror_is_off_or_geodb_differs() {
+        let dir = std::env::temp_dir().join(format!("poll-shadow-skip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let puts_log = dir.join("puts.log");
+        let val_file = dir.join("value.hex");
+        let (shadow, mirror) = fake_store_pair(&dir);
+        let pg = (ts("2026-11-10T08:00:00Z"), 0);
+
+        // Mirror off: MissingInGeodb is reported, nothing is written.
+        let off = observe_and_backfill(
+            crate::storage::REJECTION_FLOOR_CURSOR,
+            pg,
+            Some(&shadow),
+            None,
+        )
+        .await;
+        assert_eq!(off, Some(Outcome::MissingInGeodb));
+        assert!(!puts_log.exists());
+
+        // Seed a different value in geo-db: Outcome::Differs must NOT overwrite geo-db.
+        let other_hex: String = "0:2026-11-09T00:00:00.000000Z"
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        std::fs::write(&val_file, other_hex).unwrap();
+        let differs = observe_and_backfill(
+            crate::storage::REJECTION_FLOOR_CURSOR,
+            pg,
+            Some(&shadow),
+            Some(&mirror),
+        )
+        .await;
+        assert_eq!(differs, Some(Outcome::Differs));
+        assert!(!puts_log.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn backfill_mirror_failure_is_non_fatal() {
+        let dir = std::env::temp_dir().join(format!("poll-shadow-fail-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (shadow, _) = fake_store_pair(&dir);
+        let dead_mirror = geodb_cursor::CursorMirror::new(Config {
+            program: "sh".into(),
+            args: vec!["-c".into(), "exit 1".into()],
+            collection: 10,
+            timeout: Duration::from_millis(1500),
+            cooldown: Duration::from_secs(60),
+        });
+        let pg = (ts("2026-11-10T08:00:00Z"), 0);
+
+        let outcome = observe_and_backfill(
+            crate::storage::REJECTION_FLOOR_CURSOR,
+            pg,
+            Some(&shadow),
+            Some(&dead_mirror),
+        )
+        .await;
+        assert_eq!(outcome, Some(Outcome::MissingInGeodb));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
