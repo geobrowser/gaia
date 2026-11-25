@@ -154,12 +154,19 @@ spec:
         - alert: GeoDbOutboxMirrorBacklogDropped
           # Overflow drops (backlog_dropped) and refused-head expiry (backlog_expired) both lose a
           # unit from the shadow. Same counter shape as the alerts above: the second clause catches a
-          # series that first appeared inside the window.
+          # series that first appeared inside the window. Kept as separate metric selectors because
+          # increase() and unless drop __name__, so a regex matching both fails with duplicate
+          # labelsets when both counters exist on the same target.
           expr: |
-            sum(increase({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}[15m])) > 0
+            sum(increase(geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"}[15m])) > 0
             or
-            sum({__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"}
-                unless {__name__=~"geodb_outbox_mirror_backlog_(dropped|expired)_total", namespace="gaia", job="notification-indexer"} offset 15m) > 0
+            sum(geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"}
+                unless geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"} offset 15m) > 0
+            or
+            sum(increase(geodb_outbox_mirror_backlog_expired_total{namespace="gaia", job="notification-indexer"}[15m])) > 0
+            or
+            sum(geodb_outbox_mirror_backlog_expired_total{namespace="gaia", job="notification-indexer"}
+                unless geodb_outbox_mirror_backlog_expired_total{namespace="gaia", job="notification-indexer"} offset 15m) > 0
           labels:
             severity: warning
             service: notification-indexer
