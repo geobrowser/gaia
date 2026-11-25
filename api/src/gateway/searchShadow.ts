@@ -106,8 +106,8 @@ export const EXCLUDED_TYPES: ReadonlySet<string> = new Set(
 )
 
 /**
- * `hits` without the entities that hold an excluded Type, in order, and at most `limit`. Reads the hits' cards in
- * one read (the `every_space` scope past MAX_LINE_SPACES Spaces). An entity whose card shows no Type is kept.
+ * `hits` without the entities that hold an excluded Type, in order, and at most `limit`. Reads the hits' Type statements alone (no other
+ * property's detached value is read) in one read (the `every_space` scope past MAX_LINE_SPACES Spaces). An entity whose card shows no Type is kept.
  */
 export async function withoutExcludedTypes(
 	readCards: NonNullable<GeoDbCardClient["readCards"]>,
@@ -119,7 +119,7 @@ export async function withoutExcludedTypes(
 	if (hits.length === 0) return []
 	// Past one line's Spaces the search ran in every Space, so the cards are read in the `every_space` scope (one read,
 	// not two lines holding two claims: geo-db DR-177-583).
-	const answer = await readCards({geoSpaceIds: scopeOfSpaces(geoSpaceIds), entityIds: hits})
+	const answer = await readCards({geoSpaceIds: scopeOfSpaces(geoSpaceIds), entityIds: hits, property: TYPES_PROPERTY})
 	const excluded = new Set<string>()
 	for (const row of answer)
 		if (row.prop === TYPES_PROPERTY && row.entity !== undefined && EXCLUDED_TYPES.has(row.raw))
