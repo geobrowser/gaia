@@ -47,6 +47,8 @@
 #   GeoDbDerivedViewFailures  geodb_derived_view_failures_total rose in the last 15m
 #   GeoDbWorkOpenRowsHigh     geodb_work_open_rows above 80% of geodb_work_open_rows_max for 15m
 #   GeoDbStoreFenced          geodb_store_fenced equals 1 for 1m (critical)
+#   GeoDbStoreFoldRefused     geodb_store_fold_refused_total rose in the last 15m (Phase 1 staging refused
+#                             a commitSerial Branch fold without fencing the store)
 #   GeoDbHostPoolHeadroomLow  geodb_host_pool_priced_peak above 80% of geodb_host_pool_records_max for 15m
 #   GeoDbHostPoolRefused      geodb_host_pool_refused_total rose in the last 15m (an Edit priced past every
 #                             slot of the host pool: owner=identity_table row=none)
@@ -577,6 +579,21 @@ spec:
             summary: geo-db's store has fenced; every write is refused
             description: >-
               geodb_store_fenced is 1. Serve printed one stderr line, "store fenced: <cause>; every write is refused StoreFenced until the store reopens", so read the cause there. Writes stay refused until the store reopens (a serve restart); reads are unaffected.
+
+        - alert: GeoDbStoreFoldRefused
+          expr: |
+            sum(increase(geodb_store_fold_refused_total{namespace="gaia", job="geodb"}[15m])) > 0
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db refused an atomic Branch fold during Phase 1 staging in the last 15m
+            description: >-
+              geodb_store_fold_refused_total rose above 0 (must stay 0). Phase 1 staging rejected a
+              commitSerial Branch fold before any log write or shared mutation, so the store did not fence
+              (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
+              owner-capacity metrics to find why staging refused the fold.
 
     # The pool's peaks are reset-on-window gauges: one point row per scrape shows only that minute. These keep
     # the 5m peak beside it for dashboards and for reading an incident back. Silent while the series are absent.
