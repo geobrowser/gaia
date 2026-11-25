@@ -43,6 +43,7 @@ import {
 	type GeoVersionRow,
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
+	relationGroupsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
 	timeOnlySpaces,
 	typeCountFromGeoDbOutput,
@@ -185,6 +186,14 @@ export type GeoDbCardClient = {
 	 */
 	readRelationCount?(args: RelationCountRequest): Promise<TypeCount>
 	/**
+	 * The distinct from-entities among `fromEntityIds` (1 to `MAX_CARD_IDS`) holding a statement of one relation property, counted
+	 * for each target the statements name (`relations` root, `.args = .{ .type, .from, .group_by = "to", .first }`, geo-db's grouped
+	 * relations form, d69965d241) across the Spaces named, or every Space (`"every"`): one page of at most `first` targets in target
+	 * order, so `first` rows means there may be more. Needs a store from geo-db d69965d241 or later, which an older one refuses
+	 * (`client_failed`, `MalformedRequest`). Absent on a client that cannot do it.
+	 */
+	readRelationGroups?(args: RelationGroupsRequest): Promise<RelationGroup[]>
+	/**
 	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
 	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
 	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
@@ -229,6 +238,24 @@ export type RelationCountRequest = {
 	toEntityId: string
 	timeoutMs?: number
 }
+
+export type RelationGroupsRequest = {
+	/** The Spaces to count in (distinct, 32 hex digits), or `"every"` for the `*` line. */
+	geoSpaceIds: string[] | "every"
+	/** The relation property (its Type, 32 hex digits). */
+	typeId: string
+	/** 1 to `MAX_CARD_IDS` distinct from-entities (32 hex digits). */
+	fromEntityIds: string[]
+	/** Targets a page holds, 1 to `RELATION_GROUPS_FIRST`. */
+	first: number
+	timeoutMs?: number
+}
+
+/** One target of the grouped relations form and the distinct from-entities naming it. */
+export type RelationGroup = {target: string; count: number}
+
+/** The page the grouped relations form is asked for: geo-db's `MAX_TOPK_LIMIT`. A page this full may have more. */
+export const RELATION_GROUPS_FIRST = 4096
 
 /** The sums of a count form's pages: `members` the distinct members meeting the terms, `scanned` the member statements read. */
 export type TypeCount = {members: number; scanned: number; complete: boolean}
@@ -409,6 +436,17 @@ export function relationCountDocument(request: Pick<RelationCountRequest, "typeI
 	return `.{ .version = 1, .select = .{ .n = .{ .field = "relations", .args = .{ .type = "${request.typeId}", .to = "${request.toEntityId}", .count = true } } } }`
 }
 
+/** The geoql document for the grouped relations form: the from-entities (ascending, as the form takes them) counted by target. Ids are 32 hex digits. */
+export function relationGroupsDocument(
+	request: Pick<RelationGroupsRequest, "typeId" | "fromEntityIds" | "first">,
+): string {
+	const from = [...request.fromEntityIds]
+		.sort()
+		.map((id) => `"${id}"`)
+		.join(", ")
+	return `.{ .version = 1, .select = .{ .g = .{ .field = "relations", .args = .{ .type = "${request.typeId}", .from = .{ ${from} }, .group_by = "to", .first = ${request.first} } } } }`
+}
+
 /**
  * Parse a space map file: `{"<gaia space id>": {"geo": "<geo-db space id>", "loaded"?: false}}`. Every key
  * and `geo` must be 32 hex digits (a dashed uuid is accepted and compacted); any other entry makes the
@@ -557,6 +595,8 @@ type Request = {
 	claims?: boolean
 	/** A type scan: the answer is entity ids, one a line. */
 	ids?: boolean
+	/** A grouped relations read: the answer is one row a target, the target and its count. */
+	groups?: boolean
 	/** A type count: the answer is rows of three integers (`members`, `scanned`, `complete`), a page each. */
 	count?: boolean
 	/** A holders read: the answer is the Spaces holding `entityId`, each as a row whose `raw` is the Space. */
@@ -783,32 +823,34 @@ export function createPipeGeoDbClient(
 						? ([versionAtFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
 						: request.versions
 							? (entityVersionRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-							: request.count
-								? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
-								: request.ids
-									? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-									: request.page
-										? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-										: request.holders
-											? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
-													prop: "",
-													raw,
-												}))
-											: request.cards
-												? rowsFromGeoDbOutput(payload, null, {
-														names: request.names,
-														spaces: request.spaces && !request.legacy,
-													})
-												: request.backlinks
-													? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
-															spaces: request.spaces,
-														})
-													: rowsFromGeoDbOutput(payload, request.entityId, {
+							: request.groups
+								? (relationGroupsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+								: request.count
+									? ([typeCountFromGeoDbOutput(payload)] as unknown as GeoCardRow[])
+									: request.ids
+										? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+										: request.page
+											? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+											: request.holders
+												? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({
+														prop: "",
+														raw,
+													}))
+												: request.cards
+													? rowsFromGeoDbOutput(payload, null, {
 															names: request.names,
-															spaces: request.spaces,
-															claims: request.claims,
-															claimCells: request.claims,
+															spaces: request.spaces && !request.legacy,
 														})
+													: request.backlinks
+														? backlinkRowsFromGeoDbOutput(payload, request.entityId, {
+																spaces: request.spaces,
+															})
+														: rowsFromGeoDbOutput(payload, request.entityId, {
+																names: request.names,
+																spaces: request.spaces,
+																claims: request.claims,
+																claimCells: request.claims,
+															})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -895,6 +937,7 @@ export function createPipeGeoDbClient(
 		versionAt = false,
 		versionOfEdit = false,
 		claims = false,
+		groups = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", BACKING_OFF_MESSAGE)).catch(noted)
@@ -916,6 +959,7 @@ export function createPipeGeoDbClient(
 				...(versionAt ? {versionAt} : {}),
 				...(versionOfEdit ? {versionOfEdit} : {}),
 				...(claims ? {claims} : {}),
+				...(groups ? {groups} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -1307,6 +1351,44 @@ export function createPipeGeoDbClient(
 				true,
 			)
 			return rows[0] as unknown as TypeCount
+		},
+		async readRelationGroups({geoSpaceIds, typeId, fromEntityIds, first, timeoutMs}) {
+			if (geoSpaceIds !== "every") {
+				if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+					throw new GeoDbError("bad_request", "1 to 1024 space ids")
+				if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+					throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			}
+			if (!HEX32.test(typeId)) throw new GeoDbError("bad_request", "the relation type must be 32 hex digits")
+			if (
+				fromEntityIds.length === 0 ||
+				fromEntityIds.length > MAX_CARD_IDS ||
+				!fromEntityIds.every((id) => HEX32.test(id)) ||
+				new Set(fromEntityIds).size !== fromEntityIds.length
+			)
+				throw new GeoDbError("bad_request", `1 to ${MAX_CARD_IDS} distinct from entities of 32 hex digits`)
+			if (!Number.isInteger(first) || first < 1 || first > RELATION_GROUPS_FIRST)
+				throw new GeoDbError("bad_request", `a grouped page asks for 1 to ${RELATION_GROUPS_FIRST} targets`)
+			const scope = geoSpaceIds === "every" ? "*" : geoSpaceIds.join(",")
+			return submit(
+				`${scope}\t${relationGroupsDocument({typeId, fromEntityIds, first})}\n`,
+				NO_ENTITY,
+				false,
+				false,
+				false,
+				false,
+				false,
+				timeoutMs,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				false,
+				true,
+			) as unknown as Promise<RelationGroup[]>
 		},
 		readLegacyIds({originalIds, timeoutMs}) {
 			if (

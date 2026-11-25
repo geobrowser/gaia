@@ -78,6 +78,7 @@ import {
 	type UnsupportedReason,
 } from "./metrics"
 import {mismatchPartsOf} from "./mismatchParts"
+import {analyzeRelationFacets, checkRelationFacets} from "./relationFacetsShadow"
 import {analyzeRelationsCount, checkRelationsCount} from "./relationsCountShadow"
 
 export const ENTITIES_FIELD = "entities"
@@ -917,6 +918,23 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 		try {
 			const analysis = analyzePointRead(field, document, classification.operationName, params.variables)
 			if (!analysis.ok && analysis.reason === "count_only" && field === RELATIONS_CONNECTION_FIELD) {
+				// The grouped distinct-count facet: one grouped relations read (relationFacetsShadow.ts).
+				const faceted =
+					deps.relationFacets === true
+						? analyzeRelationFacets(document, classification.operationName, params.variables)
+						: null
+				if (faceted?.ok) {
+					let facetBody: unknown
+					try {
+						facetBody = await response.json()
+					} catch {
+						return
+					}
+					countLight(deps, field, await checkRelationFacets(deps, faceted.plan, facetBody, label), {
+						operationName: classification.operationName,
+					})
+					return
+				}
 				// `totalCount` alone: a target set's summed relations counts or a from entity's card (relationsCountShadow.ts).
 				const counted =
 					deps.relationsCount === true

@@ -5,11 +5,7 @@ import {GeoDbError, RELATION_GROUPS_FIRST, relationGroupsDocument} from "../../g
 import type {EntityShadowDeps} from "../entityShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {createPointReadShadows} from "../pointReadShadows"
-import {
-	analyzeRelationFacets,
-	checkRelationFacets,
-	type RelationFacetsPlan,
-} from "../relationFacetsShadow"
+import {analyzeRelationFacets, checkRelationFacets, type RelationFacetsPlan} from "../relationFacetsShadow"
 
 const SPACE = "0123456789ab4bcd8ef0123456789abc"
 const EDGE = "8f151ba4de204e3c9cb499ddf96f48f1"
@@ -28,7 +24,7 @@ const analyze = (query: string, variables: Record<string, unknown> = {}) =>
 	analyzeRelationFacets(parse(query), null, variables)
 
 describe("the grouped relations document", () => {
-	it("is the `relations` root with `.type`, ascending `.from`, `.group_by = \"to\"` and `.first`", () => {
+	it('is the `relations` root with `.type`, ascending `.from`, `.group_by = "to"` and `.first`', () => {
 		expect(relationGroupsDocument({typeId: EDGE, fromEntityIds: [F2, F1], first: 4096})).toBe(
 			`.{ .version = 1, .select = .{ .g = .{ .field = "relations", .args = .{ .type = "${EDGE}", .from = .{ "${F1}", "${F2}" }, .group_by = "to", .first = 4096 } } } }`,
 		)
@@ -87,13 +83,15 @@ describe("analyzeRelationFacets", () => {
 		expect(analyze(facetQuery(FILTER, "groupedAggregates(groupBy: [TO_ENTITY_ID]) { keys }"))).toEqual(refused)
 		// nodes beside it, a `having`
 		expect(analyze(facetQuery(FILTER, `${FACET} nodes { id }`))).toEqual(refused)
-		expect(analyze(facetQuery(FILTER, FACET.replace("TO_ENTITY_ID])", "TO_ENTITY_ID], having: {})")))).toEqual(refused)
+		expect(analyze(facetQuery(FILTER, FACET.replace("TO_ENTITY_ID])", "TO_ENTITY_ID], having: {})")))).toEqual(
+			refused,
+		)
 		// no Type, no from entities, a target, a nested object, no filter pinning
 		expect(analyze(facetQuery(`{fromEntityId: {in: ["${F1}"]}}`))).toEqual(refused)
 		expect(analyze(facetQuery(`{typeId: {is: "${EDGE}"}}`))).toEqual(refused)
-		expect(analyze(facetQuery(`{typeId: {is: "${EDGE}"}, fromEntityId: {is: "${F1}"}, toEntityId: {is: "${T1}"}}`))).toEqual(
-			refused,
-		)
+		expect(
+			analyze(facetQuery(`{typeId: {is: "${EDGE}"}, fromEntityId: {is: "${F1}"}, toEntityId: {is: "${T1}"}}`)),
+		).toEqual(refused)
 		expect(
 			analyze(
 				facetQuery(
@@ -123,7 +121,9 @@ const deps = (geoDb: Record<string, unknown>, extra: Partial<EntityShadowDeps> =
 	}) as unknown as EntityShadowDeps
 
 const PLAN: RelationFacetsPlan = {
-	roots: [{key: "facets", aggregatesKey: "groupedAggregates", spaceIds: [SPACE], typeId: EDGE, fromEntityIds: [F2, F1]}],
+	roots: [
+		{key: "facets", aggregatesKey: "groupedAggregates", spaceIds: [SPACE], typeId: EDGE, fromEntityIds: [F2, F1]},
+	],
 }
 /** PostGraphile's answer: BigInt counts as strings, the key a dashed uuid. */
 const answer = (rows: [string, string | number][]) => ({
@@ -142,7 +142,17 @@ describe("checkRelationFacets", () => {
 			{target: T2, count: 1},
 		])
 		const d = deps({readRelationGroups: read})
-		expect(await checkRelationFacets(d, PLAN, answer([[T2, "1"], [DASHED_T1, "2"]]), "t")).toMatchObject({
+		expect(
+			await checkRelationFacets(
+				d,
+				PLAN,
+				answer([
+					[T2, "1"],
+					[DASHED_T1, "2"],
+				]),
+				"t",
+			),
+		).toMatchObject({
 			result: "match",
 			uncompared: [],
 		})
@@ -161,12 +171,33 @@ describe("checkRelationFacets", () => {
 			{target: T2, count: 1},
 		])
 		const d = deps({readRelationGroups: read})
-		expect(await checkRelationFacets(d, PLAN, answer([[T1, "3"], [T2, "1"]]), "t")).toMatchObject({
+		expect(
+			await checkRelationFacets(
+				d,
+				PLAN,
+				answer([
+					[T1, "3"],
+					[T2, "1"],
+				]),
+				"t",
+			),
+		).toMatchObject({
 			result: "mismatch",
 			detail: {relationFacets: true, differing: [{root: 0, targets: 1}]},
 		})
 		expect(await checkRelationFacets(d, PLAN, answer([[T1, "2"]]), "t")).toMatchObject({result: "mismatch"})
-		expect(await checkRelationFacets(d, PLAN, answer([[T1, "2"], [T2, "1"], [F1, "1"]]), "t")).toMatchObject({
+		expect(
+			await checkRelationFacets(
+				d,
+				PLAN,
+				answer([
+					[T1, "2"],
+					[T2, "1"],
+					[F1, "1"],
+				]),
+				"t",
+			),
+		).toMatchObject({
 			result: "mismatch",
 		})
 	})
@@ -199,7 +230,14 @@ describe("checkRelationFacets", () => {
 		expect(await checkRelationFacets(deps({readRelationGroups: read}), PLAN, {errors: [{}]}, "t")).toEqual({
 			result: "skip",
 		})
-		expect(await checkRelationFacets(deps({readRelationGroups: read}), PLAN, {data: {facets: {groupedAggregates: [{keys: [T1]}]}}}, "t")).toEqual({
+		expect(
+			await checkRelationFacets(
+				deps({readRelationGroups: read}),
+				PLAN,
+				{data: {facets: {groupedAggregates: [{keys: [T1]}]}}},
+				"t",
+			),
+		).toEqual({
 			result: "skip",
 		})
 		expect(read).not.toHaveBeenCalled()
@@ -207,18 +245,27 @@ describe("checkRelationFacets", () => {
 
 	it("is unmapped_space, no_space and throttled where the read cannot be made", async () => {
 		const read = groups([])
-		const dead: RelationFacetsPlan = {roots: [{...PLAN.roots[0], spaceIds: ["dead"]} as RelationFacetsPlan["roots"][0]]}
+		const dead: RelationFacetsPlan = {
+			roots: [{...PLAN.roots[0], spaceIds: ["dead"]} as RelationFacetsPlan["roots"][0]],
+		}
 		expect(await checkRelationFacets(deps({readRelationGroups: read}), dead, answer([]), "t")).toEqual({
 			result: "unsupported",
 			reason: "unmapped_space",
 		})
-		const everywhere: RelationFacetsPlan = {roots: [{...PLAN.roots[0], spaceIds: null} as RelationFacetsPlan["roots"][0]]}
+		const everywhere: RelationFacetsPlan = {
+			roots: [{...PLAN.roots[0], spaceIds: null} as RelationFacetsPlan["roots"][0]],
+		}
 		expect(await checkRelationFacets(deps({readRelationGroups: read}), everywhere, answer([]), "t")).toEqual({
 			result: "unsupported",
 			reason: "no_space",
 		})
 		expect(
-			await checkRelationFacets(deps({readRelationGroups: read}, {budget: {tryAcquire: () => false}} as never), PLAN, answer([]), "t"),
+			await checkRelationFacets(
+				deps({readRelationGroups: read}, {budget: {tryAcquire: () => false}} as never),
+				PLAN,
+				answer([]),
+				"t",
+			),
 		).toEqual({result: "unsupported", reason: "throttled"})
 		expect(read).not.toHaveBeenCalled()
 	})

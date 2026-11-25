@@ -640,6 +640,24 @@ export function typeCountFromGeoDbOutput(output: string): {members: number; scan
 }
 
 /**
+ * `geodb-client pipe` output of the grouped relations form (`.group_by = "to"`, geo-db d69965d241): one row a target, the
+ * target's 32 hex digits and its count of distinct from-entities, then the tool's trailing `1`. No row is an empty page;
+ * a line that is not a target and an integer is an error.
+ */
+export function relationGroupsFromGeoDbOutput(output: string): {target: string; count: number}[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "" && !line.startsWith("# plan") && !line.startsWith("partial:"))
+		.map((line) => {
+			const cells = line.split("\t")
+			const [target, count] = cells
+			if (cells.length !== 3 || !/^[0-9a-f]{32}$/.test(target ?? "") || !/^\d+$/.test(count ?? ""))
+				throw new Error(`a grouped relations row is not a target and a count: ${line.slice(0, 60)}`)
+			return {target: target as string, count: Number(count)}
+		})
+}
+
+/**
  * An instant row's value as nanoseconds since the epoch (`instant:<seconds>.<nanos>`), or null for any other text.
  */
 export function instantNanos(raw: string): bigint | null {
