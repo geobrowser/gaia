@@ -10,7 +10,7 @@
  * geo-db d69965d241), one row a target holding the distinct entities among `.from` that name it, bounded whatever the scope.
  * One read a root, so one a response, never one a target. Each target's count is compared with the facet's.
  *
- * With `GEODB_RELATION_FACETS_SHADOW=on` only (the flag of the facet claims on a card; off by default). It never changes a
+ * With `GEODB_RELATION_GROUPED_FACETS_SHADOW=on` only (independent of `GEODB_RELATION_FACETS_SHADOW`; off by default). It never changes a
  * response. The form takes a Type, 1 to 32 from entities and the grouping by target and nothing else: any other filter (a
  * target, a nested object, a combinator), grouping, aggregate or selection stays `unsupported_selection{count_only}`, as with
  * the flag off. A serve below geo-db d69965d241 refuses the document (`client_failed`, `MalformedRequest`): counted

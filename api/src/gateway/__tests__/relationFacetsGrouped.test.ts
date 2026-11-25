@@ -1,7 +1,9 @@
+import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {relationGroupsFromGeoDbOutput} from "../../geodb/card"
 import {GeoDbError, RELATION_GROUPS_FIRST, relationGroupsDocument} from "../../geodb/client"
+import {readGeoDbCardConfig} from "../../geodb/config"
 import type {EntityShadowDeps} from "../entityShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {createPointReadShadows} from "../pointReadShadows"
@@ -112,7 +114,7 @@ describe("analyzeRelationFacets", () => {
 
 const deps = (geoDb: Record<string, unknown>, extra: Partial<EntityShadowDeps> = {}) =>
 	({
-		relationFacets: true,
+		relationGroupedFacets: true,
 		multiSpace: true,
 		geoDb,
 		geoSpaceOf: async (space: string) => (space === "dead" ? null : `geo${space}`.slice(0, 32)),
@@ -279,17 +281,37 @@ const totals = (field: string, metric = "gaia_api_gateway_shadow_total") =>
 			.map((l) => [l.match(/(?:result|reason)="(\w+)"/)?.[1], Number(l.split(" ").pop())]),
 	)
 
-describe("the relationsConnection shadow with GEODB_RELATION_FACETS_SHADOW", () => {
+describe("the relationsConnection shadow with GEODB_RELATION_GROUPED_FACETS_SHADOW", () => {
 	beforeEach(() => __resetGatewayMetricsForTests())
 	const query = facetQuery(FILTER)
-	const runShadow = async (d: EntityShadowDeps, body: unknown) => {
-		const shadow = createPointReadShadows(d, ["relationsConnection"]).get("relationsConnection")
+	const runShadow = async (
+		d: EntityShadowDeps,
+		body: unknown,
+		q = query,
+		field: "relationsConnection" | "relation" = "relationsConnection",
+	) => {
+		const shadow = createPointReadShadows(d, [field]).get(field)
 		await shadow?.({
-			classification: {operationName: null, operationType: "query", rootFields: ["relationsConnection"]},
-			params: {query, operationName: null, variables: {}},
-			document: parse(query),
+			classification: {operationName: null, operationType: "query", rootFields: [field]},
+			params: {query: q, operationName: null, variables: {}},
+			document: parse(q),
 			response: Response.json(body),
 		})
+	}
+
+	const REL_ID = "cccccccccccc4ccc8ccccccccccccccc"
+	const cardClaimsQuery = `query { relation(id: "${REL_ID}") { id spaceId fromEntityId typeId toEntityId verified } }`
+	const cardClaimsBody = {
+		data: {
+			relation: {
+				id: REL_ID,
+				spaceId: SPACE,
+				fromEntityId: F1,
+				typeId: EDGE,
+				toEntityId: T1,
+				verified: false,
+			},
+		},
 	}
 
 	it("compares the grouped facet when on, one geo-db read", async () => {
@@ -315,9 +337,81 @@ describe("the relationsConnection shadow with GEODB_RELATION_FACETS_SHADOW", () 
 
 	it("stays unsupported_selection{count_only} and reads nothing when off", async () => {
 		const read = vi.fn()
-		await runShadow(deps({readRelationGroups: read}, {relationFacets: false}), answer([[T1, "2"]]))
+		await runShadow(deps({readRelationGroups: read}, {relationGroupedFacets: false}), answer([[T1, "2"]]))
 		expect(totals("relationsConnection")).toEqual({unsupported_selection: 1})
 		expect(totals("relationsConnection", "gaia_api_gateway_shadow_unsupported_total")).toEqual({count_only: 1})
 		expect(read).not.toHaveBeenCalled()
+	})
+
+	it("enables grouped facets without enabling card-claims compare when GEODB_RELATION_FACETS_SHADOW is off", async () => {
+		const readGroups = groups([{target: T1, count: 2}])
+		const readCard = vi.fn(async () => [{prop: EDGE, raw: T1}])
+		const readClaims = vi.fn(async () => [])
+		const d = deps(
+			{readRelationGroups: readGroups, readCard, readRelationClaims: readClaims},
+			{relationGroupedFacets: true, relationFacets: false},
+		)
+		await runShadow(d, answer([[T1, "2"]]))
+		expect(totals("relationsConnection")).toEqual({match: 1})
+		expect(readGroups).toHaveBeenCalledTimes(1)
+
+		await runShadow(d, cardClaimsBody, cardClaimsQuery, "relation")
+		expect(totals("relation")).toEqual({match: 1})
+		expect(readClaims).not.toHaveBeenCalled()
+	})
+
+	it("keeps grouped facets off while enabling card-claims compare when only GEODB_RELATION_FACETS_SHADOW is on", async () => {
+		const readGroups = vi.fn()
+		const readCard = vi.fn(async () => [{prop: EDGE, raw: T1}])
+		const readClaims = vi.fn(async () => [])
+		const d = deps(
+			{readRelationGroups: readGroups, readCard, readRelationClaims: readClaims},
+			{relationGroupedFacets: false, relationFacets: true},
+		)
+		await runShadow(d, answer([[T1, "2"]]))
+		expect(totals("relationsConnection")).toEqual({unsupported_selection: 1})
+		expect(totals("relationsConnection", "gaia_api_gateway_shadow_unsupported_total")).toEqual({count_only: 1})
+		expect(readGroups).not.toHaveBeenCalled()
+
+		await runShadow(d, cardClaimsBody, cardClaimsQuery, "relation")
+		expect(totals("relation")).toEqual({match: 1})
+		expect(readClaims).toHaveBeenCalledTimes(1)
+	})
+
+	it("runs neither grouped facets nor card-claims compare when both flags are off", async () => {
+		const readGroups = vi.fn()
+		const readCard = vi.fn(async () => [{prop: EDGE, raw: T1}])
+		const readClaims = vi.fn(async () => [])
+		const d = deps(
+			{readRelationGroups: readGroups, readCard, readRelationClaims: readClaims},
+			{relationGroupedFacets: false, relationFacets: false},
+		)
+		await runShadow(d, answer([[T1, "2"]]))
+		expect(totals("relationsConnection")).toEqual({unsupported_selection: 1})
+		expect(totals("relationsConnection", "gaia_api_gateway_shadow_unsupported_total")).toEqual({count_only: 1})
+		expect(readGroups).not.toHaveBeenCalled()
+
+		await runShadow(d, cardClaimsBody, cardClaimsQuery, "relation")
+		expect(totals("relation")).toEqual({match: 1})
+		expect(readClaims).not.toHaveBeenCalled()
+	})
+})
+
+describe("GEODB_RELATION_GROUPED_FACETS_SHADOW", () => {
+	it("is off by default, on only for `on`, and independent of GEODB_RELATION_FACETS_SHADOW", () => {
+		expect(readGeoDbCardConfig({}).relationGroupedFacets).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_RELATION_GROUPED_FACETS_SHADOW: "true"}).relationGroupedFacets).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_RELATION_GROUPED_FACETS_SHADOW: " ON "}).relationGroupedFacets).toBe(true)
+		expect(readGeoDbCardConfig({GEODB_RELATION_GROUPED_FACETS_SHADOW: "on"}).relationFacets).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_RELATION_FACETS_SHADOW: "on"}).relationGroupedFacets).toBe(false)
+	})
+
+	it("reaches the point-read shadows' deps in main.ts", () => {
+		const main = readFileSync(new URL("../../../main.ts", import.meta.url), "utf8")
+		const start = main.indexOf("...createPointReadShadows(")
+		expect(start).toBeGreaterThan(0)
+		expect(main.slice(start, start + 1500)).toContain(
+			"relationGroupedFacets: geoDbCardConfig.relationGroupedFacets === true",
+		)
 	})
 })

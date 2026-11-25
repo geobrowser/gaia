@@ -920,7 +920,7 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			if (!analysis.ok && analysis.reason === "count_only" && field === RELATIONS_CONNECTION_FIELD) {
 				// The grouped distinct-count facet: one grouped relations read (relationFacetsShadow.ts).
 				const faceted =
-					deps.relationFacets === true
+					deps.relationGroupedFacets === true
 						? analyzeRelationFacets(document, classification.operationName, params.variables)
 						: null
 				if (faceted?.ok) {

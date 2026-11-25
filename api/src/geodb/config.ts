@@ -108,14 +108,20 @@ export type GeoDbCardConfig = {
 	 */
 	relationsTypeFilter?: boolean
 	/**
-	 * Compare a relation's `toSpaceId` and `verified` (`relation` / `relations` point reads) against the facet claims
-	 * geo-db holds on the relation's statement (docs/api/10 section 5.5). Off by default, and meaningless until the feeder
-	 * writes them (GEODB_RELATION_FACETS on, then a backfill). Also compares a `relationsConnection`'s grouped distinct-count
-	 * facet (`groupedAggregates(groupBy: [TO_ENTITY_ID]) { keys distinctCount { fromEntityId } }`) against geo-db's grouped
-	 * relations form, one read a root (needs a serve of geo-db d69965d241 or later; an older one refuses it, counted
-	 * `count_refused`). GEODB_RELATION_FACETS_SHADOW=on.
+	 * Compare a relation's `toSpaceId`, `verified` and `entityId` (`entity` / `relation` / `relations` point reads)
+	 * against the facet claims geo-db holds on the relation's statement (docs/api/10 section 5.5). Off by default, and
+	 * meaningless until the feeder writes them (GEODB_RELATION_FACETS on, then a backfill).
+	 * GEODB_RELATION_FACETS_SHADOW=on.
 	 */
 	relationFacets?: boolean
+	/**
+	 * Compare a `relationsConnection`'s grouped distinct-count facet
+	 * (`groupedAggregates(groupBy: [TO_ENTITY_ID]) { keys distinctCount { fromEntityId } }`) against geo-db's grouped
+	 * relations form, one read a root (needs a serve of geo-db d69965d241 or later; an older one refuses it, counted
+	 * `count_refused`). Independent of `GEODB_RELATION_FACETS_SHADOW`. Off by default.
+	 * GEODB_RELATION_GROUPED_FACETS_SHADOW=on.
+	 */
+	relationGroupedFacets?: boolean
 	/**
 	 * Compare the `valuesList` a relations list selects on each `toEntity` against geo-db's cards of those targets, read
 	 * together (`.args.ids`; needs a serve of geo-db 8df213cbac or later). Off by default. GEODB_NESTED_TARGET_VALUES_SHADOW=on.
@@ -206,6 +212,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		relationsCount: env.GEODB_RELATIONS_COUNT_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		relationFacets: env.GEODB_RELATION_FACETS_SHADOW?.trim().toLowerCase() === "on",
+		relationGroupedFacets: env.GEODB_RELATION_GROUPED_FACETS_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceHolders: env.GEODB_CROSS_SPACE_HOLDERS_SHADOW?.trim().toLowerCase() === "on",

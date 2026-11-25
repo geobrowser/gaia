@@ -1432,6 +1432,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	relationsTypeFilter?: boolean
 	/** Compare a relation's `toSpaceId` / `verified` against geo-db's facet claims in the `relation` / `relations` point reads (`GEODB_RELATION_FACETS_SHADOW`). */
 	relationFacets?: boolean
+	/** Compare a `relationsConnection` grouped distinct-count facet against geo-db's grouped relations form (`GEODB_RELATION_GROUPED_FACETS_SHADOW`; relationFacetsShadow.ts). */
+	relationGroupedFacets?: boolean
 	/** Settle a nested name geo-db prints as none (named in a Space outside the read) from its Name in every Space (`GEODB_CROSS_SPACE_NAMES_SHADOW`). */
 	crossSpaceNames?: boolean
 	/** Re-judge a `cross_space` comparison against the card read across every Space the entity lives in (`GEODB_CROSS_SPACE_HOLDERS_SHADOW`; `widenCrossSpace`). */

@@ -399,6 +399,11 @@ spec:
             # reads). Off until the feeder writes them (GEODB_RELATION_FACETS) and a backfill has run.
             - name: GEODB_RELATION_FACETS_SHADOW
               value: "off"
+            # Shadow `relationsConnection` grouped distinct-count facets (`groupedAggregates(groupBy: [TO_ENTITY_ID])`)
+            # against geo-db's grouped relations form (#1749). Independent of GEODB_RELATION_FACETS_SHADOW (card-claims
+            # compare). Shadow only; off by default.
+            - name: GEODB_RELATION_GROUPED_FACETS_SHADOW
+              value: "off"
             # Accept the Postgres vote-score fields, counted `derived_fields`, uncompared (#1151).
             - name: GEODB_DERIVED_FIELDS_SHADOW
               value: "on"
