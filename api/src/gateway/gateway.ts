@@ -32,8 +32,8 @@ export type ShadowContext = {
 
 /** Compares geo-db's answer with PostGraphile's for one field. Must settle without throwing; the gateway ignores it. */
 export type FieldShadow = ((context: ShadowContext) => Promise<void>) & {
-	/** Other root fields the shadow tolerates beside its own (it records them as uncompared). */
-	tolerates?: readonly string[]
+	/** Other root fields the shadow tolerates beside its own (it records them as uncompared), or `"*"` for any. */
+	tolerates?: readonly string[] | "*"
 }
 
 /**
@@ -203,8 +203,10 @@ function scheduleShadow<Ctx>(
 		const field = classification.rootFields.find((name) => {
 			const candidate = shadows.get(name)
 			if (!candidate || fieldModeOf(deps.config, name, deps.readSourceSwitch) !== "shadow") return false
-			const tolerated = candidate.tolerates ?? []
-			return classification.rootFields.every((other) => other === name || tolerated.includes(other))
+			const tolerated = candidate.tolerates
+			if (tolerated === "*") return true
+			const list = tolerated ?? []
+			return classification.rootFields.every((other) => other === name || list.includes(other))
 		})
 		const shadow = field === undefined ? undefined : shadows.get(field)
 		if (field === undefined || !shadow) return

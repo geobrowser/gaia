@@ -19,10 +19,12 @@ import type {FieldShadow} from "./gateway"
 import {
 	analyzeCountOnly,
 	analyzeLightEntities,
+	analyzeLightEntitiesConnection,
 	noteUnsupported,
 	ORDERED_CONNECTION_ROOT,
 	ORDERED_ROOT,
 	runLight,
+	runLightEntitiesMulti,
 } from "./lightShadow"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
 
@@ -61,21 +63,19 @@ function createLightListShadow(
 ): FieldShadow {
 	activateGatewayMetrics(field)
 	const label = `gateway ${field} shadow`
+	const isEntitiesConnection = mode.connection === true && !mode.ordered
 	const shadow: FieldShadow = async ({params, document, classification, response}) => {
 		try {
-			const analysis = analyzeLightEntities(document, classification.operationName, params.variables, {
+			const opts = {
 				...mode,
 				entitiesBatch: deps.entitiesBatch === true,
 				relationsTypeFilter: deps.relationsTypeFilter === true,
 				derivedFields: deps.derivedFields === true,
-			})
-			if (
-				!analysis.ok &&
-				analysis.reason === "count_only" &&
-				mode.connection &&
-				!mode.ordered &&
-				deps.countOnly === true
-			) {
+			}
+			const analysis = isEntitiesConnection
+				? analyzeLightEntitiesConnection(document, classification.operationName, params.variables, opts)
+				: analyzeLightEntities(document, classification.operationName, params.variables, opts)
+			if (!analysis.ok && analysis.reason === "count_only" && isEntitiesConnection && deps.countOnly === true) {
 				const counted = analyzeCountOnly(document, classification.operationName, params.variables)
 				if (counted.ok) {
 					let countBody: unknown
@@ -102,7 +102,11 @@ function createLightListShadow(
 			} catch {
 				return
 			}
-			countLight(deps, field, await runLight(deps, analysis.plan, body, label), {
+			const outcome =
+				"plans" in analysis.plan
+					? await runLightEntitiesMulti(deps, analysis.plan, body, label)
+					: await runLight(deps, analysis.plan, body, label)
+			countLight(deps, field, outcome, {
 				operationName: classification.operationName,
 			})
 		} catch (error) {
@@ -113,7 +117,7 @@ function createLightListShadow(
 			} catch {}
 		}
 	}
-	// A `metas` cursor sentinel beside `entitiesConnection` is tolerated (counted `metas_cursor`).
-	if (mode.connection && !mode.ordered) shadow.tolerates = ["metas"]
+	// Multi-root documents holding `entitiesConnection` (beside `metas` or any other root field) are shadowed independently.
+	if (isEntitiesConnection) shadow.tolerates = "*"
 	return shadow
 }
