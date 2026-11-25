@@ -2509,6 +2509,13 @@ What not to do:
   remove that partition's key (or the file), and scale back to 1. A hold freezes the row's block, not the feeder.
   Dead letters from before this existed are not held: edit 742e60d9 (partition 0, block 120865, 2026-11-12) needs
   `{"0": 120864}` written into the file (`kubectl exec`) before the image with holds rolls out, or the row stays past it.
+- Gateway shadow `result="refused_busy"` (`gaia_api_gateway_shadow_total{field="search"}`): a geo-db that carries
+  `e163cb72a9` bounds every-Space typeahead to half its worker pool and refuses the excess `ResourceExhausted` at once,
+  before any read; `geodb-client search` prints `refused: ResourceExhausted ResourceExhausted`. The search shadow counts
+  exactly that line as `refused_busy`, not `failed`, so `failed` stays the health signal of the read itself. It is a
+  load signal (how often the share is taken), not a read failure; the warn line "refused by geo-db: its every-Space
+  typeahead share is taken" carries it. Any other `ResourceExhausted` (one that names `opening` or a `claim`, or a
+  bound's figures) and any other `client_failed` still count `failed`. Only the search shadow emits the label today.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
   `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
 

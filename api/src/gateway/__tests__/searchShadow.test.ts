@@ -350,6 +350,42 @@ describe("search shadow", () => {
 		expect(JSON.stringify(fields)).not.toContain("\u{1F600}")
 	})
 
+	// The text `geodb-client search` prints for the every-Space typeahead share's refusal (geo-db e163cb72a9: the serve
+	// answers `frameNamed("ResourceExhausted")`, category and code both ResourceExhausted, no diagnostics, and the
+	// client prints `refused: <category> <code>`).
+	const BUSY = "refused: ResourceExhausted ResourceExhausted"
+
+	it("counts the every-Space typeahead share's ResourceExhausted refusal under refused_busy, not failed", async () => {
+		const {shadows, log} = setup(new GeoDbError("client_failed", BUSY))
+		const noSpace = SEARCH.replace("spaceId: $spaceId, ", "")
+		await run(shadows, "search", noSpace, {data: {search: []}})
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=refused_busy": 1})
+		expect(metric("gaia_api_gateway_shadow_failed_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_search_failed_total")).toEqual({})
+		expect(log.warn).toHaveBeenCalledTimes(1)
+		const [message, fields] = log.warn.mock.calls[0] as unknown as [string, Record<string, unknown>]
+		expect(message).toContain("refused")
+		expect(fields).toMatchObject({reason: "refused_busy"})
+	})
+
+	it("keeps every other ResourceExhausted refusal, and any other client_failed, as failed", async () => {
+		const messages = [
+			"refused: ResourceExhausted ResourceExhausted opening",
+			"refused: ResourceExhausted ResourceExhausted claim derived",
+			"refused: ResourceExhausted - ",
+			"refused: ResourceExhausted ResourceExhausted asked 5000 bound 4096",
+			"spawn ENOENT",
+		]
+		for (const message of messages) {
+			const {shadows} = setup(new GeoDbError("client_failed", message))
+			await run(shadows, "search", SEARCH, {data: {search: []}})
+		}
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=failed": messages.length})
+		expect(metric("gaia_api_gateway_shadow_search_failed_total")).toEqual({
+			"field=search,reason=client_failed": messages.length,
+		})
+	})
+
 	it("keeps another client_failed, and a refusal that is not DefiniteRefusal, as failed", async () => {
 		for (const message of ["spawn ENOENT", "refused: invalid_argument bad_request"]) {
 			const {shadows} = setup(new GeoDbError("client_failed", message))

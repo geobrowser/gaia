@@ -43,6 +43,7 @@ import {noteReadFailure} from "../geodb/failReason"
 import {
 	type GeoDbSearchClient,
 	type GeoDbSearchMode,
+	lexicalBusyRefusal,
 	lexicalDefiniteRefusal,
 	MAX_EVERY_SPACE_SEARCH,
 	MAX_LISTED_SPACES,
@@ -333,6 +334,15 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 						spaceId: plan.spaceId,
 						reason: "definite_refusal",
 						queryLength: [...plan.query].length,
+						error: String(error),
+					})
+					return
+				}
+				if (lexicalBusyRefusal(error)) {
+					recordGatewayShadow(field, "refused_busy")
+					deps.log.warn(`${label} refused by geo-db: its every-Space typeahead share is taken`, {
+						spaceId: plan.spaceId,
+						reason: "refused_busy",
 						error: String(error),
 					})
 					return
