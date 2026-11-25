@@ -64,6 +64,7 @@ GEODB_RANKING_SCORES_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout 
 GEODB_RANK_TYPED_SHADOW_BURST  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_RANK_TYPED_SHADOW_PER_SECOND  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
 GEODB_RANK_TYPED_SHADOW_SAMPLE  tuning knob (interval, sample, cap, timeout or budget), code default is the intended value
+GEODB_RELATIONS_COUNT_SHADOW  shadow or mirror switch, off when unset by design (needs a pin with the relations count form)
 GEODB_REPLAY_PAIRS  shadow or mirror switch, off when unset by design
 GEODB_REPO  test-only variable, no workload reads it
 GEODB_SCORES_SERVE  serve flags default off by design (unset = Postgres/current source)
