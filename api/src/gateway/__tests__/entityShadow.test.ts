@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {RELATION_FACET_PROPERTIES, rowsFromGeoDbOutput} from "../../geodb/card"
@@ -503,5 +504,300 @@ describe("gateway wiring", () => {
 		})(request(), {})
 		await settle()
 		expect(shadow).not.toHaveBeenCalled()
+	})
+})
+
+describe("entity shadow: live relationsList, selection, and multi-root shapes", () => {
+	const ENTITY_B = "173ff16b-e7fe-4591-a984-c325d629d92d"
+	const ENTITY_B_HEX = "173ff16be7fe4591a984c325d629d92d"
+	const TARGET_A = "7ed45f2b-c48b-419e-8e46-64d5ff680b0d"
+	const TARGET_A_HEX = "7ed45f2bc48b419e8e4664d5ff680b0d"
+	const TARGET_B = "8ed45f2b-c48b-419e-8e46-64d5ff680b0d"
+	const TARGET_B_HEX = "8ed45f2bc48b419e8e4664d5ff680b0d"
+	const REL_TYPE = "9f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+	const REL_TYPE_HEX = "9f151ba4de204e3c9cb499ddf96f48f1"
+	const COVER_TYPE = "af151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+	const COVER_TYPE_HEX = "af151ba4de204e3c9cb499ddf96f48f1"
+	const TAGLINE_PROP = "bf151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+	const TAGLINE_PROP_HEX = "bf151ba4de204e3c9cb499ddf96f48f1"
+	const DESC_PROP = "9b1f76ff-9711-404c-861e-59dc3fa7d037"
+	const DESC_PROP_HEX = "9b1f76ff9711404c861e59dc3fa7d037"
+	const SPACE_HEX = SPACE.replaceAll("-", "")
+
+	const unsupportedCounts = () =>
+		Object.fromEntries(
+			renderGatewayMetrics()
+				.split("\n")
+				.filter(
+					(l) =>
+						l.startsWith('gaia_api_gateway_shadow_unsupported_total{field="entity"') && !l.endsWith(" 0"),
+				)
+				.map((l) => [l.match(/reason="(\w+)"/)?.[1], Number(l.split(" ").pop())]),
+		)
+
+	function multiSetup(
+		cards: Record<string, string>,
+		extra: {everySpace?: boolean; relationsTypeFilter?: boolean} = {},
+	) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const readCard = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
+			rowsFromGeoDbOutput(cards[entityId] ?? "", entityId, {names: true}),
+		)
+		const readCardSpaces = vi.fn(async ({entityId}: {geoSpaceIds: string[] | "every"; entityId: string}) =>
+			rowsFromGeoDbOutput(cards[entityId] ?? "", entityId, {names: true}).map((r) => ({...r, space: GEO_SPACE})),
+		)
+		const shadow = createEntityShadow({
+			geoDb: {readCard, readCardSpaces},
+			geoSpaceOf: async (space) => (space === SPACE_HEX ? GEO_SPACE : null),
+			multiSpace: true,
+			relationsTypeFilter: extra.relationsTypeFilter ?? true,
+			...(extra.everySpace ? {allGeoSpaces: async () => [GEO_SPACE]} : {}),
+			log,
+		})
+		return {shadow, readCard, readCardSpaces, log}
+	}
+
+	const invoke = (
+		shadow: ReturnType<typeof multiSetup>["shadow"],
+		query: string,
+		body: unknown,
+		vars: Record<string, unknown> = {},
+		operationName: string | null = null,
+	) =>
+		shadow({
+			classification: {operationName, operationType: "query", rootFields: ["entity"]},
+			params: {query, operationName, variables: vars},
+			document: parse(query),
+			response: Response.json(body),
+		})
+
+	it("main.ts wires GEODB_RELATIONS_TYPE_FILTER_SHADOW into createEntityShadow", () => {
+		const main = readFileSync(new URL("../../../main.ts", import.meta.url), "utf8")
+		const start = main.indexOf("createEntityShadow({")
+		expect(start).toBeGreaterThan(0)
+		const block = main.slice(start, main.indexOf("createPointReadShadows(", start))
+		expect(block).toContain("relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true")
+	})
+
+	it("shadows the live DebateTranscriptClaims shape (args=id;sel=relationsList with typeId + spaceId filter)", async () => {
+		const query = `query DebateTranscriptClaims(
+			$id: UUID!, $transcriptsPropertyId: UUID!, $blocksPropertyId: UUID!, $spaceId: UUID!, $first: Int
+		) {
+			entity(id: $id) {
+				transcripts: relationsList(
+					first: $first
+					filter: {typeId: {is: $transcriptsPropertyId}, spaceId: {is: $spaceId}}
+				) {
+					position
+					toEntity {
+						id
+						blocks: relationsList(
+							first: $first
+							filter: {typeId: {is: $blocksPropertyId}, spaceId: {is: $spaceId}}
+						) { position toEntity { id } }
+					}
+				}
+			}
+		}`
+		const vars = {
+			id: ENTITY,
+			transcriptsPropertyId: REL_TYPE,
+			blocksPropertyId: COVER_TYPE,
+			spaceId: SPACE,
+			first: 100,
+		}
+		const body = {data: {entity: {transcripts: [{position: "a", toEntity: {id: TARGET_A, blocks: []}}]}}}
+		const ok = multiSetup(
+			{[ENTITY_HEX]: `${REL_TYPE_HEX}\t${TARGET_A_HEX}\ts1\t${ENTITY_HEX}\t-\t-\t1\n`},
+			{everySpace: true},
+		)
+		await invoke(ok.shadow, query, body, vars, "DebateTranscriptClaims")
+		expect(counts()).toEqual({match: 1})
+
+		__resetGatewayMetricsForTests()
+		const bad = multiSetup({[ENTITY_HEX]: ""}, {everySpace: true})
+		await invoke(bad.shadow, query, body, vars, "DebateTranscriptClaims")
+		expect(counts()).toEqual({mismatch: 1})
+	})
+
+	it("shadows the live ParticipantByline-style typed valuesList + relationsList shape using row spaceId without everySpace", async () => {
+		const query = `{
+			p0: entity(id: "${ENTITY}") {
+				tagline: valuesList(first: 1, filter: {propertyId: {is: "${TAGLINE_PROP}"}, spaceId: {is: "${SPACE}"}}) { text }
+				employment: relationsList(first: 200, filter: {typeId: {is: "${REL_TYPE}"}, spaceId: {is: "${SPACE}"}}) {
+					id entityId spaceId
+					toEntity { id name }
+					entity { valuesList(first: 200, filter: {spaceId: {is: "${SPACE}"}}) { property { id } text } }
+				}
+			}
+		}`
+		const body = {
+			data: {
+				p0: {
+					tagline: [{text: "Mathematician"}],
+					employment: [
+						{
+							id: "r1",
+							entityId: ENTITY,
+							spaceId: SPACE,
+							toEntity: {id: TARGET_A, name: "Engine"},
+							entity: {valuesList: []},
+						},
+					],
+				},
+			},
+		}
+		const card = [
+			`${TAGLINE_PROP_HEX}\tMathematician\ts1\t${ENTITY_HEX}\t-\t-\t1`,
+			`${REL_TYPE_HEX}\t${TARGET_A_HEX}\ts2\t${ENTITY_HEX}\t-\tEngine\t1`,
+			"",
+		].join("\n")
+		// No allGeoSpaces: must resolve the Space from employment's typeless row spaceId.
+		const {shadow, readCard} = multiSetup({[ENTITY_HEX]: card}, {everySpace: false})
+		await invoke(shadow, query, body)
+		expect(counts()).toEqual({match: 1})
+		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, entityId: ENTITY_HEX, names: true})
+	})
+
+	it("shadows the live selection shape with typeOnly relationsList and valuesList(propertyId: {in: []})", async () => {
+		const query = `{
+			entity(id: "${ENTITY}") {
+				id name typeIds
+				relationsList(filter: {typeId: {is: "${REL_TYPE}"}}, first: 1) {
+					toEntity { valuesList(filter: {propertyId: {is: "${TAGLINE_PROP}"}}) { text } }
+				}
+				description
+				valuesList(filter: {propertyId: {in: []}}) { propertyId spaceId text }
+				cover: relationsList(filter: {typeId: {is: "${COVER_TYPE}"}}, first: 1) {
+					toEntity { valuesList(filter: {propertyId: {is: "${TAGLINE_PROP}"}}) { text } }
+				}
+			}
+		}`
+		const body = {
+			data: {
+				entity: {
+					id: ENTITY,
+					name: "Ada",
+					typeIds: [PERSON],
+					relationsList: [{toEntity: {valuesList: [{text: "x"}]}}],
+					description: "Pioneer",
+					valuesList: [],
+					cover: [{toEntity: {valuesList: [{text: "y"}]}}],
+				},
+			},
+		}
+		const card = [
+			`${NAME}\tAda\ts1\t${ENTITY_HEX}\t-\t-\t1`,
+			`${DESC_PROP_HEX}\tPioneer\ts2\t${ENTITY_HEX}\t-\t-\t1`,
+			`${TYPES}\t${PERSON}\ts3\t${ENTITY_HEX}\t-\t-\t1`,
+			`${REL_TYPE_HEX}\t${TARGET_A_HEX}\ts4\t${ENTITY_HEX}\t-\t-\t1`,
+			`${COVER_TYPE_HEX}\t${TARGET_B_HEX}\ts5\t${ENTITY_HEX}\t-\t-\t1`,
+			"",
+		].join("\n")
+		const {shadow} = multiSetup({[ENTITY_HEX]: card}, {everySpace: true})
+		await invoke(shadow, query, body)
+		expect(counts()).toEqual({match: 1})
+	})
+
+	it("shadows multiple aliased entity roots in one document (match and mismatch)", async () => {
+		const query = `{
+			p0: entity(id: "${ENTITY}") {
+				tagline: valuesList(first: 1, filter: {propertyId: {is: "${TAGLINE_PROP}"}, spaceId: {is: "${SPACE}"}}) { text }
+				employment: relationsList(first: 200, filter: {typeId: {is: "${REL_TYPE}"}, spaceId: {is: "${SPACE}"}}) {
+					spaceId toEntity { id }
+				}
+			}
+			p1: entity(id: "${ENTITY_B}") {
+				tagline: valuesList(first: 1, filter: {propertyId: {is: "${TAGLINE_PROP}"}, spaceId: {is: "${SPACE}"}}) { text }
+				employment: relationsList(first: 200, filter: {typeId: {is: "${REL_TYPE}"}, spaceId: {is: "${SPACE}"}}) {
+					spaceId toEntity { id }
+				}
+			}
+		}`
+		const body = {
+			data: {
+				p0: {tagline: [{text: "Ada"}], employment: [{spaceId: SPACE, toEntity: {id: TARGET_A}}]},
+				p1: {tagline: [{text: "Charles"}], employment: [{spaceId: SPACE, toEntity: {id: TARGET_B}}]},
+			},
+		}
+		const cardA = `${TAGLINE_PROP_HEX}\tAda\ts1\t${ENTITY_HEX}\t-\t-\t1\n${REL_TYPE_HEX}\t${TARGET_A_HEX}\ts2\t${ENTITY_HEX}\t-\t-\t1\n`
+		const cardB = `${TAGLINE_PROP_HEX}\tCharles\ts3\t${ENTITY_B_HEX}\t-\t-\t1\n${REL_TYPE_HEX}\t${TARGET_B_HEX}\ts4\t${ENTITY_B_HEX}\t-\t-\t1\n`
+
+		const ok = multiSetup({[ENTITY_HEX]: cardA, [ENTITY_B_HEX]: cardB})
+		await invoke(ok.shadow, query, body)
+		expect(counts()).toEqual({match: 1})
+
+		__resetGatewayMetricsForTests()
+		const bad = multiSetup({
+			[ENTITY_HEX]: cardA,
+			[ENTITY_B_HEX]: `${TAGLINE_PROP_HEX}\tWrong\ts3\t${ENTITY_B_HEX}\t-\t-\t1\n`,
+		})
+		await invoke(bad.shadow, query, body)
+		expect(counts()).toEqual({mismatch: 1})
+		expect(bad.log.warn).toHaveBeenCalledWith(
+			"gateway entity shadow mismatch (light)",
+			expect.objectContaining({firstKey: "p1", mismatches: 1}),
+		)
+	})
+
+	it("shadows multi-root entity operations via root fragments", async () => {
+		const query = `
+			query { ...Batch }
+			fragment Batch on Query {
+				a: entity(id: "${ENTITY}") { id name spaceIds }
+				b: entity(id: "${ENTITY_B}") { id name spaceIds }
+			}`
+		const body = {
+			data: {
+				a: {id: ENTITY, name: "Ada", spaceIds: [SPACE]},
+				b: {id: ENTITY_B, name: "Charles", spaceIds: [SPACE]},
+			},
+		}
+		const {shadow} = multiSetup({
+			[ENTITY_HEX]: `${NAME}\tAda\ts1\t${ENTITY_HEX}\t-\t-\t1\n`,
+			[ENTITY_B_HEX]: `${NAME}\tCharles\ts2\t${ENTITY_B_HEX}\t-\t-\t1\n`,
+		})
+		await invoke(shadow, query, body)
+		expect(counts()).toEqual({match: 1})
+	})
+
+	it("tolerates arbitrary sibling roots via tolerates='*' without altering the gateway response", async () => {
+		const query = `{ entity(id: "${ENTITY}") { id name spaceIds } spaces { id } }`
+		const pgBody = {data: {entity: {id: ENTITY, name: "Ada", spaceIds: [SPACE]}, spaces: [{id: SPACE}]}}
+		const {shadow} = multiSetup({[ENTITY_HEX]: `${NAME}\tAda\ts1\t${ENTITY_HEX}\t-\t-\t1\n`})
+		expect(shadow.tolerates).toBe("*")
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "entity=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+			}),
+			delegate: () => Response.json(pgBody),
+			shadows: new Map([["entity", shadow]]),
+		})
+		const response = await gateway(
+			new Request("http://api/graphql", {method: "POST", body: JSON.stringify({query})}),
+			{},
+		)
+		expect(await response.json()).toEqual(pgBody)
+		await new Promise((resolve) => setTimeout(resolve, 20))
+		expect(counts()).toEqual({match: 1})
+	})
+
+	it("reports honest unsupported reasons in multi-root documents and keeps not_single_root when no entity root exists", async () => {
+		await invoke(
+			multiSetup({}).shadow,
+			`{ a: entity(id: "not-a-uuid") { id } b: entity(id: "${ENTITY}") { id name spaceIds } }`,
+			{data: {}},
+		)
+		expect(unsupportedCounts()).toEqual({args: 1})
+
+		__resetGatewayMetricsForTests()
+		await invoke(multiSetup({}).shadow, `{ entity(id: "${ENTITY}") { unknownField } spaces { id } }`, {data: {}})
+		expect(unsupportedCounts()).toEqual({selection: 1})
+
+		__resetGatewayMetricsForTests()
+		await invoke(multiSetup({}).shadow, `{ spaces { id } }`, {data: {}})
+		expect(unsupportedCounts()).toEqual({not_single_root: 1})
 	})
 })

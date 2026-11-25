@@ -70,7 +70,7 @@ import {askGeoDb, askGeoDbRelationClaims, askGeoDbSpaces, type CardDeps, type Ca
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {analyzeBacklinks, type BacklinkRowsPlan, readBacklinkFilter, runBacklinks} from "./backlinksShadow"
 import type {FieldShadow} from "./gateway"
-import {analyzeLightEntity, type LightOutcome, noteUnsupported, runLight} from "./lightShadow"
+import {analyzeLightEntityMulti, type LightOutcome, noteUnsupported, runLightEntitiesMulti} from "./lightShadow"
 import {
 	activateGatewayMetrics,
 	recordGatewayMismatchParts,
@@ -1908,9 +1908,10 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 		try {
 			const analysis = analyzeEntityOperation(document, classification.operationName, params.variables)
 			if (!analysis.ok) {
-				// The card shadow cannot settle it: try the light selection (every space, partial lists).
-				const light = analyzeLightEntity(document, classification.operationName, params.variables, {
+				// The card shadow cannot settle it: try the light selection (every space, partial lists, multi-root).
+				const light = analyzeLightEntityMulti(document, classification.operationName, params.variables, {
 					relationsTypeFilter: deps.relationsTypeFilter === true,
+					derivedFields: deps.derivedFields === true,
 				})
 				if (light.ok) {
 					let lightBody: unknown
@@ -1922,7 +1923,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 					await countLight(
 						deps,
 						ENTITY_FIELD,
-						await runLight(deps, light.plan, lightBody, "gateway entity shadow"),
+						await runLightEntitiesMulti(deps, light.plan, lightBody, "gateway entity shadow"),
 						{
 							operationName: classification.operationName,
 						},
@@ -1947,16 +1948,10 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 					)
 					return
 				}
+				const reason = analysis.reason === "not_single_root" ? light.reason : analysis.reason
 				recordGatewayShadow(ENTITY_FIELD, "unsupported_selection")
-				recordGatewayUnsupported(ENTITY_FIELD, analysis.reason)
-				noteUnsupported(
-					deps,
-					ENTITY_FIELD,
-					analysis.reason,
-					document,
-					classification.operationName,
-					params.variables,
-				)
+				recordGatewayUnsupported(ENTITY_FIELD, reason)
+				noteUnsupported(deps, ENTITY_FIELD, reason, document, classification.operationName, params.variables)
 				return
 			}
 			const {plan} = analysis
@@ -2068,6 +2063,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			} catch {}
 		}
 	}
-	shadow.tolerates = ENTITY_TOLERATED_ROOTS
+	// Multi-root documents holding `entity` (aliased `entity` roots or beside another root field) are shadowed independently.
+	shadow.tolerates = "*"
 	return shadow
 }

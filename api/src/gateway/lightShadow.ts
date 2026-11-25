@@ -685,12 +685,53 @@ function planLightEntity(
 	return {card, lists, everySpace: false}
 }
 
+/** Most `entity` roots compared in one multi-root document (beyond this, earlier roots are sampled). */
+export const MAX_MULTI_ENTITY_ROOTS = 8
+
+/** One or more comparable `entity` roots extracted from a single- or multi-root document. */
+export type LightEntityMultiPlan = {
+	plans: LightEntityPlan[]
+	/** Extra uncompared reasons from sibling roots (e.g. `relations` as `root_relations`). */
+	uncompared: UncomparedReason[]
+}
+
+function planLightEntityRoot(
+	root: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Record<string, unknown>,
+	uncompared: Set<UncomparedReason>,
+	options: {relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
+): LightAnalysis<LightEntityPlan> {
+	const args = argsOf(root, resolved)
+	if (Object.keys(args).length !== 1 || !("id" in args)) return {ok: false, reason: "args"}
+	const entityId = uuidArg(args.id)
+	if (!root.selectionSet) return {ok: false, reason: "selection"}
+	const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
+		everySpace: true,
+		spaceIdsOnly: true,
+		relationsTypeFilter: options.relationsTypeFilter === true,
+		derivedFields: options.derivedFields === true,
+	})
+	return {
+		ok: true,
+		plan: {
+			kind: "entity",
+			key: responseKeyOf(root),
+			entityId,
+			card,
+			lists,
+			everySpace,
+			uncompared: [...uncompared],
+		},
+	}
+}
+
 /** `entity(id)` with the light selection. Same roots as the card shadow (`relations` is tolerated). */
 export function analyzeLightEntity(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
-	options: {relationsTypeFilter?: boolean} = {},
+	options: {relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
 ): LightAnalysis<LightEntityPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -704,27 +745,38 @@ export function analyzeLightEntity(
 				return {ok: false, reason: "not_single_root"}
 			uncompared.add("root_relations")
 		}
-		const args = argsOf(root, resolved)
-		if (Object.keys(args).length !== 1 || !("id" in args)) return {ok: false, reason: "args"}
-		const entityId = uuidArg(args.id)
-		if (!root.selectionSet) return {ok: false, reason: "selection"}
-		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
-			everySpace: true,
-			spaceIdsOnly: true,
-			relationsTypeFilter: options.relationsTypeFilter === true,
-		})
-		return {
-			ok: true,
-			plan: {
-				kind: "entity",
-				key: responseKeyOf(root),
-				entityId,
-				card,
-				lists,
-				everySpace,
-				uncompared: [...uncompared],
-			},
+		return planLightEntityRoot(root, fragments, resolved, uncompared, options)
+	} catch (error) {
+		return {ok: false, reason: error instanceof Unsupported ? error.reason : "selection"}
+	}
+}
+
+/**
+ * Extracts and plans every `entity` root of a single- or multi-root document independently (including root fragments
+ * and aliased response keys). Sibling roots (such as `relations`, `spaces`, or another `entity` alias) are tolerated;
+ * if any `entity` root has an unsupported shape, returns that honest reason instead of `not_single_root`. A document
+ * with no `entity` root still returns `not_single_root`.
+ */
+export function analyzeLightEntityMulti(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+	options: {relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
+): LightAnalysis<LightEntityMultiPlan> {
+	try {
+		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
+		const entityRoots = roots.filter((f) => f.name.value === ENTITY_FIELD)
+		if (entityRoots.length === 0) return {ok: false, reason: "not_single_root"}
+		const extraUncompared = new Set<UncomparedReason>()
+		if (roots.some((r) => (ENTITY_TOLERATED_ROOTS as readonly string[]).includes(r.name.value)))
+			extraUncompared.add("root_relations")
+		const plans: LightEntityPlan[] = []
+		for (const root of entityRoots) {
+			const planned = planLightEntityRoot(root, fragments, resolved, new Set(), options)
+			if (!planned.ok) return planned
+			if (plans.length < MAX_MULTI_ENTITY_ROOTS) plans.push(planned.plan)
 		}
+		return {ok: true, plan: {plans, uncompared: [...extraUncompared]}}
 	} catch (error) {
 		return {ok: false, reason: error instanceof Unsupported ? error.reason : "selection"}
 	}
@@ -1490,6 +1542,7 @@ function lightSpaces(light: LightCard, extra: string[] | null): string[] | null 
 		for (const s of [
 			...light.valueSpaces,
 			...light.relationSpaces,
+			...light.typeless.map((row) => row.space),
 			...light.typeOnly.map((row) => row.space),
 			...light.untypedValues.map((row) => row.space),
 			...light.excludedValues.map((row) => row.space),
@@ -2094,18 +2147,19 @@ export async function runLight(
 }
 
 /**
- * Runs the comparison for one or more `entitiesConnection` roots extracted from a single- or multi-root document.
- * Each root is compared independently via `runLight`; any mismatch fails the operation, otherwise any unsupported or
- * failed root is reported, otherwise matching roots combine into one match with merged `uncompared` reasons.
+ * Runs the comparison for one or more roots (`entity` or `entitiesConnection`) extracted from a single- or multi-root
+ * document. Each root is compared independently via `runLight`; any mismatch fails the operation, otherwise any
+ * unsupported or failed root is reported, otherwise matching roots combine into one match with merged `uncompared`
+ * reasons.
  */
 export async function runLightEntitiesMulti(
 	deps: EntityShadowDeps,
-	multiPlan: LightEntitiesMultiPlan,
+	multiPlan: LightEntitiesMultiPlan | LightEntityMultiPlan,
 	body: unknown,
 	label: string,
 ): Promise<LightOutcome> {
 	if (multiPlan.plans.length === 1 && multiPlan.uncompared.length === 0) {
-		return runLight(deps, multiPlan.plans[0] as LightEntitiesPlan, body, label)
+		return runLight(deps, multiPlan.plans[0] as LightEntitiesPlan | LightEntityPlan, body, label)
 	}
 	const outcomes: {key: string; outcome: LightOutcome}[] = []
 	for (const plan of multiPlan.plans) {

@@ -723,8 +723,9 @@ describe("gateway: co-root fields", () => {
 		expect(results()).toEqual({match: 1})
 	})
 
-	it("does not shadow entity beside a root field the shadow does not tolerate", async () => {
+	it("shadows entity beside other root fields and reports honest unsupported reasons", async () => {
 		const spy = await call(`query { entity(id: "x") { id } spaces { id } }`)
-		expect(spy).not.toHaveBeenCalled()
+		expect(spy).toHaveBeenCalledTimes(1)
+		expect(results()).toEqual({unsupported_selection: 1})
 	})
 })
