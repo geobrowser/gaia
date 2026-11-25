@@ -68,6 +68,10 @@ spec:
             # Explicit since the cutover-day flip is a one-value diff: unset already reads as on (see the parser); "1" is today's behaviour.
             - name: KG_INDEXER_PG_WRITES
               value: "1"
+            # DeleteEntity kill switch: "0" (default) computes, logs and counts what a delete would remove but writes
+            # nothing. Compare kg_indexer_delete_entity_*{mode="would_delete"} with geo-db's closures, then set "1".
+            - name: KG_INDEXER_APPLY_DELETE_ENTITY
+              value: "0"
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL

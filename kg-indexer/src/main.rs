@@ -957,6 +957,28 @@ fn apply_pending_space_topic(
 /// Maximum length for edit names stored in the database.
 const MAX_EDIT_NAME_LENGTH: usize = 256;
 
+/// Log and count what an edit's `DeleteEntity` ops removed, or with `KG_INDEXER_APPLY_DELETE_ENTITY`
+/// off (the default) would have removed. Silent for an edit with no `DeleteEntity`.
+fn record_entity_deletes(outcome: &storage::EditWriteOutcome) {
+    if outcome.entities_deleted == 0 {
+        return;
+    }
+    let report = &outcome.deletes;
+    metrics::entity_deletes(outcome.entities_deleted as u64, report);
+    info!(
+        edit_id = %outcome.edit_id,
+        space_id = %outcome.space_id,
+        entities = outcome.entities_deleted,
+        values = report.values,
+        relations = report.relations,
+        value_versions = report.value_versions,
+        relation_versions = report.relation_versions,
+        applied = report.applied,
+        "DeleteEntity {}",
+        if report.applied { "applied" } else { "would delete (KG_INDEXER_APPLY_DELETE_ENTITY is off)" }
+    );
+}
+
 /// Extract edit metadata (name and creator ID) from a protobuf Edit message.
 ///
 /// - Converts empty name to None (protobuf defaults to "")
@@ -1361,8 +1383,6 @@ async fn process_message(
     _event_id: Option<&str>,
 ) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
-    use models::relations::RelationOp;
-    use models::values::ValueChangeType;
 
     if !storage.pg_writes() {
         metrics::pg_write_skipped(metrics::PgWriteSite::Message);
@@ -1374,86 +1394,19 @@ async fn process_message(
         .execute(&mut *tx)
         .await?;
 
+    // Delete counters are recorded only after the commit, so a rollback or a retried
+    // transaction never counts rows that were not written.
+    let mut pending_deletes: Vec<storage::EditWriteOutcome> = Vec::new();
     let ops = match msg {
         KgMessage::BlockSummary(_) => 0,
         KgMessage::Edit(edit) => {
-            let result = handlers::edits::handle_edit(&edit)?;
-
-            // Keep copies for versioned writes before partitioning
-            let values_for_versioning = result.values.clone();
-            let relations_for_versioning = result.relations.clone();
-
-            // Partition values into sets and deletes
-            let (set_values, delete_values): (Vec<_>, Vec<_>) = result
-                .values
-                .into_iter()
-                .partition(|v| matches!(v.change_type, ValueChangeType::Set));
-
-            let delete_value_ids: Vec<_> = delete_values
-                .into_iter()
-                .map(|v| (v.id, v.space_id))
-                .collect();
-
-            // Partition relations by operation type
-            let mut set_relations = Vec::new();
-            let mut update_relations = Vec::new();
-            let mut unset_relations = Vec::new();
-            let mut delete_relations = Vec::new();
-
-            for op in result.relations {
-                match op {
-                    RelationOp::Create(r) => set_relations.push(r),
-                    RelationOp::Update(r) => update_relations.push(r),
-                    RelationOp::Unset(r) => unset_relations.push(r),
-                    RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
-                }
-            }
-
-            let ops = result.entities.len()
-                + set_values.len()
-                + delete_value_ids.len()
-                + set_relations.len()
-                + update_relations.len()
-                + unset_relations.len()
-                + delete_relations.len();
-
-            // Bulk insert all operations (live tables)
-            storage.insert_entities(&result.entities, &mut tx).await?;
-            storage.insert_values(&set_values, &mut tx).await?;
-            storage.delete_values(&delete_value_ids, &mut tx).await?;
-            storage.insert_relations(&set_relations, &mut tx).await?;
-            storage.update_relations(&update_relations, &mut tx).await?;
-            storage
-                .unset_relation_fields(&unset_relations, &mut tx)
+            let result = handlers::edits::handle_edit_for(&edit, storage.apply_delete_entity())?;
+            let (edit_name, created_by_id) = extract_edit_metadata(&edit);
+            let outcome = storage
+                .write_edit(&edit, result, edit_name.as_deref(), created_by_id, &mut tx)
                 .await?;
-            storage.delete_relations(&delete_relations, &mut tx).await?;
-
-            // Versioned writes (temporal tables)
-            // Only write versions if this edit hasn't been processed before (idempotency)
-            if let Some(meta) = edit.meta.as_ref() {
-                let (edit_name, created_by_id) = extract_edit_metadata(&edit);
-
-                if let Some(version_key) = storage
-                    .insert_edit_version(
-                        result.edit_id,
-                        meta.block_number as i64,
-                        meta.sequence as i64,
-                        meta.created_at as i64,
-                        edit_name.as_deref(),
-                        created_by_id,
-                        &mut tx,
-                    )
-                    .await?
-                {
-                    storage
-                        .insert_value_versions(&values_for_versioning, version_key, &mut tx)
-                        .await?;
-                    storage
-                        .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
-                        .await?;
-                }
-            }
-
+            let ops = outcome.ops;
+            pending_deletes.push(outcome);
             ops
         }
         KgMessage::SpaceAddressUpdated(updated) => {
@@ -1686,6 +1639,9 @@ async fn process_message(
     };
 
     tx.commit().await?;
+    for outcome in &pending_deletes {
+        record_entity_deletes(outcome);
+    }
 
     Ok(ops)
 }
@@ -1724,8 +1680,6 @@ async fn process_block(
     consumer: &KafkaConsumer,
 ) -> Result<ProcessBlockResult, IndexerError> {
     use handlers::membership::MembershipChange;
-    use models::relations::RelationOp;
-    use models::values::ValueChangeType;
 
     if events.is_empty() {
         return Ok(ProcessBlockResult {
@@ -1752,6 +1706,8 @@ async fn process_block(
         .execute(&mut *tx)
         .await?;
     let mut total_ops = 0;
+    // Recorded after the commit below, never inside the transaction (see process_message).
+    let mut pending_deletes: Vec<storage::EditWriteOutcome> = Vec::new();
     let tx_start = Instant::now();
     let mut pending_space_topics: HashMap<uuid::Uuid, Option<uuid::Uuid>> = HashMap::new();
 
@@ -1869,7 +1825,8 @@ async fn process_block(
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
-                    let result = handlers::edits::handle_edit(edit)?;
+                    let result =
+                        handlers::edits::handle_edit_for(edit, storage.apply_delete_entity())?;
 
                     // Record trace context
                     event_span.record("edit_id", display(result.edit_id));
@@ -1877,85 +1834,12 @@ async fn process_block(
                         event_span.record("space_id", display(space_id));
                     }
 
-                    // Keep copies for versioned writes before partitioning
-                    let values_for_versioning = result.values.clone();
-                    let relations_for_versioning = result.relations.clone();
-
-                    // Partition values into sets and deletes
-                    let (set_values, delete_values): (Vec<_>, Vec<_>) = result
-                        .values
-                        .into_iter()
-                        .partition(|v| matches!(v.change_type, ValueChangeType::Set));
-
-                    let delete_value_ids: Vec<_> = delete_values
-                        .into_iter()
-                        .map(|v| (v.id, v.space_id))
-                        .collect();
-
-                    // Partition relations by operation type
-                    let mut set_relations = Vec::new();
-                    let mut update_relations = Vec::new();
-                    let mut unset_relations = Vec::new();
-                    let mut delete_relations = Vec::new();
-
-                    for op in result.relations {
-                        match op {
-                            RelationOp::Create(r) => set_relations.push(r),
-                            RelationOp::Update(r) => update_relations.push(r),
-                            RelationOp::Unset(r) => unset_relations.push(r),
-                            RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
-                        }
-                    }
-
-                    let ops = result.entities.len()
-                        + set_values.len()
-                        + delete_value_ids.len()
-                        + set_relations.len()
-                        + update_relations.len()
-                        + unset_relations.len()
-                        + delete_relations.len();
-
-                    // Bulk insert all operations (live tables)
-                    storage.insert_entities(&result.entities, &mut tx).await?;
-                    storage.insert_values(&set_values, &mut tx).await?;
-                    storage.delete_values(&delete_value_ids, &mut tx).await?;
-                    storage.insert_relations(&set_relations, &mut tx).await?;
-                    storage.update_relations(&update_relations, &mut tx).await?;
-                    storage
-                        .unset_relation_fields(&unset_relations, &mut tx)
+                    let (edit_name, created_by_id) = extract_edit_metadata(edit);
+                    let outcome = storage
+                        .write_edit(edit, result, edit_name.as_deref(), created_by_id, &mut tx)
                         .await?;
-                    storage.delete_relations(&delete_relations, &mut tx).await?;
-
-                    // Versioned writes (temporal tables)
-                    // Only write versions if this edit hasn't been processed before (idempotency)
-                    if let Some(meta) = edit.meta.as_ref() {
-                        let (edit_name, created_by_id) = extract_edit_metadata(edit);
-
-                        if let Some(version_key) = storage
-                            .insert_edit_version(
-                                result.edit_id,
-                                meta.block_number as i64,
-                                meta.sequence as i64,
-                                meta.created_at as i64,
-                                edit_name.as_deref(),
-                                created_by_id,
-                                &mut tx,
-                            )
-                            .await?
-                        {
-                            storage
-                                .insert_value_versions(&values_for_versioning, version_key, &mut tx)
-                                .await?;
-                            storage
-                                .insert_relation_versions(
-                                    &relations_for_versioning,
-                                    version_key,
-                                    &mut tx,
-                                )
-                                .await?;
-                        }
-                    }
-
+                    let ops = outcome.ops;
+                    pending_deletes.push(outcome);
                     ops
                 }
                 KgMessage::SpaceAddressUpdated(updated) => {
@@ -2302,6 +2186,10 @@ async fn process_block(
         db_commit_span.record("otel.status_code", "ERROR");
         db_commit_span.record("otel.status_message", e.to_string().as_str());
         return Err(e.into());
+    }
+
+    for outcome in &pending_deletes {
+        record_entity_deletes(outcome);
     }
 
     // Commit Kafka offsets for all processed messages

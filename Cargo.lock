@@ -4951,6 +4951,7 @@ dependencies = [
  "hermes-schema",
  "indexer_utils",
  "k8s-openapi",
+ "kg-indexer",
  "kube",
  "metrics",
  "metrics-exporter-prometheus",

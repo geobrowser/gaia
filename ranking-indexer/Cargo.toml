@@ -122,3 +122,7 @@ metrics-exporter-prometheus = { version = "0.17", default-features = false }
 kube = "4.2"
 k8s-openapi = { version = "0.28", features = ["v1_36"] }
 
+
+[dev-dependencies]
+# delete_entity_ranks.rs drives kg-indexer's DeleteEntity against the same database.
+kg-indexer = { path = "../kg-indexer" }

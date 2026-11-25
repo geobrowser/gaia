@@ -904,6 +904,13 @@
       "when": 1795055522975,
       "tag": "0128_drop_dated_backup_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1795141922975,
+      "tag": "0129_kg_archive_deleted_entities",
+      "breakpoints": true
     }
   ]
 }

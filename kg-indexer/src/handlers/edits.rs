@@ -47,6 +47,16 @@ pub struct EditResult {
     pub entities: Vec<EntityItem>,
     pub values: Vec<ValueOp>,
     pub relations: Vec<RelationOp>,
+    /// Entities a `DeleteEntity` op removed from this edit's space, in op order, each once.
+    ///
+    /// The protocol's `DeleteEntity` retracts every value the entity holds in the space and every
+    /// relation that leaves it there; `geodb-feeder` writes the same thing to geo-db as a
+    /// `delete_entity` (`translate.ts`, `case "deleteEntity"`). Neither can be listed from the edit
+    /// (the cells live in Postgres), so the storage layer deletes by `(entity, space)`. Ops of the
+    /// same edit that came after the delete still apply; those before it are dropped here.
+    pub deleted_entities: Vec<Uuid>,
+    /// The space the edit was published in; `deleted_entities` are deleted from it.
+    pub space_id: Uuid,
 }
 
 /// Metadata extracted from the HermesEdit for timestamping
@@ -155,8 +165,21 @@ fn filter_protected_relations(ops: Vec<RelationOp>, edit_space_id: &Uuid) -> Vec
         .collect()
 }
 
-/// Process a HermesEdit message and return the extracted data
+/// Process a HermesEdit message and return the extracted data.
+///
+/// Writes made earlier in the edit to an entity it later deletes are kept, exactly as before
+/// `DeleteEntity` was handled. `deleted_entities` is still reported. The live consumer calls
+/// [`handle_edit_for`] with `KG_INDEXER_APPLY_DELETE_ENTITY`'s value instead.
+// The consumer binary calls `handle_edit_for`; the operator bins still call this.
+#[allow(dead_code)]
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
+    handle_edit_for(edit, false)
+}
+
+/// Like [`handle_edit`]. With `apply_deletes` on, writes an edit makes to an entity before its own
+/// `DeleteEntity` are dropped, because the delete removes them; with it off the extracted ops are
+/// identical to what this crate produced before `DeleteEntity` was handled at all.
+pub fn handle_edit_for(edit: &HermesEdit, apply_deletes: bool) -> Result<EditResult, HandlerError> {
     let edit_id = parse_edit_id(&edit.id)?;
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
@@ -173,8 +196,8 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
         let _span =
             debug_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
         let entities = extract_entities(&grc20_edit, &space_id, &meta);
-        let value_ops = extract_values(&grc20_edit, &space_id);
-        let relation_ops = extract_relations(&grc20_edit, &space_id);
+        let value_ops = extract_values(&grc20_edit, &space_id, apply_deletes);
+        let relation_ops = extract_relations(&grc20_edit, &space_id, apply_deletes);
         (entities, value_ops, relation_ops)
     };
 
@@ -185,12 +208,15 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);
     let relations = squash_relations(&relation_ops);
+    let deleted_entities = extract_deleted_entities(&grc20_edit);
 
     Ok(EditResult {
         edit_id,
         entities,
         values,
         relations,
+        deleted_entities,
+        space_id,
     })
 }
 
@@ -471,6 +497,21 @@ fn extract_entities(edit: &Grc20Edit, _space_id: &Uuid, meta: &EditMetadata) -> 
     entities
 }
 
+/// Entities deleted by a `DeleteEntity` op, in op order, each once.
+fn extract_deleted_entities(edit: &Grc20Edit) -> Vec<Uuid> {
+    let mut seen = HashSet::new();
+    let mut deleted = Vec::new();
+    for op in &edit.ops {
+        if let Grc20Op::DeleteEntity(del) = op {
+            let id = id_to_uuid(&del.id);
+            if seen.insert(id) {
+                deleted.push(id);
+            }
+        }
+    }
+    deleted
+}
+
 /// Convert a grc_20::Value to a ValueOp with appropriate fields set
 fn value_to_value_op(
     pv: &PropertyValue,
@@ -647,7 +688,7 @@ fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
     }
 }
 
-fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
+fn extract_values(edit: &Grc20Edit, space_id: &Uuid, prune_deleted: bool) -> Vec<ValueOp> {
     let mut value_ops = Vec::new();
 
     for op in &edit.ops {
@@ -710,6 +751,14 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                     }
                 }
             }
+            Grc20Op::DeleteEntity(del) => {
+                // The delete removes what the entity held, so an earlier write of it in this
+                // edit is moot. Writes after the delete still apply.
+                let entity_id = id_to_uuid(&del.id);
+                if prune_deleted {
+                    value_ops.retain(|v| v.entity_id != entity_id);
+                }
+            }
             _ => {}
         }
     }
@@ -717,7 +766,7 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
     value_ops
 }
 
-fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
+fn extract_relations(edit: &Grc20Edit, space_id: &Uuid, prune_deleted: bool) -> Vec<RelationOp> {
     let mut relation_ops = Vec::new();
 
     for op in &edit.ops {
@@ -829,6 +878,15 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                     id: id_to_uuid(&del.id),
                     space_id: *space_id,
                 }));
+            }
+            Grc20Op::DeleteEntity(del) => {
+                // Relations created earlier in this edit that leave the entity go with it.
+                let entity_id = id_to_uuid(&del.id);
+                if prune_deleted {
+                    relation_ops.retain(
+                        |op| !matches!(op, RelationOp::Create(r) if r.from_id == entity_id),
+                    );
+                }
             }
             _ => {}
         }
@@ -1685,5 +1743,91 @@ mod tests {
 
         // Should use first edge's type_id
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));
+    }
+    // ---- DeleteEntity (geodb-feeder parity) ----
+
+    mod delete_entity {
+        use super::*;
+        use grc_20::model::builder::EditBuilder;
+
+        const E: [u8; 16] = [0xE1; 16];
+        const OTHER: [u8; 16] = [0xE2; 16];
+        const PROP: [u8; 16] = [0xA1; 16];
+        const REL_TYPE: [u8; 16] = [0xB1; 16];
+
+        fn space() -> Uuid {
+            Uuid::from_bytes([0x55; 16])
+        }
+
+        #[test]
+        fn delete_entity_is_reported_once_in_op_order() {
+            let edit = EditBuilder::new([1; 16])
+                .delete_entity(OTHER)
+                .delete_entity(E)
+                .delete_entity(OTHER)
+                .build();
+            assert_eq!(
+                extract_deleted_entities(&edit),
+                vec![Uuid::from_bytes(OTHER), Uuid::from_bytes(E)]
+            );
+        }
+
+        #[test]
+        fn delete_entity_creates_no_entity_row_and_no_value_ops() {
+            let edit = EditBuilder::new([1; 16]).delete_entity(E).build();
+            let meta = EditMetadata {
+                timestamp: "1".into(),
+                block_number: "1".into(),
+            };
+            assert!(extract_entities(&edit, &space(), &meta).is_empty());
+            assert!(extract_values(&edit, &space(), true).is_empty());
+            assert!(extract_relations(&edit, &space(), true).is_empty());
+        }
+
+        #[test]
+        fn writes_to_the_entity_before_its_delete_are_dropped() {
+            let edit = EditBuilder::new([1; 16])
+                .create_entity(E, |e| e.text(PROP, "gone", None))
+                .create_entity(OTHER, |e| e.text(PROP, "kept", None))
+                .create_relation(|r| r.id([9; 16]).relation_type(REL_TYPE).from(E).to(OTHER))
+                .create_relation(|r| r.id([8; 16]).relation_type(REL_TYPE).from(OTHER).to(E))
+                .delete_entity(E)
+                .build();
+            let values = extract_values(&edit, &space(), true);
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0].entity_id, Uuid::from_bytes(OTHER));
+            let relations = extract_relations(&edit, &space(), true);
+            assert_eq!(
+                relations.len(),
+                1,
+                "only the relation that leaves E is moot"
+            );
+            assert_eq!(relations[0].id(), Uuid::from_bytes([8; 16]));
+        }
+
+        #[test]
+        fn with_deletes_off_every_op_is_extracted_as_before_delete_entity_was_handled() {
+            let edit = EditBuilder::new([1; 16])
+                .create_entity(E, |e| e.text(PROP, "kept", None))
+                .create_relation(|r| r.id([9; 16]).relation_type(REL_TYPE).from(E).to(OTHER))
+                .delete_entity(E)
+                .build();
+            assert_eq!(extract_values(&edit, &space(), false).len(), 1);
+            assert_eq!(extract_relations(&edit, &space(), false).len(), 1);
+            // The delete itself is still reported, so it can be counted.
+            assert_eq!(extract_deleted_entities(&edit), vec![Uuid::from_bytes(E)]);
+        }
+
+        #[test]
+        fn writes_after_the_delete_still_apply() {
+            let edit = EditBuilder::new([1; 16])
+                .create_entity(E, |e| e.text(PROP, "old", None))
+                .delete_entity(E)
+                .create_entity(E, |e| e.text(PROP, "new", None))
+                .build();
+            let values = extract_values(&edit, &space(), true);
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0].text.as_deref(), Some("new"));
+        }
     }
 }
