@@ -19,6 +19,9 @@ COPY hermes-kafka ./hermes-kafka
 COPY geodb-cursor ./geodb-cursor
 COPY indexer_utils ./indexer_utils
 COPY sdk ./sdk
+# Only a dev-dependency (tests/delete_entity_ranks.rs), but cargo resolves the path
+# to read the manifest even for a release build, so it must be present.
+COPY kg-indexer ./kg-indexer
 COPY ranking-indexer ./ranking-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
