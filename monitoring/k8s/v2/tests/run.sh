@@ -3,7 +3,7 @@
 # promtool reads plain rule files, so the PrometheusRule's spec is extracted with yq first.
 # Finally lint-series.sh checks the geodb_* series, their label keys and the label values geodb-serve-alerts.yaml
 # selects against the golden copy (geodb-metrics-golden.txt) and the pinned values (geodb-label-values.txt).
-# dashboard-check.sh validates geodb-serve-dashboard.yaml (JSON, promtool-parsed exprs, series lint).
+# dashboard-check.sh validates geodb-serve-dashboard.yaml and geodb-relations-shadow-dashboard.yaml (JSON, promtool-parsed exprs, series lint).
 # Needs promtool (brew install prometheus) and yq. Run from anywhere.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

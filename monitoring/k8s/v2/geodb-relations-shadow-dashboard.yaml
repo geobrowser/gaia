@@ -1,0 +1,549 @@
+# Grafana dashboard for the gateway's relationsConnection shadow paths:
+#   - GEODB_RELATIONS_COUNT_SHADOW (totalCount-only relationsConnection, api/src/gateway/relationsCountShadow.ts)
+#   - GEODB_RELATION_GROUPED_FACETS_SHADOW (grouped distinct-count facets, api/src/gateway/relationFacetsShadow.ts)
+# Both report under field="relationsConnection" on the API's gaia_api_gateway_shadow_* series
+# (api/src/gateway/metrics.ts, api/src/gateway/pointReadShadows.ts).
+# Alert: ./geodb-gateway-serve-alerts.yaml (GatewayShadowFailing).
+# Loaded by the Grafana sidecar via the grafana_dashboard label. Checked by tests/dashboard-check.sh (run.sh).
+#   kubectl apply -f monitoring/k8s/v2/geodb-relations-shadow-dashboard.yaml
+apiVersion: v1
+data:
+  geodb-relations-shadow.json: |-
+    {
+      "id": null,
+      "uid": "geodb-relations-shadow",
+      "title": "geo-db gateway: relationsConnection shadow (relationsCount & relationGroupedFacets)",
+      "tags": [
+        "geodb",
+        "gateway",
+        "shadow",
+        "observability"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "relationsConnection shadow: relationsCount soak and relationGroupedFacets readiness",
+          "id": 1,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Failed + mismatch (24h)",
+          "description": "gaia_api_gateway_shadow_total{field=\"relationsConnection\", result=~\"failed|mismatch\"} over 24h. Covers both GEODB_RELATIONS_COUNT_SHADOW and GEODB_RELATION_GROUPED_FACETS_SHADOW. Must stay 0 for a clean soak. Alert: GatewayShadowFailing.",
+          "id": 2,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(gaia_api_gateway_shadow_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\", result=~\"failed|mismatch\"}[24h])) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Match share (24h)",
+          "description": "Share of compared relationsConnection shadow reads (match / (match + mismatch + failed)) over 24h, excluding unsupported_selection and refused_busy.",
+          "id": 3,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 6,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(gaia_api_gateway_shadow_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\", result=\"match\"}[24h])) / clamp_min(sum(increase(gaia_api_gateway_shadow_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\", result=~\"match|mismatch|failed\"}[24h])), 1)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.99
+                  },
+                  {
+                    "color": "green",
+                    "value": 0.999
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "count_only unsupported (24h)",
+          "description": "gaia_api_gateway_shadow_unsupported_total{field=\"relationsConnection\", reason=\"count_only\"} over 24h. Includes grouped distinct-count facets while GEODB_RELATION_GROUPED_FACETS_SHADOW is off; watch this drop when enabled.",
+          "id": 4,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 12,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(gaia_api_gateway_shadow_unsupported_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\", reason=\"count_only\"}[24h])) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "p95 latency delta: geo-db - Postgres (15m)",
+          "description": "geo-db shadow p95 minus Postgres p95 for field=\"relationsConnection\" over 15m. Negative means geo-db is faster than Postgres.",
+          "id": 5,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 18,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_geodb_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[15m]))) - histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_postgres_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[15m])))",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 3,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.001
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Shadow outcome rates (match / mismatch / failed / unsupported)",
+          "description": "Rate of gaia_api_gateway_shadow_total{field=\"relationsConnection\"} by result. Both relationsCount (on) and relationGroupedFacets (off) emit under field=\"relationsConnection\".",
+          "id": 6,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (result) (rate(gaia_api_gateway_shadow_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\", result=~\"match|mismatch|failed|unsupported_selection|refused_busy\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "{{result}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Unsupported reasons (count_only / count_refused / count_incomplete)",
+          "description": "Rate of gaia_api_gateway_shadow_unsupported_total{field=\"relationsConnection\"} by reason. Verify no count_refused or unexpected count_incomplete during relationsCount soak and after enabling GEODB_RELATION_GROUPED_FACETS_SHADOW.",
+          "id": 7,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (reason) (rate(gaia_api_gateway_shadow_unsupported_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Failed reasons and mismatch parts",
+          "description": "Breakdown of gaia_api_gateway_shadow_failed_total (by reason) and gaia_api_gateway_shadow_mismatch_total (by part) for field=\"relationsConnection\".",
+          "id": 8,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (reason) (rate(gaia_api_gateway_shadow_failed_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "failed:{{reason}}"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (part) (rate(gaia_api_gateway_shadow_mismatch_total{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval]))",
+              "refId": "B",
+              "legendFormat": "mismatch:{{part}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "p95 latency: geo-db vs Postgres and delta",
+          "description": "p95 latency of geo-db shadow runs (gaia_api_gateway_shadow_geodb_seconds_bucket), Postgres responses (gaia_api_gateway_shadow_postgres_seconds_bucket), and their delta (geodb - postgres) for field=\"relationsConnection\".",
+          "id": 9,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_geodb_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval])))",
+              "refId": "A",
+              "legendFormat": "geodb p95"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_postgres_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval])))",
+              "refId": "B",
+              "legendFormat": "postgres p95"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_geodb_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval]))) - histogram_quantile(0.95, sum by (le) (rate(gaia_api_gateway_shadow_postgres_seconds_bucket{namespace=\"gaia\", job=\"api\", field=\"relationsConnection\"}[$__rate_interval])))",
+              "refId": "C",
+              "legendFormat": "delta (geodb - postgres)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "text",
+          "title": "Enable recipe: GEODB_RELATION_GROUPED_FACETS_SHADOW",
+          "id": 10,
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 22
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "### relationsCount soak & GEODB_RELATION_GROUPED_FACETS_SHADOW enable check\n\nBoth `GEODB_RELATIONS_COUNT_SHADOW` (`on`) and `GEODB_RELATION_GROUPED_FACETS_SHADOW` (`off`) report under `field=\"relationsConnection\"` in `gaia_api_gateway_shadow_*`.\n\n1. **Verify `relationsCount` soak**: confirm 24h `Failed + mismatch == 0`, `Unsupported reasons` shows no unexpected `count_refused` spikes, and `p95 latency delta` (`geodb - postgres`) is healthy.\n2. **Flip `GEODB_RELATION_GROUPED_FACETS_SHADOW` (shadow only)**: set `GEODB_RELATION_GROUPED_FACETS_SHADOW=\"on\"` in `api/k8s/v2/api.yaml` (keeping `GEODB_RELATION_FACETS_SHADOW=\"off\"` and all serve flags unchanged).\n3. **Post-flip check**: confirm `count_only` drops as grouped distinct-count facets move into `match`, with `mismatch`, `failed`, and `count_refused` staying at 0."
+          }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: kube-prometheus-stack-grafana
+    grafana_dashboard: "1"
+    release: kube-prometheus-stack
+  name: geodb-relations-shadow-dashboard
+  namespace: monitoring
