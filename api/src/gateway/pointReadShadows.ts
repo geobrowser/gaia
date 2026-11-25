@@ -34,7 +34,7 @@
  * failed, else `match`.
  */
 
-import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "graphql"
+import {type FieldNode, type SelectionSetNode, valueFromASTUntyped} from "graphql"
 
 import {
 	compactSpaceId,
@@ -61,6 +61,7 @@ import {
 	countLight,
 	type EntityCardPlan,
 	type EntityShadowDeps,
+	fieldsOf,
 	parseOperation,
 	planEntitySelection,
 	Unsupported,
@@ -109,21 +110,13 @@ type Args = Record<string, unknown>
 const isPlain = (f: FieldNode) => !f.arguments?.length && !f.selectionSet
 const keyOf = (f: FieldNode) => f.alias?.value ?? f.name.value
 
-function inlineFields(set: SelectionSetNode, fragments: Map<string, SelectionSetNode>, depth = 0): FieldNode[] {
-	if (depth > 8) return refuse("selection")
-	const out: FieldNode[] = []
-	for (const selection of set.selections) {
-		if (selection.directives?.length) refuse("directives")
-		if (selection.kind === Kind.FIELD) out.push(selection)
-		else if (selection.kind === Kind.INLINE_FRAGMENT)
-			out.push(...inlineFields(selection.selectionSet, fragments, depth + 1))
-		else {
-			const fragment = fragments.get(selection.name.value)
-			if (!fragment) refuse("selection")
-			else out.push(...inlineFields(fragment, fragments, depth + 1))
-		}
-	}
-	return out
+function inlineFields(
+	set: SelectionSetNode,
+	fragments: Map<string, SelectionSetNode>,
+	depth = 0,
+	directiveVars?: Record<string, unknown>,
+): FieldNode[] {
+	return fieldsOf(set, fragments, depth, [], directiveVars)
 }
 
 /** A root field's arguments with variables resolved. */
@@ -211,6 +204,7 @@ function planRelation(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	asCard: (set: SelectionSetNode, uncompared: Set<UncomparedReason>) => EntityCardPlan,
+	directiveVars?: Record<string, unknown>,
 ): RelationPlan {
 	const uncompared = new Set<UncomparedReason>()
 	const columns: Partial<Record<(typeof RELATION_COLUMNS)[number], string>> = {}
@@ -218,7 +212,7 @@ function planRelation(
 	let entity: RelationPlan["entity"] = null
 	const seen = new Set<string>()
 	const facetKeys: RelationPlan["facetKeys"] = {}
-	for (const field of inlineFields(set, fragments)) {
+	for (const field of inlineFields(set, fragments, 0, directiveVars)) {
 		const key = keyOf(field)
 		if (seen.has(key)) return refuse("selection")
 		seen.add(key)
@@ -236,7 +230,7 @@ function planRelation(
 		} else if (name in RELATION_OBJECTS) {
 			if (!field.selectionSet || field.arguments?.length) return refuse("selection")
 			const column = RELATION_OBJECTS[name as keyof typeof RELATION_OBJECTS]
-			for (const inner of inlineFields(field.selectionSet, fragments)) {
+			for (const inner of inlineFields(field.selectionSet, fragments, 0, directiveVars)) {
 				if (inner.name.value === "id" && isPlain(inner)) paths[column] ??= {object: key, key: keyOf(inner)}
 				else if (inner.name.value === "name") uncompared.add("nested_names")
 				else if (inner.name.value !== "__typename") uncompared.add("nested_entity")
@@ -248,7 +242,7 @@ function planRelation(
 			} catch (error) {
 				// Only its id and name: the name is not compared.
 				if (!(error instanceof Unsupported)) throw error
-				const inner = inlineFields(field.selectionSet, fragments)
+				const inner = inlineFields(field.selectionSet, fragments, 0, directiveVars)
 				const namesOnly = inner.every((f) => ["id", "name", "__typename"].includes(f.name.value) && isPlain(f))
 				if (!namesOnly) throw error
 				if (inner.some((f) => f.name.value === "name")) uncompared.add("nested_names")
@@ -421,12 +415,13 @@ export type PointPlan =
 function connectionParts(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
+	directiveVars?: Record<string, unknown>,
 ): {nodes: SelectionSetNode | null; nodesKey: string; pageInfo: boolean; totalCount: boolean} {
 	let nodes: SelectionSetNode | null = null
 	let nodesKey = "nodes"
 	let pageInfo = false
 	let totalCount = false
-	for (const field of inlineFields(set, fragments)) {
+	for (const field of inlineFields(set, fragments, 0, directiveVars)) {
 		const name = field.name.value
 		if (name === "nodes") {
 			if (nodes || field.arguments?.length || !field.selectionSet) return refuse("selection")
@@ -447,6 +442,7 @@ function planRelationsRoot(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Args,
 	card: (set: SelectionSetNode, uncompared: Set<UncomparedReason>) => EntityCardPlan,
+	directiveVars?: Record<string, unknown>,
 ): RelationsPointPlan {
 	if (!root.selectionSet) return refuse("selection")
 	const args = rootArgs(root, resolved)
@@ -459,14 +455,14 @@ function planRelationsRoot(
 	let nodesKey: string | undefined
 	const extra = new Set<UncomparedReason>()
 	if (connection) {
-		const parts = connectionParts(root.selectionSet, fragments)
+		const parts = connectionParts(root.selectionSet, fragments, directiveVars)
 		if (!parts.nodes) return refuse("count_only")
 		rowSet = parts.nodes
 		nodesKey = parts.nodesKey
 		if (parts.pageInfo) extra.add("page_info")
 		if (parts.totalCount) extra.add("relation_count")
 	}
-	const planned = planRelation(rowSet, fragments, card)
+	const planned = planRelation(rowSet, fragments, card, directiveVars)
 	const fixed: RelationPlan["fixed"] = {}
 	for (const column of EDGE_COLUMNS) {
 		const values = filter[column]
@@ -497,12 +493,33 @@ export function analyzePointRead(
 	variables: Args,
 ): PointAnalysis {
 	try {
-		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
+		const evaluateDirectives = field === RELATIONS_CONNECTION_FIELD
+		const {
+			fragments,
+			variables: resolved,
+			roots,
+			skippedRoot,
+		} = parseOperation(
+			document,
+			operationName,
+			variables,
+			evaluateDirectives ? {evaluateDirectives: true} : undefined,
+		)
 		const card = (set: SelectionSetNode, uncompared: Set<UncomparedReason>) =>
-			planEntitySelection(set, fragments, resolved, uncompared)
+			planEntitySelection(
+				set,
+				fragments,
+				resolved,
+				uncompared,
+				undefined,
+				evaluateDirectives ? {evaluateDirectives: true} : undefined,
+			)
 		if (field === RELATIONS_CONNECTION_FIELD) {
 			const matching = roots.filter((r) => r.name.value === RELATIONS_CONNECTION_FIELD)
-			if (matching.length === 0) return {ok: false, reason: "not_single_root"}
+			if (matching.length === 0)
+				return skippedRoot
+					? {ok: true, plan: {field: RELATIONS_CONNECTION_FIELD, plans: []}}
+					: {ok: false, reason: "not_single_root"}
 			const plans: RelationsPointPlan[] = []
 			const seenKeys = new Set<string>()
 			let hasCountOnly = false
@@ -511,7 +528,7 @@ export function analyzePointRead(
 				if (seenKeys.has(key)) return {ok: false, reason: "selection"}
 				seenKeys.add(key)
 				try {
-					plans.push(planRelationsRoot(root, true, fragments, resolved, card))
+					plans.push(planRelationsRoot(root, true, fragments, resolved, card, resolved))
 				} catch (error) {
 					if (error instanceof Unsupported && error.reason === "count_only") {
 						hasCountOnly = true
@@ -802,6 +819,7 @@ function collectItems(
 	const data = asRecord(root.data)
 	if (!data) return null
 	if (plan.field === RELATIONS_CONNECTION_FIELD) {
+		if (plan.plans.length === 0) return {items: [], truncated: false}
 		const items: Item[] = []
 		const uncompared = new Set<UncomparedReason>()
 		let truncated = false

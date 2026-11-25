@@ -44,6 +44,7 @@ import {
 	type FieldNode,
 	Kind,
 	type OperationDefinitionNode,
+	type SelectionNode,
 	type SelectionSetNode,
 	valueFromASTUntyped,
 } from "graphql"
@@ -259,22 +260,59 @@ const refuse = (reason: UnsupportedReason): never => {
 	throw new Unsupported(reason)
 }
 
-/** The fields of a selection set with fragments inlined, in order. Directives anywhere are unsupported. */
+/**
+ * Evaluates GraphQL `@include(if: ...)` and `@skip(if: ...)` directives on a selection node against resolved
+ * variables (including operation variable defaults). Returns `true` iff every `@include` has `if: true` and every
+ * `@skip` has `if: false`. Any unknown/non-standard directive, missing/extra argument, unresolved variable, or
+ * non-boolean `if` value throws `Unsupported("directives")`.
+ */
+function shouldIncludeSelection(selection: SelectionNode, variables: Record<string, unknown>): boolean {
+	const directives = selection.directives
+	if (!directives?.length) return true
+	let include = true
+	for (const directive of directives) {
+		const name = directive.name.value
+		if (name !== "include" && name !== "skip") return refuse("directives")
+		const args = directive.arguments ?? []
+		const arg = args[0]
+		if (args.length !== 1 || !arg || arg.name.value !== "if") return refuse("directives")
+		const value = valueFromASTUntyped(arg.value, variables)
+		if (typeof value !== "boolean") return refuse("directives")
+		if (name === "include" ? !value : value) include = false
+	}
+	return include
+}
+
+/**
+ * The fields of a selection set with fragments inlined, in order.
+ * When `directiveVars` is supplied, `@include`/`@skip` directives are evaluated against it (dropping excluded
+ * selections and refusing unknown/malformed directives); otherwise any directive is refused as `"directives"`.
+ */
 export function fieldsOf(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	depth = 0,
 	out: FieldNode[] = [],
+	directiveVars?: Record<string, unknown>,
+	skipped?: {any: boolean},
 ): FieldNode[] {
 	if (depth > MAX_FRAGMENT_DEPTH) return refuse("selection")
 	for (const selection of set.selections) {
-		if (selection.directives?.length) refuse("directives")
+		if (directiveVars !== undefined) {
+			if (!shouldIncludeSelection(selection, directiveVars)) {
+				if (skipped) skipped.any = true
+				continue
+			}
+		} else if (selection.directives?.length) {
+			refuse("directives")
+		}
 		if (selection.kind === Kind.FIELD) out.push(selection)
-		else if (selection.kind === Kind.INLINE_FRAGMENT) fieldsOf(selection.selectionSet, fragments, depth + 1, out)
+		else if (selection.kind === Kind.INLINE_FRAGMENT)
+			fieldsOf(selection.selectionSet, fragments, depth + 1, out, directiveVars, skipped)
 		else {
 			const fragment = fragments.get(selection.name.value)
 			if (!fragment) refuse("selection")
-			else fieldsOf(fragment, fragments, depth + 1, out)
+			else fieldsOf(fragment, fragments, depth + 1, out, directiveVars, skipped)
 		}
 	}
 	return out
@@ -333,14 +371,33 @@ const LIST_FIELDS = ["values", "valuesList", "relations", "relationsList"]
 const NO_LIST: ListPlan = {key: "", first: 0, columns: {}, nested: {}, names: {}, nodesKey: null, hasNext: null}
 
 /** A connection field whose selection is `totalCount` alone (and `__typename`). */
-export const isCountOnly = (field: FieldNode): boolean =>
-	(field.name.value === "relations" || field.name.value === "values" || field.name.value === "backlinks") &&
-	field.selectionSet !== undefined &&
-	field.selectionSet.selections.length > 0 &&
-	field.selectionSet.selections.every(
-		(sel) =>
-			sel.kind === Kind.FIELD && !sel.arguments?.length && ["totalCount", "__typename"].includes(sel.name.value),
+export const isCountOnly = (
+	field: FieldNode,
+	fragments?: Map<string, SelectionSetNode>,
+	directiveVars?: Record<string, unknown>,
+): boolean => {
+	if (
+		!(field.name.value === "relations" || field.name.value === "values" || field.name.value === "backlinks") ||
+		field.selectionSet === undefined
 	)
+		return false
+	if (fragments && directiveVars !== undefined) {
+		const fields = fieldsOf(field.selectionSet, fragments, 0, [], directiveVars)
+		return (
+			fields.length > 0 &&
+			fields.every((sel) => !sel.arguments?.length && ["totalCount", "__typename"].includes(sel.name.value))
+		)
+	}
+	return (
+		field.selectionSet.selections.length > 0 &&
+		field.selectionSet.selections.every(
+			(sel) =>
+				sel.kind === Kind.FIELD &&
+				!sel.arguments?.length &&
+				["totalCount", "__typename"].includes(sel.name.value),
+		)
+	)
+}
 
 /** The columns (and nested `{id}` objects) of a list's rows, with fragments inlined. */
 export type PlannedColumns = {
@@ -365,6 +422,7 @@ export function planColumns(
 	},
 	uncompared: Set<UncomparedReason>,
 	nestedOut?: NestedCollector,
+	directiveVars?: Record<string, unknown>,
 ): PlannedColumns {
 	const columns: Record<string, string> = {}
 	const nested: Record<string, string> = {}
@@ -372,7 +430,7 @@ export function planColumns(
 	const facets: RelationFacetKeys = {}
 	let propertyInfo: PropertyInfoPlan | undefined
 	const seen = new Set<string>()
-	for (const child of fieldsOf(set, fragments)) {
+	for (const child of fieldsOf(set, fragments, 0, [], directiveVars)) {
 		const name = child.name.value
 		const key = responseKeyOf(child)
 		if (seen.has(key)) refuse("selection")
@@ -383,13 +441,20 @@ export function planColumns(
 			// A nested object may carry its id (compared, when it is a compared column) and fields the card
 			// cannot settle (counted as uncompared). Its own arguments and sub-objects are not interpreted.
 			if (!child.selectionSet || child.arguments?.length) throw new Unsupported("selection")
-			if (object === PROPERTY_OBJECT) propertyInfo = planPropertyInfo(child, fragments, propertyInfo)
+			if (object === PROPERTY_OBJECT)
+				propertyInfo = planPropertyInfo(child, fragments, propertyInfo, directiveVars)
 			if (nestedOut && NESTED_OBJECT_NAMES.includes(name)) {
-				const planned = planNestedEntity(name as NestedObjectName, child, fragments, nestedOut.variables)
+				const planned = planNestedEntity(
+					name as NestedObjectName,
+					child,
+					fragments,
+					nestedOut.variables,
+					directiveVars,
+				)
 				nestedOut.plans.push(planned.plan)
 				if (planned.residual) nestedOut.residual = true
 			}
-			for (const inner of fieldsOf(child.selectionSet, fragments)) {
+			for (const inner of fieldsOf(child.selectionSet, fragments, 0, [], directiveVars)) {
 				if (!(inner.name.value in object.fields)) refuse("selection")
 				const reason = object.fields[inner.name.value]
 				if (reason === "name") {
@@ -432,6 +497,7 @@ function planList(
 	},
 	uncompared: Set<UncomparedReason>,
 	connection: boolean,
+	directiveVars?: Record<string, unknown>,
 ): PlannedList {
 	const args = argsOf(field, variables)
 	for (const name of Object.keys(args)) if (name !== "first" && name !== "filter" && name !== "after") refuse("args")
@@ -454,6 +520,7 @@ function planList(
 			spec,
 			uncompared,
 			collector,
+			directiveVars,
 		)
 		return {
 			list: withNested({
@@ -473,15 +540,15 @@ function planList(
 	let nodesKey: string | null = null
 	let hasNext: ListPlan["hasNext"] = null
 	let rows: PlannedColumns | null = null
-	for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
+	for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments, 0, [], directiveVars)) {
 		const name = child.name.value
 		if (name === "__typename") continue
 		if (child.arguments?.length || !child.selectionSet) throw new Unsupported("selection")
 		if (name === "nodes" && !nodesKey) {
 			nodesKey = responseKeyOf(child)
-			rows = planColumns(child.selectionSet, fragments, spec, uncompared, collector)
+			rows = planColumns(child.selectionSet, fragments, spec, uncompared, collector, directiveVars)
 		} else if (name === "pageInfo" && !hasNext) {
-			for (const inner of fieldsOf(child.selectionSet, fragments)) {
+			for (const inner of fieldsOf(child.selectionSet, fragments, 0, [], directiveVars)) {
 				if (!["hasNextPage", "endCursor", "__typename"].includes(inner.name.value) || !isPlainField(inner))
 					refuse("selection")
 				if (inner.name.value === "hasNextPage")
@@ -512,6 +579,7 @@ function planAllList(
 	fragments: Map<string, SelectionSetNode>,
 	variables: Record<string, unknown>,
 	allowed: readonly string[],
+	directiveVars?: Record<string, unknown>,
 ) {
 	const args = argsOf(field, variables)
 	for (const name of Object.keys(args)) if (name !== "first") refuse("args")
@@ -519,7 +587,7 @@ function planAllList(
 	if (typeof first !== "number" || !Number.isInteger(first) || first < 1) throw new Unsupported("args")
 	if (!field.selectionSet) refuse("selection")
 	const columns: Record<string, string> = {}
-	for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
+	for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments, 0, [], directiveVars)) {
 		const name = child.name.value
 		if (name === "__typename") continue
 		if (!allowed.includes(name) || !isPlainField(child)) refuse("selection")
@@ -535,12 +603,15 @@ export type ParsedOperation = {
 	variables: Record<string, unknown>
 	/** Root fields, `__typename` aside, with fragments inlined. */
 	roots: FieldNode[]
+	/** True when directive evaluation dropped at least one root selection via `@include(if: false)` / `@skip(if: true)`. */
+	skippedRoot?: boolean
 }
 
 export function parseOperation(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
+	options?: {evaluateDirectives?: boolean},
 ): ParsedOperation {
 	const fragments = new Map<string, SelectionSetNode>()
 	const operations: OperationDefinitionNode[] = []
@@ -564,8 +635,16 @@ export function parseOperation(
 			resolved[name] = valueFromASTUntyped(definition.defaultValue)
 		}
 	}
-	const roots = fieldsOf(operation.selectionSet, fragments).filter((f) => f.name.value !== "__typename")
-	return {fragments, variables: resolved, roots}
+	const skipped = {any: false}
+	const roots = fieldsOf(
+		operation.selectionSet,
+		fragments,
+		0,
+		[],
+		options?.evaluateDirectives ? resolved : undefined,
+		skipped,
+	).filter((f) => f.name.value !== "__typename")
+	return {fragments, variables: resolved, roots, ...(skipped.any ? {skippedRoot: true} : {})}
 }
 
 /**
@@ -579,6 +658,7 @@ function planBacklinkRows(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
+	directiveVars?: Record<string, unknown>,
 ): BacklinkRowsPlan | null {
 	const args = argsOf(field, resolved)
 	for (const arg of Object.keys(args)) if (!["first", "filter", "offset"].includes(arg)) refuse("args")
@@ -589,7 +669,7 @@ function planBacklinkRows(
 		ignored: [...RELATION_IGNORED, "typeId", "toEntityId"],
 	}
 	const rowsOf = (set: SelectionSetNode) => {
-		planColumns(set, fragments, spec, uncompared)
+		planColumns(set, fragments, spec, uncompared, undefined, directiveVars)
 		return set
 	}
 	let rowSet: SelectionSetNode
@@ -597,7 +677,7 @@ function planBacklinkRows(
 	if (field.name.value === "backlinksList") rowSet = rowsOf(field.selectionSet as SelectionSetNode)
 	else {
 		let nodes: SelectionSetNode | null = null
-		for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
+		for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments, 0, [], directiveVars)) {
 			const name = child.name.value
 			if (name === "__typename" || (name === "totalCount" && isPlainField(child))) continue
 			if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
@@ -617,14 +697,16 @@ function planBacklinkRows(
 	let space: string[] | null = null
 	let type: string[] | null = null
 	let from: string[] | null = null
-	for (const column of fieldsOf(rowSet, fragments)) {
+	for (const column of fieldsOf(rowSet, fragments, 0, [], directiveVars)) {
 		const name = column.name.value
 		const key = responseKeyOf(column)
 		if (name === "spaceId" && isPlainField(column)) space ??= [key]
 		else if (name === "typeId" && isPlainField(column)) type ??= [key]
 		else if (name === "fromEntityId" && isPlainField(column)) from ??= [key]
 		else if ((name === "type" || name === "fromEntity") && column.selectionSet && !column.arguments?.length) {
-			const id = fieldsOf(column.selectionSet, fragments).find((f) => f.name.value === "id" && isPlainField(f))
+			const id = fieldsOf(column.selectionSet, fragments, 0, [], directiveVars).find(
+				(f) => f.name.value === "id" && isPlainField(f),
+			)
 			if (!id) continue
 			if (name === "type") type ??= [key, responseKeyOf(id)]
 			else from ??= [key, responseKeyOf(id)]
@@ -651,8 +733,9 @@ export function planEntitySelection(
 	uncompared: Set<UncomparedReason>,
 	/** Light mode (lightShadow.ts): every list field goes to this callback instead of the card lists. */
 	light?: (field: FieldNode) => void,
-	options: {derivedFields?: boolean} = {},
+	options: {derivedFields?: boolean; evaluateDirectives?: boolean} = {},
 ): EntityCardPlan {
+	const directiveVars = options.evaluateDirectives ? resolved : undefined
 	let values: PlannedList | null = null
 	let relations: PlannedList | null = null
 	let idKey: string | null = null
@@ -678,13 +761,13 @@ export function planEntitySelection(
 		ignored: RELATION_IGNORED,
 		facets: true,
 	}
-	for (const field of fieldsOf(selectionSet, fragments)) {
+	for (const field of fieldsOf(selectionSet, fragments, 0, [], directiveVars)) {
 		const key = responseKeyOf(field)
 		if (seen.has(key)) return refuse("selection")
 		seen.add(key)
 		const fieldName = field.name.value
 		const filtered = argsOf(field, resolved).filter !== undefined
-		if (light && LIST_FIELDS.includes(fieldName) && !isCountOnly(field)) {
+		if (light && LIST_FIELDS.includes(fieldName) && !isCountOnly(field, fragments, directiveVars)) {
 			light(field)
 		} else if (fieldName === "id" || fieldName === "__typename") {
 			if (field.arguments?.length) return refuse("args")
@@ -709,7 +792,7 @@ export function planEntitySelection(
 			// The Spaces that name this entity as their topic: a Space's page, members and settings are no part of an
 			// entity card, so the field is counted uncompared and the rest of the entity is still judged.
 			uncompared.add("topic_spaces")
-		} else if (isCountOnly(field)) {
+		} else if (isCountOnly(field, fragments, directiveVars)) {
 			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list. Likewise
 			// `backlinks { totalCount }` (the tiebreaker queries): the count is not compared, the rest of the card is.
 			uncompared.add(fieldName === "backlinks" ? "backlink_count" : "relation_count")
@@ -723,7 +806,7 @@ export function planEntitySelection(
 			if (types?.plain) uncompared.add("types_alias")
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
-			for (const inner of fieldsOf(field.selectionSet, fragments)) {
+			for (const inner of fieldsOf(field.selectionSet, fragments, 0, [], directiveVars)) {
 				if (!isPlainField(inner)) return refuse("selection")
 				if (inner.name.value === "id") typeIdKey ??= responseKeyOf(inner)
 				else if (inner.name.value === "name") nameKey ??= responseKeyOf(inner)
@@ -740,9 +823,9 @@ export function planEntitySelection(
 			if (types) uncompared.add("types_alias")
 			else types = {key, idKey: null, nameKey: null, plain: true}
 		} else if (fieldName === "valuesList" && filtered && !values) {
-			values = planList(field, fragments, resolved, valueSpec, uncompared, false)
+			values = planList(field, fragments, resolved, valueSpec, uncompared, false, directiveVars)
 		} else if (fieldName === "valuesList" && !filtered && !allValues) {
-			const all = planAllList(field, fragments, resolved, ["spaceId", "propertyId"])
+			const all = planAllList(field, fragments, resolved, ["spaceId", "propertyId"], directiveVars)
 			allValues = {
 				key: all.key,
 				first: all.first,
@@ -750,15 +833,15 @@ export function planEntitySelection(
 				propertyKey: all.columns.propertyId ?? null,
 			}
 		} else if (fieldName === "relationsList" && filtered && !relations) {
-			relations = planList(field, fragments, resolved, relationSpec, uncompared, false)
+			relations = planList(field, fragments, resolved, relationSpec, uncompared, false, directiveVars)
 		} else if (fieldName === "relations" && !relations) {
-			relations = planList(field, fragments, resolved, relationSpec, uncompared, true)
+			relations = planList(field, fragments, resolved, relationSpec, uncompared, true, directiveVars)
 		} else if (fieldName === "relationsList" && !filtered && !allRelations) {
-			const all = planAllList(field, fragments, resolved, ["spaceId"])
+			const all = planAllList(field, fragments, resolved, ["spaceId"], directiveVars)
 			allRelations = {key: all.key, first: all.first, spaceKey: all.columns.spaceId ?? null}
 			uncompared.add("membership_only")
 		} else if (light && (fieldName === "backlinks" || fieldName === "backlinksList") && field.selectionSet) {
-			const planned = planBacklinkRows(field, fragments, resolved, uncompared)
+			const planned = planBacklinkRows(field, fragments, resolved, uncompared, directiveVars)
 			if (planned) backlinkPlans.push(planned)
 			backlinkRows = true
 		} else return refuse("selection")

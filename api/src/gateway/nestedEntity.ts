@@ -109,6 +109,7 @@ function planNestedList(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	variables: Record<string, unknown>,
+	directiveVars?: Record<string, unknown>,
 ): NestedList | null {
 	const shape = LIST_FIELDS[field.name.value as keyof typeof LIST_FIELDS]
 	if (!shape || !field.selectionSet) return null
@@ -124,7 +125,7 @@ function planNestedList(
 	let nodesKey: string | null = null
 	if (shape.connection) {
 		let nodes: SelectionSetNode | null = null
-		for (const child of fieldsOf(field.selectionSet, fragments)) {
+		for (const child of fieldsOf(field.selectionSet, fragments, 0, [], directiveVars)) {
 			const name = child.name.value
 			if (name === "__typename") continue
 			if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes) {
@@ -136,7 +137,7 @@ function planNestedList(
 		if (!nodes) return null
 		rows = nodes
 	}
-	const planned = planColumns(rows, fragments, rowSpec, new Set())
+	const planned = planColumns(rows, fragments, rowSpec, new Set(), undefined, directiveVars)
 	if (Object.keys(planned.nested).length > 0) return null
 	if (!spec.required.every((column) => planned.columns[column] !== undefined)) return null
 	return {kind: shape.kind, key: responseKeyOf(field), nodesKey, first, space, columns: planned.columns}
@@ -151,6 +152,7 @@ export function planNestedEntity(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	variables: Record<string, unknown>,
+	directiveVars?: Record<string, unknown>,
 ): {plan: NestedEntityPlan; residual: boolean} {
 	const plan: NestedEntityPlan = {
 		object,
@@ -164,7 +166,7 @@ export function planNestedEntity(
 	}
 	let residual = false
 	try {
-		for (const inner of field.selectionSet ? fieldsOf(field.selectionSet, fragments) : []) {
+		for (const inner of field.selectionSet ? fieldsOf(field.selectionSet, fragments, 0, [], directiveVars) : []) {
 			const name = inner.name.value
 			const key = responseKeyOf(inner)
 			if (name === "__typename" || name === "name") continue
@@ -173,11 +175,13 @@ export function planNestedEntity(
 			else if (name === "spaceIds" && isPlainField(inner) && !plan.spaceIds) plan.spaceIds = key
 			else if (name === "typeIds" && isPlainField(inner) && !plan.typeIds) plan.typeIds = key
 			else if (name === "types" && !plan.types && inner.selectionSet && isUnfilteredField(inner, variables)) {
-				const id = fieldsOf(inner.selectionSet, fragments).find((f) => f.name.value === "id" && isPlainField(f))
+				const id = fieldsOf(inner.selectionSet, fragments, 0, [], directiveVars).find(
+					(f) => f.name.value === "id" && isPlainField(f),
+				)
 				if (id) plan.types = {key, idKey: responseKeyOf(id)}
 				else residual = true
 			} else if (name in LIST_FIELDS) {
-				const list = planNestedList(inner, fragments, variables)
+				const list = planNestedList(inner, fragments, variables, directiveVars)
 				if (list) plan.lists.push(list)
 				else residual = true
 			} else residual = true

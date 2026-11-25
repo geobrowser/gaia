@@ -67,12 +67,13 @@ export function planPropertyInfo(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	into: PropertyInfoPlan | undefined,
+	directiveVars?: Record<string, unknown>,
 ): PropertyInfoPlan | undefined {
 	const key = responseKeyOf(field)
 	if (into && into.key !== key) return {...into, residual: true}
 	const plan: PropertyInfoPlan = into ?? {key, fields: {}, residual: false}
 	try {
-		for (const inner of field.selectionSet ? fieldsOf(field.selectionSet, fragments) : []) {
+		for (const inner of field.selectionSet ? fieldsOf(field.selectionSet, fragments, 0, [], directiveVars) : []) {
 			const name = inner.name.value as PropertyInfoField
 			if (!(PROPERTY_INFO_FIELDS as readonly string[]).includes(name)) continue
 			if (!isPlainField(inner) || plan.fields[name] !== undefined) plan.residual = true
