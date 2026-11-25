@@ -1063,6 +1063,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 										orderPick: geoDbCardConfig.orderPick === true,
 										relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 										relationFacets: geoDbCardConfig.relationFacets === true,
+										countOnly: geoDbCardConfig.countOnly === true,
 										...(geoDbCardConfig.everySpaceReads === true &&
 										geoDbCardConfig.everySpaceEntities === true
 											? {
