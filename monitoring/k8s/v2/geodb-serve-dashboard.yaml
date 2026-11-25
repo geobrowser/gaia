@@ -1,0 +1,271 @@
+# Grafana dashboard for the geo-db serve's Plan 10.35 U5 counters: geodb_store_fold_refused_total,
+# geodb_aura_sync_wait_ns_total and geodb_store_aura_warm_jobs_total. Alert: ./geodb-serve-alerts.yaml (GeoDbStoreFoldRefused).
+# Loaded by the Grafana sidecar via the grafana_dashboard label. Checked by tests/dashboard-check.sh (run.sh).
+#   kubectl apply -f monitoring/k8s/v2/geodb-serve-dashboard.yaml
+apiVersion: v1
+data:
+  geodb-serve-u5.json: |-
+    {
+      "id": null,
+      "uid": "geodb-serve-u5",
+      "title": "geo-db serve: U5 fold and Aura warm",
+      "tags": [
+        "geodb",
+        "serve",
+        "observability"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "1m",
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "U5 serve: atomic Branch fold and Aura warm",
+          "id": 1,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Branch folds refused (24h)",
+          "description": "geodb_store_fold_refused_total: Phase 1 staging refused an atomic Branch fold before any log write, so the store did not fence. Must stay 0. Alert: GeoDbStoreFoldRefused.",
+          "id": 2,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(geodb_store_fold_refused_total{namespace=\"gaia\", job=\"geodb\"}[24h])) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Branch folds refused",
+          "description": "Increase of geodb_store_fold_refused_total per interval. Any bar is a refused fold; check serve logs and owner-capacity metrics. Alert: GeoDbStoreFoldRefused.",
+          "id": 3,
+          "gridPos": {
+            "h": 8,
+            "w": 18,
+            "x": 6,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(geodb_store_fold_refused_total{namespace=\"gaia\", job=\"geodb\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "refused"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 1,
+                "fillOpacity": 40,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Aura sync wait",
+          "description": "Seconds of Aura sync wait accrued per second (geodb_aura_sync_wait_ns_total divided by 1e9). Sustained values above 0 mean requests are queueing behind Aura syncs.",
+          "id": 4,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(rate(geodb_aura_sync_wait_ns_total{namespace=\"gaia\", job=\"geodb\"}[$__rate_interval])) / 1e9",
+              "refId": "A",
+              "legendFormat": "sync wait"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Aura warm jobs",
+          "description": "Rate of geodb_store_aura_warm_jobs_total: Aura warm jobs the store has run.",
+          "id": 5,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(rate(geodb_store_aura_warm_jobs_total{namespace=\"gaia\", job=\"geodb\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "warm jobs"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: kube-prometheus-stack-grafana
+    grafana_dashboard: "1"
+    release: kube-prometheus-stack
+  name: geodb-serve-dashboard
+  namespace: monitoring
