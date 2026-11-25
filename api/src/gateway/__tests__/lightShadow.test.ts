@@ -1963,6 +1963,86 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	// A type-filtered list that selects the target id and the target's values (no `typeId`): the id ties the values to a
+	// relation, so they are held to geo-db's card of the target. Without the id they stay `nested_entity`.
+	describe("a type-filtered relation list's target values", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const valueProp = "1a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3e"
+		const target = "99999999999949998999999999999999"
+		const rows = (withId: boolean) =>
+			`${withId ? "toEntityId " : ""}toEntity { valuesList(filter: {propertyId: {is: "${valueProp}"}}) { propertyId text } }`
+		const queryOf = (withId: boolean) =>
+			`query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id spaceIds relationsList(filter: {typeId: {is: "${edgeType}"}, spaceId: {in: ["${SPACE_B}"]}}) { ${rows(withId)} } } }`
+		const body = (text: string) => ({
+			data: {
+				entities: [
+					{
+						id: FIRST.id,
+						spaceIds: [SPACE_B],
+						relationsList: [{toEntityId: target, toEntity: {valuesList: [{propertyId: valueProp, text}]}}],
+					},
+				],
+			},
+		})
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = `${conformingId("entity", edgeType)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const setup = (held: string | null) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const outputs = {[geoSpace(SPACE_B)]: typed + edge}
+			const readCards = vi.fn(async (args: {entityIds: string[]}) =>
+				held === null ? [] : [{prop: valueProp, raw: held, entity: args.entityIds[0] as string}],
+			)
+			const deps = {
+				nestedTargetValues: true,
+				relationsTypeFilter: true,
+				multiSpace: true,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readCards},
+				geoSpaceOf: async (space: string) => geoSpace(space),
+				log,
+			}
+			return {readCards, points: createPointReadShadows(deps)}
+		}
+		const callQuery = (s: ReturnType<typeof setup>, withId: boolean, payload: unknown) =>
+			call(s.points.get("entities") as never, queryOf(withId), {}, payload)
+
+		it("plans the target values when the target id is selected", () => {
+			const a = analyzeLightEntities(parse(queryOf(true)), null, {}, {relationsTypeFilter: true})
+			expect(a.ok).toBe(true)
+			if (a.ok) expect(a.plan.lists.some((list) => list.target !== undefined)).toBe(true)
+		})
+
+		it("matches a target whose values geo-db holds, in one batch read", async () => {
+			const s = setup("x")
+			await callQuery(s, true, body("x"))
+			expect(results()).toEqual({match: 1})
+			expect(s.readCards).toHaveBeenCalledTimes(1)
+			expect(s.readCards.mock.calls[0]?.[0].entityIds).toEqual([conformingId("entity", target)])
+		})
+
+		it("flags a target value geo-db does not hold", async () => {
+			await callQuery(setup("y"), true, body("x"))
+			await callQuery(setup(null), true, body("x"))
+			expect(results()).toEqual({mismatch: 2})
+		})
+
+		it("reads no target card without the target id, and counts nested_entity", async () => {
+			const s = setup("y")
+			await callQuery(s, false, {
+				data: {
+					entities: [
+						{
+							id: FIRST.id,
+							spaceIds: [SPACE_B],
+							relationsList: [{toEntity: {valuesList: [{propertyId: valueProp, text: "x"}]}}],
+						},
+					],
+				},
+			})
+			expect(s.readCards).not.toHaveBeenCalled()
+		})
+	})
+
 	it("stays no_space and reads nothing with the switch off", async () => {
 		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {flag: false})
 		await run(s)
