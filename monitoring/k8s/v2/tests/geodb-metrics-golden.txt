@@ -6,7 +6,9 @@
 # geodb_workers_busy_max and geodb_worker_queue_depth_max added by hand from geo-db bca336ede4 (live pin c1d4fd2040).
 # geodb_host_pool_* added by hand from geo-db 602d1badb7 (on final; not yet in the live pin d939fd08b5).
 # geodb_sessions_by_wire_payload and geodb_handshakes_by_wire_payload_total added by hand from geo-db docs/api/13 (on final, in the roll image 4728254ce5; not in the live pin d939fd08b5).
+# geodb_aura_sync_wait_ns_total, geodb_store_aura_warm_jobs_total (geo-db a6f582fbc3) and geodb_store_fold_refused_total (geo-db 734a950889) added by hand (on final; not yet in the live pin 727c925f8e).
 # Used only by lint-series.sh (label values for each series: geodb-label-values.txt). To refresh: copy the file again and update the commit above.
+geodb_aura_sync_wait_ns_total
 geodb_claim_bytes_held{class,session}
 geodb_claim_bytes_held{class}
 geodb_claims_in_use_max{claim_class}
@@ -79,6 +81,7 @@ geodb_store_atom_admission_probes_total
 geodb_store_atom_apply_probes_total
 geodb_store_atom_race_retries_total
 geodb_store_atom_run_probes_total
+geodb_store_aura_warm_jobs_total
 geodb_store_barrier_blob_sync_ns_total
 geodb_store_barrier_delta_ns_total
 geodb_store_barrier_directory_sync_ns_total
@@ -123,6 +126,7 @@ geodb_store_edits_committed_total
 geodb_store_fenced
 geodb_store_flush_pages_written_total
 geodb_store_flushes_due_vector_rows_total
+geodb_store_fold_refused_total
 geodb_store_front_active_bytes
 geodb_store_front_flushing_bytes
 geodb_store_front_pages_copied_total

@@ -142,6 +142,7 @@ tests:
       - {eval_time: 380m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolHeadroomLow, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolRefused, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
 
   - name: spaces at 80% stay silent, at 95% fire after 15m
     interval: 1m
@@ -671,3 +672,23 @@ tests:
                 geodb_host_pool_priced_peak with geodb_host_pool_records_max, then split the Edit at the
                 feeder or enlarge the pool (one serve restart).
       - {eval_time: 50m, alertname: GeoDbHostPoolRefused, exp_alerts: []}
+
+  - name: a store fold refusal fires, flat zero stays silent, and it clears after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fold_refused_total{namespace="gaia", job="geodb"}'
+        values: '0x10 1+1x5 6x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbStoreFoldRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused an atomic Branch fold during Phase 1 staging in the last 15m
+              description: >-
+                geodb_store_fold_refused_total rose above 0 (must stay 0). Phase 1 staging rejected a
+                commitSerial Branch fold before any log write or shared mutation, so the store did not fence
+                (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
+                owner-capacity metrics to find why staging refused the fold.
+      - {eval_time: 50m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
