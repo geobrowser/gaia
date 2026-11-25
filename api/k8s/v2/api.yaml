@@ -399,6 +399,10 @@ spec:
             # reads). Off until the feeder writes them (GEODB_RELATION_FACETS) and a backfill has run.
             - name: GEODB_RELATION_FACETS_SHADOW
               value: "off"
+            # Compare a totalCount-only relationsConnection against geo-db's relations count form (summed scanned per target, or
+            # the from entity's card). Shadow only; never changes a response (gaia#1745). Only the literal "on" enables it.
+            - name: GEODB_RELATIONS_COUNT_SHADOW
+              value: "on"
             # Accept the Postgres vote-score fields, counted `derived_fields`, uncompared (#1151).
             - name: GEODB_DERIVED_FIELDS_SHADOW
               value: "on"
