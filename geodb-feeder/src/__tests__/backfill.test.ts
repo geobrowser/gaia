@@ -9,7 +9,7 @@ import {createMetrics} from "../metrics.js"
 import {type OffsetsAdmin, checkOrdering} from "../ordering.js"
 import {DERIVED_PROPERTIES, decimalValue, entityOps, grcValue, heldOf, type PgRelationRow, type PgValueRow, pointValue} from "../pgAdapter.js"
 import type {BackfillSource} from "../pgSource.js"
-import {Store, eachLine} from "../state.js"
+import {Store, backfilledSpaces, eachLine} from "../state.js"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "backfill-"))
 const SPACE = "a19c345ab9866679b001d7d2138d88a1"
@@ -317,6 +317,47 @@ describe("runBackfill", () => {
 		const again = await runBackfill(deps(new Store(store.dir), src, geo), OPTS)
 		expect(again.entities).toBe(0)
 		expect(geo.applied.length).toBe(n)
+	})
+
+	it("a rerun with relist picks up entities Postgres gained after the list was frozen", async () => {
+		const store = mappedStore()
+		const geo = fakeGeo()
+		const w = world(3)
+		const src = fakeSource({[SPACE]: w})
+		await runBackfill(deps(store, src, geo), OPTS)
+		// Rows reach Postgres outside the edit topic (a repair or replay), so no feeder ever sees them.
+		const more = world(6)
+		w.values.push(...more.values.filter((v) => !w.values.includes(v) && Number.parseInt(v.entity_id, 16) > 3))
+		w.relations.push(...more.relations.filter((r) => Number.parseInt(r.from_entity_id, 16) > 3))
+		// Without relist the frozen list says "done": the old behaviour, and the reason the gap stays.
+		const stale = await runBackfill(deps(new Store(store.dir), src, geo), OPTS)
+		expect(stale.entities).toBe(0)
+		const again = await runBackfill(deps(new Store(store.dir), src, geo), {...OPTS, relist: true})
+		expect(again.entitiesRelisted).toBe(3)
+		expect(again.entities).toBe(3)
+		for (let i = 4; i <= 6; i++) expect(geo.created.has(hex(i))).toBe(true)
+		// and a further relist run finds nothing new and writes nothing
+		const n = geo.applied.length
+		const last = await runBackfill(deps(new Store(store.dir), src, geo), {...OPTS, relist: true})
+		expect(last.entitiesRelisted).toBe(0)
+		expect(last.entities).toBe(0)
+		expect(geo.applied.length).toBe(n)
+	})
+
+	it("a relisted Space is not loaded until its new entities are written", async () => {
+		const store = mappedStore()
+		const geo = fakeGeo()
+		const w = world(2)
+		const src = fakeSource({[SPACE]: w})
+		await runBackfill(deps(store, src, geo), OPTS)
+		expect(backfilledSpaces(store.dir)?.has(SPACE)).toBe(true)
+		w.values.push(value(ent(9), PROP, {text: "late"}))
+		await expect(runBackfill({...deps(new Store(store.dir), src, geo), guard: async () => Promise.reject(new Error("stop"))}, {...OPTS, relist: true})).rejects.toThrow("stop")
+		// the list now holds the late entity, the cursor does not: the map must say not loaded
+		expect(backfilledSpaces(store.dir)?.has(SPACE)).toBe(false)
+		await runBackfill(deps(new Store(store.dir), src, geo), {...OPTS, relist: true})
+		expect(backfilledSpaces(store.dir)?.has(SPACE)).toBe(true)
+		expect(geo.created.has(hex(9))).toBe(true)
 	})
 
 	it("resumes after a crash mid-batch without writing anything twice", async () => {

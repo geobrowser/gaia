@@ -10,6 +10,9 @@
  *   BACKFILL_MAX_ENTITIES (0: all), BACKFILL_EXCLUDE_PROPERTIES (default: the derived properties no edit
  *   carries; "none" for none), INDEXER_GROUP_ID (kg-indexer-v8-<env>).
  * - GEODB_READER_KEY_PATH: the key the read-back of known entities uses (the api's reader key).
+ * - BACKFILL_RELIST=1 reads every visited Space's entity list from Postgres again and appends the entities it gained since the
+ *   list was first taken (the list is otherwise frozen on the volume, so a Space marked loaded stays loaded whatever Postgres
+ *   holds now). The Space shows `loaded: false` until the new entities are written. Costs one list query per Space visited.
  * - BACKFILL_SKIP_ORDERING_CHECK=1 skips the Kafka precondition. Only for a store no feeder will ever resume.
  * - BACKFILL_MODE=relation-seed: not a Space backfill either. Writes the feeder's relation records (cell and open statement id,
  *   known-relations.log) for relations that existed before GEODB_RELATION_POSITIONS, read from geo-db with Postgres only
@@ -79,6 +82,7 @@ async function main(): Promise<void> {
 		facets: config.relationFacets,
 		legacyMap: config.legacyIdMap,
 		maxEntities: intEnv(env, "BACKFILL_MAX_ENTITIES", 0, 0),
+		relist: env.BACKFILL_RELIST === "1",
 	}
 	const indexerGroup = env.INDEXER_GROUP_ID ?? `kg-indexer-v8-${environment}`
 	const skipOrdering = env.BACKFILL_SKIP_ORDERING_CHECK === "1" || dryRun
@@ -96,6 +100,7 @@ async function main(): Promise<void> {
 		chunk: opts.chunk,
 		pauseMs: opts.pauseMs,
 		maxEntities: opts.maxEntities,
+		relist: opts.relist,
 		excludedProperties: opts.exclude.size,
 		entities: store.entityCount,
 		statements: store.statementCount,
