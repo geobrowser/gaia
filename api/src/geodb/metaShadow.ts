@@ -27,6 +27,7 @@ import {
 	recordGatewayUnsupported,
 } from "../gateway/metrics"
 import type {DerivedReader} from "./derived"
+import {withFailureScope} from "./failReason"
 import {createIntervalSampler, DEFAULT_SAMPLER_INTERVAL_MS, type IntervalSampler} from "./intervalSampler"
 
 export type MetaShadowConfig = {enabled: boolean; intervalMs: number}
@@ -86,7 +87,14 @@ export function createMetaShadow(deps: {
 			log.warn("meta shadow: the Postgres read failed", {error: String(error)})
 			return
 		}
-		const outcome = await runMetas(reader as DerivedReader, PLAN, body)
+		// A timer pass has no gateway failure scope, so open one: it carries the reader's error to the `failed` count.
+		await withFailureScope(async () => {
+			const outcome = await runMetas(reader as DerivedReader, PLAN, body)
+			record(outcome)
+		})
+	}
+
+	function record(outcome: Awaited<ReturnType<typeof runMetas>>): void {
 		if (outcome.result === "skip") return
 		if (outcome.result === "failed") return void recordGatewayShadow(METAS_FIELD, "failed")
 		if (outcome.result === "unsupported") {

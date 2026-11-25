@@ -1,6 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import type {Database} from "../../forYou/queries"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../../gateway/metrics"
+import {GeoDbError} from "../client"
 import type {DerivedReader} from "../derived"
 import {createMetaShadow, readMetaShadowConfig, readPostgresMetas} from "../metaShadow"
 
@@ -95,6 +96,29 @@ describe("createMetaShadow pass", () => {
 		const reader = {get: vi.fn(async () => Promise.reject(new Error("down")))}
 		await make(reader, body).runOnce()
 		expect(series("metas", "failed")).toBe(1)
+	})
+	it("names why a geo-db read failed instead of counting every failure as other", async () => {
+		const failedBy = (reason: string): number => {
+			const m = new RegExp(
+				`gaia_api_gateway_shadow_failed_total\\{field="metas",reason="${reason}"\\} (\\d+)`,
+			).exec(renderGatewayMetrics())
+			return m ? Number(m[1]) : 0
+		}
+		const fail = async (error: Error) => make({get: vi.fn(async () => Promise.reject(error))}, body).runOnce()
+		await fail(new GeoDbError("timeout", "derived read took longer than 500 ms"))
+		await fail(new GeoDbError("client_failed", "derived read refused: code=Unavailable"))
+		await fail(new GeoDbError("client_failed", "geodb-client derived pipe is backing off after a failed start"))
+		await fail(new Error("not a geo-db error"))
+		expect(failedBy("timeout")).toBe(1)
+		expect(failedBy("client_failed")).toBe(1)
+		expect(failedBy("other")).toBe(1)
+		expect(series("metas", "failed")).toBe(3)
+		// A read the reader never tried (it was backing off) is not a failure: it counts unsupported cooling_down.
+		expect(failedBy("cooling_down")).toBe(0)
+		expect(series("metas", "unsupported_selection")).toBe(1)
+		expect(renderGatewayMetrics()).toContain(
+			`gaia_api_gateway_shadow_unsupported_total{field="metas",reason="cooling_down"} 1`,
+		)
 	})
 	it("a Postgres failure counts nothing against geo-db and never throws", async () => {
 		const reader = held({})
