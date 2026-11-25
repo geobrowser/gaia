@@ -84,6 +84,18 @@ export function lexicalDefiniteRefusal(error: unknown): boolean {
 	)
 }
 
+const LEXICAL_BUSY_REFUSAL = /^refused: ResourceExhausted ResourceExhausted\s*$/
+
+/**
+ * Whether a lexical search was refused because the serve's share of its worker pool for every-Space typeahead was
+ * taken (geo-db e163cb72a9 answers `ResourceExhausted` with no diagnostics before any read; `geodb-client search`
+ * prints `refused: ResourceExhausted ResourceExhausted`). Matched whole: a ResourceExhausted that names a stage
+ * (`opening`, `claim ..`) or a bound's figures is another limit and stays a failure, as does any other `client_failed`.
+ */
+export function lexicalBusyRefusal(error: unknown): boolean {
+	return error instanceof GeoDbError && error.reason === "client_failed" && LEXICAL_BUSY_REFUSAL.test(error.message)
+}
+
 /** The entities of the tool's `search` output, in order, each once. A `partial: <n>` line is not a hit. */
 export function parseSearchOutput(output: string): string[] {
 	const seen = new Set<string>()

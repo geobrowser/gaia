@@ -8,7 +8,11 @@
 import {FAIL_REASONS, notedFailReason} from "../geodb/failReason"
 import {__resetSearchMetricsForTests, renderSearchMetrics} from "./searchMetrics"
 
-export const SHADOW_RESULTS = ["match", "mismatch", "unsupported_selection", "failed"] as const
+/**
+ * `refused_busy`: the serve refused the read at once because its share of the worker pool for that kind of read
+ * was taken (today only the every-Space typeahead, geo-db e163cb72a9). The serve answered, so it is not `failed`.
+ */
+export const SHADOW_RESULTS = ["match", "mismatch", "unsupported_selection", "refused_busy", "failed"] as const
 /** Why a selection cannot be answered from geo-db. A closed set, so it is safe as a label. */
 export const UNSUPPORTED_REASONS = [
 	"not_single_root",
@@ -290,7 +294,7 @@ export function recordGatewayUnsupportedShape(field: string, reason: Unsupported
 export function renderGatewayMetrics(): string {
 	if (fields.size === 0) return `${renderFieldRequests()}${renderSearchMetrics()}`
 	const lines = [
-		"# HELP gaia_api_gateway_shadow_total Gateway shadow comparisons by root field and result: match, mismatch, unsupported_selection (geo-db cannot answer the selection) or failed (geo-db read failed).",
+		"# HELP gaia_api_gateway_shadow_total Gateway shadow comparisons by root field and result: match, mismatch, unsupported_selection (geo-db cannot answer the selection), refused_busy (the serve refused the read at once because its share of the worker pool for it was taken; not a read failure) or failed (geo-db read failed).",
 		"# TYPE gaia_api_gateway_shadow_total counter",
 	]
 	for (const field of fields)
