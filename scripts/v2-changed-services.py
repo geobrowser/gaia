@@ -157,7 +157,8 @@ def self_check():
         (["docs/runbooks/deployment.md"], []),
         (["geodb-feeder/src/__tests__/errorTable.test.ts"], []),
         (["kg-indexer/tests/e2e.rs", "kg-indexer/README.md"], []),
-        (["kg-indexer/src/main.rs"], ["kg-indexer"]),
+        # ranking-indexer copies kg-indexer: its delete_entity_ranks test dev-depends on it.
+        (["kg-indexer/src/main.rs"], ["kg-indexer", "ranking-indexer"]),
         (["geodb-cursor/src/lib.rs"], ["hermes-ipfs-cache", "hermes-pipeline", "notification-indexer", "ranking-indexer", "search-indexer", "topology-indexer", "vote-indexer"]),
         (["hermes/k8s/v2/atlas.yaml"], ["atlas"]),
         (["ranking-indexer/k8s/v2/backfill-cronjob.yaml"], ["ranking-indexer"]),
