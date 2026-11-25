@@ -2,6 +2,167 @@ rule_files:
   - __RULES__
 evaluation_interval: 1m
 tests:
+  - name: derived rows at 70% stay silent, at 85% fire after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_rows{namespace="gaia", job="geodb"}'
+        values: '700x20 850x40'
+      - series: 'geodb_derived_rows_max{namespace="gaia", job="geodb"}'
+        values: '1000x60'
+    alert_rule_test:
+      - {eval_time: 19m, alertname: GeoDbDerivedRowsHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbDerivedRowsHigh, exp_alerts: []}
+      - eval_time: 45m
+        alertname: GeoDbDerivedRowsHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's derived class holds more than 80% of derived_rows_max
+              description: >-
+                Writes past the cap are refused (geodb_derived_refused_cap_total) and the writer drops or
+                retries them. See geodb_derived_collection_rows{collection} for which collection grew, then
+                raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+
+  - name: work rows at 70% stay silent, at 85% fire after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_work_rows{namespace="gaia", job="geodb"}'
+        values: '700x20 850x40'
+      - series: 'geodb_work_rows_max{namespace="gaia", job="geodb"}'
+        values: '1000x60'
+    alert_rule_test:
+      - {eval_time: 19m, alertname: GeoDbWorkRowsHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbWorkRowsHigh, exp_alerts: []}
+      - eval_time: 45m
+        alertname: GeoDbWorkRowsHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db's work class holds more than 80% of work_rows_max
+              description: >-
+                Units past the cap are refused, so the outbox mirror starts counting errors. Check
+                geodb_work_pending / geodb_work_delivered for a stalled consumer, then raise work_rows_max in
+                serve.cfg (one serve restart).
+
+  - name: outbox mirror errors fire on increase and clear, and fire when the counter first appears
+    interval: 1m
+    input_series:
+      - series: 'geodb_outbox_mirror_errors_total{namespace="gaia", job="notification-indexer", pod="a"}'
+        values: '0x10 1+1x4 5x45'
+      # Series created at its first increment (no earlier sample for increase() to subtract).
+      - series: 'geodb_outbox_mirror_errors_total{namespace="gaia", job="notification-indexer", pod="b"}'
+        values: '_x40 1x30'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbOutboxMirrorErrors, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbOutboxMirrorErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's geo-db outbox mirror is failing
+              description: >-
+                The mirror's geodb-client pipe errored (serve unreachable, key refused, work class off). The
+                shadow loses rows meanwhile; Postgres delivery is unaffected. Read the indexer log for
+                geodb_outbox.mirror_failed and geodb_outbox.pipe_started (RUNBOOK section 11).
+      - {eval_time: 35m, alertname: GeoDbOutboxMirrorErrors, exp_alerts: []}
+      - eval_time: 42m
+        alertname: GeoDbOutboxMirrorErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's geo-db outbox mirror is failing
+              description: >-
+                The mirror's geodb-client pipe errored (serve unreachable, key refused, work class off). The
+                shadow loses rows meanwhile; Postgres delivery is unaffected. Read the indexer log for
+                geodb_outbox.mirror_failed and geodb_outbox.pipe_started (RUNBOOK section 11).
+      - {eval_time: 65m, alertname: GeoDbOutboxMirrorErrors, exp_alerts: []}
+
+  - name: outbox mirror dropped fires on increase and on first appearance, then clears
+    interval: 1m
+    input_series:
+      - series: 'geodb_outbox_mirror_dropped_total{namespace="gaia", job="notification-indexer", pod="a"}'
+        values: '0x10 1+1x4 5x45'
+      - series: 'geodb_outbox_mirror_dropped_total{namespace="gaia", job="notification-indexer", pod="b"}'
+        values: '_x40 1x30'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbOutboxMirrorDropped, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbOutboxMirrorDropped
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's outbox mirror is dropping rows
+              description: >-
+                The bounded queue (4096) was full or its worker is gone, so enqueues were dropped from the
+                shadow (geodb_outbox_mirror_queue shows the depth). Postgres delivery is unaffected, but
+                the work class is now missing rows and a later shadow-read comparison will show them.
+      - {eval_time: 35m, alertname: GeoDbOutboxMirrorDropped, exp_alerts: []}
+      - eval_time: 42m
+        alertname: GeoDbOutboxMirrorDropped
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's outbox mirror is dropping rows
+              description: >-
+                The bounded queue (4096) was full or its worker is gone, so enqueues were dropped from the
+                shadow (geodb_outbox_mirror_queue shows the depth). Postgres delivery is unaffected, but
+                the work class is now missing rows and a later shadow-read comparison will show them.
+      - {eval_time: 65m, alertname: GeoDbOutboxMirrorDropped, exp_alerts: []}
+
+  - name: outbox mirror backlog ignores short serve-roll spikes and fires after 10m sustained
+    interval: 1m
+    input_series:
+      - series: 'geodb_outbox_mirror_backlog{namespace="gaia", job="notification-indexer"}'
+        values: '0x5 5x3 0x10 12x30'
+    alert_rule_test:
+      - {eval_time: 10m, alertname: GeoDbOutboxMirrorBacklog, exp_alerts: []}
+      - {eval_time: 25m, alertname: GeoDbOutboxMirrorBacklog, exp_alerts: []}
+      - eval_time: 35m
+        alertname: GeoDbOutboxMirrorBacklog
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's outbox mirror has held unsent units for 10 minutes
+              description: >-
+                Units whose geo-db enter failed are kept and retried oldest first (bounded; default 3000).
+                A backlog that does not drain means serve is down or refusing the work key; once the bound
+                is hit the oldest units are dropped (GeoDbOutboxMirrorBacklogDropped). Fix serve, then check
+                the backlog falls to 0 (RUNBOOK section 11).
+
+  - name: outbox mirror backlog dropped fires for both dropped and expired counters and clears
+    interval: 1m
+    input_series:
+      - series: 'geodb_outbox_mirror_backlog_dropped_total{namespace="gaia", job="notification-indexer"}'
+        values: '0x10 1+1x4 5x45'
+      - series: 'geodb_outbox_mirror_backlog_expired_total{namespace="gaia", job="notification-indexer"}'
+        values: '_x40 1x30'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbOutboxMirrorBacklogDropped, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbOutboxMirrorBacklogDropped
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's outbox mirror backlog is dropping units
+              description: >-
+                Units were dropped from the backlog: it hit its bound during an outage (backlog_dropped), or
+                a unit geo-db kept refusing was expired from the head (backlog_expired; needs gaia#1507).
+                Postgres delivery is unaffected. Check which counter rose, then replay the window with
+                outbox-replay once serve is healthy (RUNBOOK section 11).
+      - {eval_time: 35m, alertname: GeoDbOutboxMirrorBacklogDropped, exp_alerts: []}
+      - eval_time: 42m
+        alertname: GeoDbOutboxMirrorBacklogDropped
+        exp_alerts:
+          - exp_labels: {severity: warning, service: notification-indexer, namespace: gaia}
+            exp_annotations:
+              summary: The notification-indexer's outbox mirror backlog is dropping units
+              description: >-
+                Units were dropped from the backlog: it hit its bound during an outage (backlog_dropped), or
+                a unit geo-db kept refusing was expired from the head (backlog_expired; needs gaia#1507).
+                Postgres delivery is unaffected. Check which counter rose, then replay the window with
+                outbox-replay once serve is healthy (RUNBOOK section 11).
+      - {eval_time: 65m, alertname: GeoDbOutboxMirrorBacklogDropped, exp_alerts: []}
+
   - name: votes_count mirror lag fires only after 15m over 10m
     interval: 1m
     input_series:
@@ -142,6 +303,7 @@ tests:
       - {eval_time: 380m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolHeadroomLow, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolRefused, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
 
   - name: spaces at 80% stay silent, at 95% fire after 15m
     interval: 1m
@@ -296,6 +458,35 @@ tests:
               summary: geo-db's worker pool has been saturated with jobs waiting for 25m
               description: >-
                 For 15m every scrape showed all workers busy at some point in its minute and a queue peak above 0, and it held 10m more. Requests wait and park (GeoDbParkWaitSustained). Look for a slow or stuck job (geodb_request_duration_us by class, slow=1 request-log lines), then raise the reactor worker count if the load is real. Plot geodb:workers_busy_max:max5m and geodb:worker_queue_depth_max:max5m.
+
+  - name: pool-peaks recording rules keep the 5m peak after a 1m spike drops
+    interval: 1m
+    input_series:
+      - series: 'geodb_workers_busy_max{namespace="gaia", job="geodb"}'
+        values: '2x10 8 2x20'
+      - series: 'geodb_worker_queue_depth_max{namespace="gaia", job="geodb"}'
+        values: '0x10 5 0x20'
+    promql_expr_test:
+      - expr: geodb:workers_busy_max:max5m
+        eval_time: 13m
+        exp_samples:
+          - labels: 'geodb:workers_busy_max:max5m{namespace="gaia", job="geodb"}'
+            value: 8
+      - expr: geodb:workers_busy_max:max5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'geodb:workers_busy_max:max5m{namespace="gaia", job="geodb"}'
+            value: 2
+      - expr: geodb:worker_queue_depth_max:max5m
+        eval_time: 13m
+        exp_samples:
+          - labels: 'geodb:worker_queue_depth_max:max5m{namespace="gaia", job="geodb"}'
+            value: 5
+      - expr: geodb:worker_queue_depth_max:max5m
+        eval_time: 20m
+        exp_samples:
+          - labels: 'geodb:worker_queue_depth_max:max5m{namespace="gaia", job="geodb"}'
+            value: 0
 
   # session="" on park wait and claim parked: serve prints the node's fold (no session label) and one
   # row per live session, so a sum by (class) over both counts each live room twice.
@@ -528,6 +719,7 @@ tests:
         values: '0x10 1+1x5 6x40'
     alert_rule_test:
       - {eval_time: 8m, alertname: GeoDbAdmissionCeiling, exp_alerts: []}
+      - {eval_time: 8m, alertname: GeoDbAdmissionClaimOverClamp, exp_alerts: []}
       - eval_time: 15m
         alertname: GeoDbAdmissionCeiling
         exp_alerts:
@@ -545,6 +737,17 @@ tests:
               description: >-
                 A read priced above the service's claim is refused by design, so one oversized query makes this nonzero legitimately. Info until a week of scrapes gives a baseline; tighten to warning after that.
       - {eval_time: 50m, alertname: GeoDbAdmissionCeiling, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbAdmissionClaimOverClamp, exp_alerts: []}
+
+  - name: admission refusal causes do not cross-fire
+    interval: 1m
+    input_series:
+      - series: 'geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="ceiling"}'
+        values: '0x10 1+1x5 6x40'
+      - series: 'geodb_claims_refused_by_cause_total{namespace="gaia", job="geodb", cause="claim_over_clamp"}'
+        values: '0x56'
+    alert_rule_test:
+      - {eval_time: 15m, alertname: GeoDbAdmissionClaimOverClamp, exp_alerts: []}
 
   - name: derived image refused fires at info after 1m
     interval: 1m
@@ -566,6 +769,8 @@ tests:
     interval: 1m
     input_series:
       - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="loaded"}'
+        values: '1x30'
+      - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="off"}'
         values: '1x30'
       - series: 'geodb_derived_image_outcome{namespace="gaia", job="geodb", outcome="absent"}'
         values: '1x30'
@@ -593,6 +798,7 @@ tests:
               summary: geo-db refused a derived write past the table cap in the last 15m
               description: >-
                 GeoDbDerivedRowsHigh warns at 80%; this fires if it was missed. Raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+      - {eval_time: 50m, alertname: GeoDbDerivedRefusedCap, exp_alerts: []}
       - {eval_time: 50m, alertname: GeoDbDerivedViewFailures, exp_alerts: []}
       - {eval_time: 10m, alertname: GeoDbWorkOpenRowsHigh, exp_alerts: []}
       - eval_time: 30m
@@ -603,6 +809,43 @@ tests:
               summary: geo-db's work class holds more than 80% of work_open_rows_max
               description: >-
                 Open (pending plus in-progress) units are near their cap, so new units will be refused. Check geodb_work_pending and geodb_work_in_progress for a stalled consumer, then raise the cap in serve.cfg (one serve restart).
+
+  - name: derived view failures fire on a rise and clear after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_derived_view_failures_total{namespace="gaia", job="geodb"}'
+        values: '0x10 1+1x5 6x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbDerivedViewFailures, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbDerivedViewFailures
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db derived view failures in the last 15m
+              description: >-
+                geodb_derived_view_failures_total rose. Read the serve log for the failing view and check geodb_derived_collection_rows{collection}.
+      - {eval_time: 50m, alertname: GeoDbDerivedViewFailures, exp_alerts: []}
+
+  - name: work open rows at 70% or with cap 0 stay silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_work_open_rows{namespace="gaia", job="geodb", pod="a"}'
+        values: '70x60'
+      - series: 'geodb_work_open_rows_max{namespace="gaia", job="geodb", pod="a"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbWorkOpenRowsHigh, exp_alerts: []}
+
+  - name: work open rows with zero cap stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_work_open_rows{namespace="gaia", job="geodb"}'
+        values: '10x60'
+      - series: 'geodb_work_open_rows_max{namespace="gaia", job="geodb"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: GeoDbWorkOpenRowsHigh, exp_alerts: []}
 
   - name: store fenced fires at 1, silent at 0
     interval: 1m
@@ -671,3 +914,23 @@ tests:
                 geodb_host_pool_priced_peak with geodb_host_pool_records_max, then split the Edit at the
                 feeder or enlarge the pool (one serve restart).
       - {eval_time: 50m, alertname: GeoDbHostPoolRefused, exp_alerts: []}
+
+  - name: a store fold refusal fires, flat zero stays silent, and it clears after 15m
+    interval: 1m
+    input_series:
+      - series: 'geodb_store_fold_refused_total{namespace="gaia", job="geodb"}'
+        values: '0x10 1+1x5 6x40'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbStoreFoldRefused
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db refused an atomic Branch fold during Phase 1 staging in the last 15m
+              description: >-
+                geodb_store_fold_refused_total rose above 0 (must stay 0). Phase 1 staging rejected a
+                commitSerial Branch fold before any log write or shared mutation, so the store did not fence
+                (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
+                owner-capacity metrics to find why staging refused the fold.
+      - {eval_time: 50m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}

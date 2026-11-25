@@ -404,6 +404,10 @@ spec:
             # compare). Shadow only; off by default.
             - name: GEODB_RELATION_GROUPED_FACETS_SHADOW
               value: "off"
+            # Compare a totalCount-only relationsConnection against geo-db's relations count form (summed scanned per target, or
+            # the from entity's card). Shadow only; never changes a response (gaia#1745). Only the literal "on" enables it.
+            - name: GEODB_RELATIONS_COUNT_SHADOW
+              value: "on"
             # Accept the Postgres vote-score fields, counted `derived_fields`, uncompared (#1151).
             - name: GEODB_DERIVED_FIELDS_SHADOW
               value: "on"

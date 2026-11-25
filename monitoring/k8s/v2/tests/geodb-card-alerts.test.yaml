@@ -1,0 +1,153 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  # Series exist only on api pods with GEODB_ENTITY_CARDS on or shadow. With the flag off nothing is exported.
+  - name: silent when no entity-card series exist
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="gaia", job="api"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: ApiGeoDbCardFallbackRateHigh, exp_alerts: []}
+      - {eval_time: 40m, alertname: ApiGeoDbCardShadowDiffs, exp_alerts: []}
+      - {eval_time: 40m, alertname: ApiGeoDbCardShadowFailing, exp_alerts: []}
+
+  - name: silent at zero
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="geodb"}'
+        values: '0x60'
+      - series: 'gaia_api_geodb_card_fallback_total{namespace="gaia", job="api", reason="timeout"}'
+        values: '0x60'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="match"}'
+        values: '0x60'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="only_postgres"}'
+        values: '0x60'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="failed"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 40m, alertname: ApiGeoDbCardFallbackRateHigh, exp_alerts: []}
+      - {eval_time: 40m, alertname: ApiGeoDbCardShadowDiffs, exp_alerts: []}
+      - {eval_time: 40m, alertname: ApiGeoDbCardShadowFailing, exp_alerts: []}
+
+  # 10% fallback (12/min = 0.2/s > 0.1/s floor; 108/min served from geodb). Postgres-sourced serves do not dilute.
+  - name: card fallback over 5% and 0.1/s fires after 10m; postgres-sourced serves do not dilute the ratio
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="geodb"}'
+        values: '0+108x60'
+      - series: 'gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="postgres"}'
+        values: '0+10000x60'
+      - series: 'gaia_api_geodb_card_fallback_total{namespace="gaia", job="api", reason="timeout"}'
+        values: '0+12x60'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: ApiGeoDbCardFallbackRateHigh, exp_alerts: []}
+      - eval_time: 25m
+        alertname: ApiGeoDbCardFallbackRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+            exp_annotations:
+              summary: More than 5% of geo-db card reads are falling back to Postgres
+              description: >-
+                Mode on is answering from Postgres instead of geo-db. Break it down by reason with
+                sum by (reason) (rate(gaia_api_geodb_card_fallback_total[10m])): timeout means geo-db is slow,
+                client_failed means it is down or refusing (check geodb-client, key, binding), unmapped_space
+                means the space map is missing a Space. The p99 of gaia_api_geodb_read_seconds shows which.
+
+  # 2% fallback (12/min = 0.2/s, above the rate floor) is below the 5% ratio threshold.
+  - name: card fallback ratio under 5% stays silent even above the rate floor
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="geodb"}'
+        values: '0+588x60'
+      - series: 'gaia_api_geodb_card_fallback_total{namespace="gaia", job="api", reason="timeout"}'
+        values: '0+12x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: ApiGeoDbCardFallbackRateHigh, exp_alerts: []}
+
+  # 50% fallback, but only 3/min = 0.05/s, below the 0.1/s rate floor.
+  - name: card fallback ratio over 5% under the 0.1/s floor stays silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="geodb"}'
+        values: '0+3x60'
+      - series: 'gaia_api_geodb_card_fallback_total{namespace="gaia", job="api", reason="client_failed"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: ApiGeoDbCardFallbackRateHigh, exp_alerts: []}
+
+  # 3% diffs (1 only_postgres + 1 only_geodb + 1 both per minute, 97 match) fires after 30m.
+  - name: shadow diffs over 1% fire after 30m
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="match"}'
+        values: '0+97x90'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="only_postgres"}'
+        values: '0+1x90'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="only_geodb"}'
+        values: '0+1x90'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="both"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: ApiGeoDbCardShadowDiffs, exp_alerts: []}
+      - eval_time: 45m
+        alertname: ApiGeoDbCardShadowDiffs
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+            exp_annotations:
+              summary: More than 1% of shadow geo-db card reads differ from Postgres
+              description: >-
+                Look at the "geodb card diff" warning logs: each carries the entity, Space and the first
+                five statements on each side.
+
+  # 0.5% diffs (1 only_postgres, 199 match) stays silent; failed comparisons are excluded from both sides.
+  - name: shadow diffs under 1% stay silent and failed comparisons do not count as diffs
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="match"}'
+        values: '0+199x90'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="only_postgres"}'
+        values: '0+1x90'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="failed"}'
+        values: '0+500x90'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: ApiGeoDbCardShadowDiffs, exp_alerts: []}
+
+  # 30% failed (30 failed, 70 match) fires after 15m.
+  - name: shadow failing over 20% fires after 15m
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="match"}'
+        values: '0+70x60'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="failed"}'
+        values: '0+30x60'
+    alert_rule_test:
+      - {eval_time: 12m, alertname: ApiGeoDbCardShadowFailing, exp_alerts: []}
+      - eval_time: 30m
+        alertname: ApiGeoDbCardShadowFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: api
+              namespace: gaia
+            exp_annotations:
+              summary: Shadow geo-db reads are failing
+              description: geo-db could not be asked for more than 20% of shadow comparisons; the comparison is blind.
+
+  # 10% failed (10 failed, 90 match) stays silent.
+  - name: shadow failing under 20% stays silent
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="match"}'
+        values: '0+90x60'
+      - series: 'gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="failed"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: ApiGeoDbCardShadowFailing, exp_alerts: []}
