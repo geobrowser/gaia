@@ -934,3 +934,80 @@ tests:
                 (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
                 owner-capacity metrics to find why staging refused the fold.
       - {eval_time: 50m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+
+  - name: a stuck geodb pod fires after 20m, a normal roll and a scale to 0 stay silent
+    interval: 1m
+    input_series:
+      # Stuck: wants 1, none ready from minute 5 on.
+      - series: 'kube_statefulset_replicas{namespace="gaia", statefulset="geodb"}'
+        values: '1x60'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x5 0x55'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbServeNotReady, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbServeNotReady
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia, statefulset: geodb}
+            exp_annotations:
+              summary: sts/geodb has had no Ready serve pod for 20m
+              description: >-
+                The geodb StatefulSet wants a pod but none is Ready, so every geo-db read and write is failing or
+                falling back. A normal roll is back in a few minutes; this waits 20m. Check `kubectl -n gaia describe
+                pod geodb-0` (a stuck volume attach, ImagePullBackOff, a failing readiness probe) and the serve log. It is
+                silent while the sts is scaled to 0 for a migrate. If a planned roll legitimately reopens a large store
+                for longer, silence this alertname in Alertmanager for the window.
+
+  - name: a roll that is back in 6 minutes does not fire GeoDbServeNotReady
+    interval: 1m
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="gaia", statefulset="geodb"}'
+        values: '1x60'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x10 0x6 1x44'
+    alert_rule_test:
+      - {eval_time: 16m, alertname: GeoDbServeNotReady, exp_alerts: []}
+      - {eval_time: 40m, alertname: GeoDbServeNotReady, exp_alerts: []}
+
+  - name: an sts scaled to 0 for a migrate stays silent, and fires once scaled back up and stuck
+    interval: 1m
+    input_series:
+      - series: 'kube_statefulset_replicas{namespace="gaia", statefulset="geodb"}'
+        values: '0x60 1x60'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '0x120'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbServeNotReady, exp_alerts: []}
+      - {eval_time: 70m, alertname: GeoDbServeNotReady, exp_alerts: []}
+      - eval_time: 85m
+        alertname: GeoDbServeNotReady
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia, statefulset: geodb}
+            exp_annotations:
+              summary: sts/geodb has had no Ready serve pod for 20m
+              description: >-
+                The geodb StatefulSet wants a pod but none is Ready, so every geo-db read and write is failing or
+                falling back. A normal roll is back in a few minutes; this waits 20m. Check `kubectl -n gaia describe
+                pod geodb-0` (a stuck volume attach, ImagePullBackOff, a failing readiness probe) and the serve log. It is
+                silent while the sts is scaled to 0 for a migrate. If a planned roll legitimately reopens a large store
+                for longer, silence this alertname in Alertmanager for the window.
+
+  - name: three serve restarts in 30m fire, one restart for a roll stays silent
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="gaia", pod="geodb-0", container="serve"}'
+        values: '0x5 1+1x3 4x50'
+      - series: 'kube_pod_container_status_restarts_total{namespace="gaia", pod="geodb-1", container="serve"}'
+        values: '0x5 1x55'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GeoDbServeRestarting
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, pod: geodb-0}
+            exp_annotations:
+              summary: geo-db serve restarted 3 or more times in 30m
+              description: >-
+                The serve container is crash-looping or being killed. Read `kubectl -n gaia logs geodb-0 -c serve --previous`
+                and the last state (OOMKilled, a store that fails to open, a fenced store). A single restart for a pin roll
+                does not reach 3.
+      - {eval_time: 50m, alertname: GeoDbServeRestarting, exp_alerts: []}

@@ -53,6 +53,12 @@
 #   GeoDbHostPoolRefused      geodb_host_pool_refused_total rose in the last 15m (an Edit priced past every
 #                             slot of the host pool: owner=identity_table row=none)
 #
+#   Pod health (kube-state-metrics; no serve metric needed, so these work while serve is down):
+#   GeoDbServeNotReady        sts/geodb wants replicas > 0 but fewer are Ready, for 20m. Silent by
+#                             construction while the sts is scaled to 0 (a migrate window); a planned roll that
+#                             reopens a big store slowly can be covered with an Alertmanager silence on alertname.
+#   GeoDbServeRestarting      the serve container restarted 3 or more times in 30m (a crash loop)
+#
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -594,6 +600,45 @@ spec:
               commitSerial Branch fold before any log write or shared mutation, so the store did not fence
               (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
               owner-capacity metrics to find why staging refused the fold.
+
+    # Pod health from kube-state-metrics. serve's own series vanish when the pod is down, so every other rule here goes
+    # quiet exactly when this matters. sts/geodb is scaled to 0 on purpose for a migrate window; a spec of 0 replicas
+    # keeps GeoDbServeNotReady silent without any silence being needed.
+    - name: geodb.serve.pod-health
+      rules:
+        - alert: GeoDbServeNotReady
+          expr: |
+            max by (namespace, statefulset) (kube_statefulset_replicas{namespace="gaia", statefulset="geodb"}) > 0
+              and
+            max by (namespace, statefulset) (kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"})
+              < max by (namespace, statefulset) (kube_statefulset_replicas{namespace="gaia", statefulset="geodb"})
+          for: 20m
+          labels:
+            severity: critical
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: sts/geodb has had no Ready serve pod for 20m
+            description: >-
+              The geodb StatefulSet wants a pod but none is Ready, so every geo-db read and write is failing or
+              falling back. A normal roll is back in a few minutes; this waits 20m. Check `kubectl -n gaia describe
+              pod geodb-0` (a stuck volume attach, ImagePullBackOff, a failing readiness probe) and the serve log. It is
+              silent while the sts is scaled to 0 for a migrate. If a planned roll legitimately reopens a large store
+              for longer, silence this alertname in Alertmanager for the window.
+
+        - alert: GeoDbServeRestarting
+          expr: |
+            sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace="gaia", pod=~"geodb-[0-9]+", container="serve"}[30m])) >= 3
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db serve restarted 3 or more times in 30m
+            description: >-
+              The serve container is crash-looping or being killed. Read `kubectl -n gaia logs geodb-0 -c serve --previous`
+              and the last state (OOMKilled, a store that fails to open, a fenced store). A single restart for a pin roll
+              does not reach 3.
 
     # The pool's peaks are reset-on-window gauges: one point row per scrape shows only that minute. These keep
     # the 5m peak beside it for dashboards and for reading an incident back. Silent while the series are absent.
