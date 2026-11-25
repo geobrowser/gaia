@@ -108,7 +108,7 @@ these clusters is flaky, so retry a failed read two or three times before treati
 | live `deploy/geodb-feeder`, init container `geodb-setup` | `geodb:67b6974a5e` (the `geodb-client` binary the feeder runs comes from this image, not from the feeder image) |
 | live `geodb-card-replay` | `geodb-feeder:edc7e8a4` |
 | live `deploy/api` | `api:7b2500a9afec...` (full sha), init container `geodb:8cba4da996` |
-| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:6bf310da42` (11-24, build run 45503413893; previous pin `862d06166d`, the live image until the swap). **No migrate**: `862d06166d` to `6bf310da42` keeps `persistent_revision` 9, `checkpoint_manifest` 21, `manifest_delta` 12, `wire_payload` 23, `wire_frame` 19, `wire_mutate` 9 and `query_plan_dag` 22 (`payload_min_supported` 18 to 21; no live session below 22), and carries the ISS-822-519 claim-deadlock fix (`e34d8eb58f`). It is an image swap of the serve StatefulSet and every client; roll back by swapping every line back to `862d06166d` (same rev-9 store, no store change). The earlier 5 to 9 move (`99fdac58cf` to `862d06166d`) was §8d. `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). |
+| `main` pins (`geodb.yaml` serve, `geodb-feeder.yaml` `geodb-setup`, every client's `geodb-setup`) | `geodb:f5b4a2ae35` (11-24, build run 45516511084; previous pin `6bf310da42`, the live image until the swap). **No migrate**: `6bf310da42` to `f5b4a2ae35` keeps `persistent_revision` 9, `checkpoint_manifest` 21, `manifest_delta` 12, `wire_payload` 23, `wire_frame` 19, `wire_mutate` 9 and `query_plan_dag` 22, and `payload_min_supported` stays 21 (no `src/format` change in the range; no live session is dropped). It carries the `read_blob` page-room fix (`d71a7dea90`, ISS-824-418: `read_blob` stops lending the 128 MiB page room), the bounded top-K sorter and seek-resumed continuations (`546628529c`), the wild-copy `lz4Expand` and shared OpLog block cache (`f159d8ea04`) and the nested relation rollup refusal (`bd484781cb`). It is an image swap of the serve StatefulSet and every client; roll back by swapping every line back to `6bf310da42` (same rev-9 store, no store change). The earlier 5 to 9 move (`99fdac58cf` to `862d06166d`) was §8d. `serve.cfg` names `listen_before_open = true` (#1587, merged 11-13). |
 | newest `geodb-feeder` tag in the registry | `bdada8fb`. **No feeder image containing #1566, #1567, #1570, #1576, #1577, #1578, #1580 or #1581 has been built**, so none of them is live. |
 
 Merged since #1574 was written: #1565, #1566, #1567, #1570, #1571, #1572, #1573, #1575, #1576, #1577, #1578, #1579, #1580, #1581 (all
@@ -719,6 +719,19 @@ $K logs -f job/geodb-replay-edit     # "replay-edit applied" with deadLettered 0
 $K delete job geodb-replay-edit
 $K scale deployment/geodb-feeder --replicas=1
 ```
+
+**`replay_edit` and this Job are a pair; running one alone leaves the stores apart.** The kg-indexer tool writes Postgres only,
+so after it runs geo-db holds none of the edit until this Job does. Edit `6a1398bd` (version key 125690:0, Space `88883e1e`) was
+replayed to Postgres with no twin: 45 of the Space's 49 entities were never in geo-db. `replay_edit` now ends every run with a
+`POSTGRES ONLY` banner that prints this Job's arguments (`--uri`, `--space`, `--block`, `--sequence`, `--created-at`, `--edit`);
+run the dry run from that banner in the same sitting.
+
+To find edits whose twin was skipped, run `scripts/check-pg-only-edits.py` (read only; its docstring has the three steps):
+`list` the sequence-0 edits since a cutoff from the public GraphQL, `sql` prints the Postgres read that names each edit's
+(edit, Space, entity) pairs, and `check` compares them with the feeder's `known-entities.log` and `space-map.json` (both read with
+`cat`). Sequence 0 only names candidates (a live edit first in its block has it too); an edit is a repair item when `check`
+lists it. Its rows carry the arguments for this Job; the CID is not in `edit_versions` (read it from the `ipfs_cache` URI of the
+edit, or pass `--cids`).
 
 Rerunning an applied edit is a no-op (its `updatedAt` equals the edit's, and each chunk carries an idempotency key).
 The Job's `GEODB_*` flags copy `geodb-feeder.yaml`'s; change them together. The `updatedAt` it compares is the row written
