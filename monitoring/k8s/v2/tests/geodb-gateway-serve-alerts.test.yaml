@@ -141,3 +141,51 @@ tests:
                 where they hand over to Postgres. See histogram_quantile(0.99, sum by (le)
                 (rate(gaia_api_gateway_serve_seconds_bucket{field="entities", outcome="served"}[15m]))).
                 RUNBOOK section 13.
+
+  # gaia_api_gateway_shadow_total (shadow reads, not the served path). Threshold 500 in 30m per field, for 30m.
+  # search: 20 failed a minute (600 in 30m) fires. entity: 10 failed + 10 mismatch a minute (600) fires.
+  # relation: 10 failed a minute (300) is under the threshold. searchConnection: 100 refused_busy and 100
+  # unsupported_selection a minute are excluded by name. entities: 20 failed a minute for only 20 minutes
+  # does not outlast the 30m for.
+  - name: shadow failed or mismatch over threshold fires for that field only, refused_busy and unsupported_selection excluded
+    interval: 1m
+    input_series:
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="search", result="failed"}'
+        values: '0+20x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="failed"}'
+        values: '0+10x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entity", result="mismatch"}'
+        values: '0+10x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="relation", result="failed"}'
+        values: '0+10x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="searchConnection", result="refused_busy"}'
+        values: '0+100x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="searchConnection", result="unsupported_selection"}'
+        values: '0+100x90'
+      - series: 'gaia_api_gateway_shadow_total{namespace="gaia", job="api", field="entities", result="failed"}'
+        values: '0+20x20 400x70'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GatewayShadowFailing, exp_alerts: []}
+      - eval_time: 75m
+        alertname: GatewayShadowFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: entity}
+            exp_annotations:
+              summary: Gateway shadow reads of entity are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="entity"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="entity"}[30m])).
+                RUNBOOK section 7.
+          - exp_labels: {severity: warning, service: api, namespace: gaia, field: search}
+            exp_annotations:
+              summary: Gateway shadow reads of search are failing or mismatching (over 500 in 30m)
+              description: >-
+                geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+                for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+                declines) are not counted. Break it down with
+                sum by (result) (increase(gaia_api_gateway_shadow_total{field="search"}[30m])) and
+                sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="search"}[30m])).
+                RUNBOOK section 7.

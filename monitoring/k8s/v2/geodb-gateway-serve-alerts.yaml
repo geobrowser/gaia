@@ -8,6 +8,13 @@
 #
 #   GatewayServeFallbackHigh  failure-class fallbacks over 10% of at least 20 operations in 15m, per field
 #   GatewayServeLatencyHigh   served p99 over the 250 ms serve timeout, at least 20 served in 15m, per field
+#   GatewayShadowFailing      shadow reads of a field failed or mismatched over 500 in 30m, sustained 30m
+#
+# GatewayShadowFailing reads gaia_api_gateway_shadow_total{field,result}, the shadow path, not the served one.
+# It counts result failed and mismatch only: refused_busy (the typeahead share was taken, load not a fault) and
+# unsupported_selection (a shape geo-db declines by design) are excluded by the matcher. 500 is just above the
+# 24 h p95 of the worst field (entity, 492 failed per 30m on 11-25) and under its peak (941); search and
+# searchConnection sit near 260 failed per 30m, so a steady search failure does not page, a storm does.
 #
 # Failure-class reasons are geo-db failing a query it could have answered: timeout, overloaded,
 # client_failed, bad_request, error, and id_map (the reverse id map could not be read). The other
@@ -68,3 +75,21 @@ spec:
               where they hand over to Postgres. See histogram_quantile(0.99, sum by (le)
               (rate(gaia_api_gateway_serve_seconds_bucket{field="{{ $labels.field }}", outcome="served"}[15m]))).
               RUNBOOK section 13.
+
+        - alert: GatewayShadowFailing
+          expr: |
+            sum by (field) (increase(gaia_api_gateway_shadow_total{namespace="gaia", job="api", result=~"failed|mismatch"}[30m])) > 500
+          for: 30m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: Gateway shadow reads of {{ $labels.field }} are failing or mismatching (over 500 in 30m)
+            description: >-
+              geo-db shadow reads for the field returned failed or mismatch results above 500 in 30m, sustained
+              for 30m. refused_busy (the typeahead share taken) and unsupported_selection (a shape geo-db
+              declines) are not counted. Break it down with
+              sum by (result) (increase(gaia_api_gateway_shadow_total{field="{{ $labels.field }}"}[30m])) and
+              sum by (reason) (increase(gaia_api_gateway_shadow_failed_total{field="{{ $labels.field }}"}[30m])).
+              RUNBOOK section 7.
