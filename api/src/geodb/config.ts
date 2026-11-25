@@ -110,7 +110,10 @@ export type GeoDbCardConfig = {
 	/**
 	 * Compare a relation's `toSpaceId` and `verified` (`relation` / `relations` point reads) against the facet claims
 	 * geo-db holds on the relation's statement (docs/api/10 section 5.5). Off by default, and meaningless until the feeder
-	 * writes them (GEODB_RELATION_FACETS on, then a backfill). GEODB_RELATION_FACETS_SHADOW=on.
+	 * writes them (GEODB_RELATION_FACETS on, then a backfill). Also compares a `relationsConnection`'s grouped distinct-count
+	 * facet (`groupedAggregates(groupBy: [TO_ENTITY_ID]) { keys distinctCount { fromEntityId } }`) against geo-db's grouped
+	 * relations form, one read a root (needs a serve of geo-db d69965d241 or later; an older one refuses it, counted
+	 * `count_refused`). GEODB_RELATION_FACETS_SHADOW=on.
 	 */
 	relationFacets?: boolean
 	/**
