@@ -411,8 +411,13 @@ const MAX_TYPE_FILTER = 20
 const MAX_EXCLUDED_PROPERTIES = 64
 
 /** Whether the relation rows select a `toEntity` object (in the row, or in a connection's `nodes`). */
-function selectsTarget(field: FieldNode, fragments: Map<string, SelectionSetNode>): boolean {
-	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] => (set ? fieldsOf(set, fragments) : [])
+function selectsTarget(
+	field: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	directiveVars?: Record<string, unknown>,
+): boolean {
+	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] =>
+		set ? fieldsOf(set, fragments, 0, [], directiveVars) : []
 	const direct = rowsOf(field.selectionSet)
 	const nodes = direct.find((child) => child.name.value === "nodes")
 	return (nodes ? rowsOf(nodes.selectionSet) : direct).some(
@@ -425,8 +430,9 @@ function planLightList(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {projections?: boolean; relationsTypeFilter?: boolean} = {},
+	options: {projections?: boolean; relationsTypeFilter?: boolean; evaluateDirectives?: boolean} = {},
 ): LightList {
+	const directiveVars = options.evaluateDirectives ? resolved : undefined
 	const name = field.name.value
 	const kind = name === "values" || name === "valuesList" ? "values" : "relations"
 	const connection = name === "values" || name === "relations"
@@ -451,17 +457,17 @@ function planLightList(
 	let rows: PlannedColumns
 	let nodesKey: string | null = null
 	if (!connection) {
-		rows = planColumns(field.selectionSet, fragments, spec, uncompared)
+		rows = planColumns(field.selectionSet, fragments, spec, uncompared, undefined, directiveVars)
 	} else {
 		let planned: PlannedColumns | null = null
-		for (const child of fieldsOf(field.selectionSet, fragments)) {
+		for (const child of fieldsOf(field.selectionSet, fragments, 0, [], directiveVars)) {
 			const childName = child.name.value
 			if (childName === "__typename") continue
 			if (childName === "totalCount" && isPlainField(child)) uncompared.add("relation_count")
 			else if (childName === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
 			else if (childName === "nodes" && child.selectionSet && !child.arguments?.length && !planned) {
 				nodesKey = responseKeyOf(child)
-				planned = planColumns(child.selectionSet, fragments, spec, uncompared)
+				planned = planColumns(child.selectionSet, fragments, spec, uncompared, undefined, directiveVars)
 			} else refuse("selection")
 		}
 		if (!planned) return refuse("selection")
@@ -502,7 +508,7 @@ function planLightList(
 		// The filter says which Types the rows hold; the answer does not say which one each does.
 		uncompared.add("filter_completeness")
 		// With the target id selected, the target's own values are held to geo-db's card of that target.
-		const target = planTargetValues(field, fragments, resolved)
+		const target = planTargetValues(field, fragments, resolved, directiveVars)
 		return {
 			kind,
 			key: responseKeyOf(field),
@@ -512,7 +518,7 @@ function planLightList(
 			typeFilter: typeFilterOf(filter) as string[],
 			...(target ? {target} : {}),
 		}
-	} else if (has("typeId") && !has("toEntityId") && selectsTarget(field, fragments)) {
+	} else if (has("typeId") && !has("toEntityId") && selectsTarget(field, fragments, directiveVars)) {
 		uncompared.add("nested_entity")
 		return {
 			kind,
@@ -526,7 +532,7 @@ function planLightList(
 		!has("typeId") &&
 		!has("toEntityId") &&
 		options.relationsTypeFilter &&
-		selectsTarget(field, fragments) &&
+		selectsTarget(field, fragments, directiveVars) &&
 		typeFilterOf(filter)
 	) {
 		uncompared.add("filter_completeness")
@@ -559,7 +565,7 @@ function planLightList(
 			projection: true,
 		}
 	}
-	const target = kind === "relations" ? planTargetValues(field, fragments, resolved) : null
+	const target = kind === "relations" ? planTargetValues(field, fragments, resolved, directiveVars) : null
 	// An offset or an order would change which rows a bounded page holds; a bare `first` page is the entity's first rows.
 	const bare = args.offset === undefined || args.offset === null || args.offset === 0
 	const reverse = first > 0 && bare ? reverseFilterOf(filter, kind === "values" ? "propertyId" : "typeId") : undefined
@@ -583,15 +589,19 @@ function planTargetValues(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
+	directiveVars?: Record<string, unknown>,
 ): LightList["target"] | null {
-	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] => (set ? fieldsOf(set, fragments) : [])
+	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] =>
+		set ? fieldsOf(set, fragments, 0, [], directiveVars) : []
 	const direct = rowsOf(field.selectionSet)
 	const nodes = direct.find((child) => child.name.value === "nodes")
 	const toEntity = (nodes ? rowsOf(nodes.selectionSet) : direct).find((child) => child.name.value === "toEntity")
 	const values = rowsOf(toEntity?.selectionSet).find((child) => child.name.value === "valuesList")
 	if (!toEntity || !values) return null
 	try {
-		const list = planLightList(values, fragments, resolved, new Set())
+		const list = planLightList(values, fragments, resolved, new Set(), {
+			evaluateDirectives: directiveVars !== undefined,
+		})
 		return list.kind === "values" && !list.propertyFilter && !list.excludedPropertyFilter
 			? {key: responseKeyOf(toEntity), values: list}
 			: null
@@ -621,6 +631,7 @@ function planLightEntity(
 		derivedFields?: boolean
 		/** `entity(id) { spaceIds }` alone is judged (every-Space read). */
 		spaceIdsOnly?: boolean
+		evaluateDirectives?: boolean
 	} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
@@ -634,10 +645,11 @@ function planLightEntity(
 				planLightList(field, fragments, resolved, uncompared, {
 					projections: options.projections,
 					relationsTypeFilter: options.relationsTypeFilter,
+					evaluateDirectives: options.evaluateDirectives,
 				}),
 			)
 		},
-		{derivedFields: options.derivedFields},
+		{derivedFields: options.derivedFields, evaluateDirectives: options.evaluateDirectives},
 	)
 	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
@@ -939,9 +951,15 @@ function readOrderedArgs(
 const METAS_FIELD = "metas"
 
 /** A connection root whose selection is `totalCount` (and `__typename`) alone. */
-function isCountOnly(root: FieldNode, fragments: Map<string, SelectionSetNode>): boolean {
+function isCountOnly(
+	root: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	directiveVars?: Record<string, unknown>,
+): boolean {
 	if (!root.selectionSet) return false
-	const fields = fieldsOf(root.selectionSet, fragments).filter((f) => f.name.value !== "__typename")
+	const fields = fieldsOf(root.selectionSet, fragments, 0, [], directiveVars).filter(
+		(f) => f.name.value !== "__typename",
+	)
 	return fields.length > 0 && fields.every((f) => f.name.value === "totalCount" && isPlainField(f))
 }
 
@@ -966,8 +984,10 @@ function planEntitiesRoot(
 		derivedFields?: boolean
 		connection?: boolean
 		ordered?: boolean
+		evaluateDirectives?: boolean
 	},
 ): LightAnalysis<LightEntitiesPlan> {
+	const directiveVars = options.evaluateDirectives ? resolved : undefined
 	if (!root.selectionSet) return {ok: false, reason: "selection"}
 	const args = argsOf(root, resolved)
 	for (const arg of Object.keys(args))
@@ -985,7 +1005,7 @@ function planEntitiesRoot(
 		let nodes: FieldNode | null = null
 		let edgeField: FieldNode | null = null
 		let edgeNode: FieldNode | null = null
-		for (const child of fieldsOf(root.selectionSet, fragments)) {
+		for (const child of fieldsOf(root.selectionSet, fragments, 0, [], directiveVars)) {
 			const name = child.name.value
 			if (name === "__typename") continue
 			if (name === "totalCount" && isPlainField(child)) uncompared.add("total_count")
@@ -995,7 +1015,7 @@ function planEntitiesRoot(
 			else if (name === "edges" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField) {
 				// `edges { node { .. } cursor }`: the node is the entity; the cursor is PostGraphile's own.
 				edgeField = child
-				for (const inner of fieldsOf(child.selectionSet, fragments)) {
+				for (const inner of fieldsOf(child.selectionSet, fragments, 0, [], directiveVars)) {
 					const innerName = inner.name.value
 					if (innerName === "__typename" || (innerName === "cursor" && isPlainField(inner))) continue
 					if (innerName === "node" && inner.selectionSet && !inner.arguments?.length && !edgeNode)
@@ -1033,6 +1053,7 @@ function planEntitiesRoot(
 		projections: options.entitiesBatch === true,
 		relationsTypeFilter: options.relationsTypeFilter === true,
 		derivedFields: options.derivedFields === true,
+		evaluateDirectives: options.evaluateDirectives,
 	})
 	if (!card.idKey) return {ok: false, reason: "selection"}
 	uncompared.add("sampled_rows")
@@ -1077,21 +1098,28 @@ export function analyzeLightEntitiesConnection(
 	} = {},
 ): LightAnalysis<LightEntitiesMultiPlan> {
 	try {
-		const parsed = parseOperation(document, operationName, variables)
+		const parsed = parseOperation(document, operationName, variables, {evaluateDirectives: true})
 		const {fragments, variables: resolved} = parsed
 		const sentinel = parsed.roots.some((r) => r.name.value === METAS_FIELD)
 		const connRoots = parsed.roots.filter((r) => r.name.value === "entitiesConnection")
-		if (connRoots.length === 0) return {ok: false, reason: "not_single_root"}
-		if (connRoots.every((r) => isCountOnly(r, fragments))) return {ok: false, reason: "count_only"}
+		if (connRoots.length === 0)
+			return parsed.skippedRoot
+				? {ok: true, plan: {plans: [], uncompared: []}}
+				: {ok: false, reason: "not_single_root"}
+		if (connRoots.every((r) => isCountOnly(r, fragments, resolved))) return {ok: false, reason: "count_only"}
 		const extraUncompared = new Set<UncomparedReason>()
 		if (sentinel) extraUncompared.add("metas_cursor")
 		const plans: LightEntitiesPlan[] = []
 		for (const root of connRoots) {
-			if (isCountOnly(root, fragments)) {
+			if (isCountOnly(root, fragments, resolved)) {
 				extraUncompared.add("total_count")
 				continue
 			}
-			const planned = planEntitiesRoot(root, fragments, resolved, sentinel, {...options, connection: true})
+			const planned = planEntitiesRoot(root, fragments, resolved, sentinel, {
+				...options,
+				connection: true,
+				evaluateDirectives: true,
+			})
 			if (!planned.ok) return planned
 			if (plans.length < MAX_MULTI_ENTITIES_CONNECTION_ROOTS) plans.push(planned.plan)
 		}
@@ -1179,12 +1207,13 @@ export function analyzeCountOnly(
 ): LightAnalysis<CountOnlyPlan> {
 	const notLowerable = {ok: false, reason: "count_only"} as const
 	try {
-		const parsed = parseOperation(document, operationName, variables)
+		const parsed = parseOperation(document, operationName, variables, {evaluateDirectives: true})
 		const roots = parsed.roots.filter((r) => r.name.value !== METAS_FIELD)
 		if (roots.length === 0 || roots.length > MAX_COUNT_ONLY_ROOTS) return notLowerable
 		const lowered: CountOnlyRoot[] = []
 		for (const root of roots) {
-			if (root.name.value !== "entitiesConnection" || !isCountOnly(root, parsed.fragments)) return notLowerable
+			if (root.name.value !== "entitiesConnection" || !isCountOnly(root, parsed.fragments, parsed.variables))
+				return notLowerable
 			const args = argsOf(root, parsed.variables)
 			for (const arg of Object.keys(args))
 				if (!ENTITIES_ARGS.includes(arg) && arg !== "after") return notLowerable
