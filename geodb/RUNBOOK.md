@@ -2753,6 +2753,7 @@ is 1.7 to 9.6 % smaller than its source, so ≥ 1.2x the store free (20.4 GB) ho
 (~28 seals/s); live has ~420k now (389k + 11,955 sealed since 11-20 01:23Z + the days between). Serial: ~4 h 10 min.
 `--threaded --jobs 4`: ~1.9x on m4, so ~2 h 15 min. `--jobs 8` hit a retry assert in an earlier run; do not use it.
 Budget 2.5 h of serve downtime, 4.5 h worst case.
+**Measured 11-25 (§8e): about 7 h for the rev-9 to rev-10 run, so the 2.5 h budget above was wrong; budget 8 h.**
 
 **The feeder during the downtime: leave it running.** `apply.ts` retries a transient failure (geo-db down) forever with
 backoff and never dead-letters it (`main.ts`: "message failed, retrying (never skipped)"); `/health/liveness` always
@@ -2917,6 +2918,8 @@ What to change from §8d next time:
 
 - **Budget 8 h, not 2.5 h.** The cost is the commit phase (one commit per seal), not the replay: 497k versions took 7 h.
   Size the silences and the on-call window to match: silence for 9 h, and re-check at the 8 h mark.
+  `GeoDbMigrateJobRunningLong` now warns at 9 h of an active `geodb-migrate-*` Job (it was 4 h on a "1.5-2 h" estimate and
+  would have paged during this healthy 7 h run); it matches the `--timeout=9h` wait above.
 - **Grow the volume first.** Required free space is the new root plus the kept old root. Check `df` on `data-geodb-0` before
   quiescing; a Job that fills the disk stops mid-migrate with `store` untouched, but you have lost the window.
 - **Add `GeoDbOutboxMirrorErrors` to the silence list** (already named in §8a step 2) and expect it anyway if a
