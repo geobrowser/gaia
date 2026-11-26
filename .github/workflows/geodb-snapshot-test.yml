@@ -1,0 +1,23 @@
+name: geodb snapshot tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'geodb/k8s/v2/geodb-snapshot.yaml'
+      - 'geodb/test-snapshot.sh'
+      - '.github/workflows/geodb-snapshot-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'geodb/k8s/v2/geodb-snapshot.yaml'
+      - 'geodb/test-snapshot.sh'
+      - '.github/workflows/geodb-snapshot-test.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck geodb/test-snapshot.sh
+      - run: bash geodb/test-snapshot.sh
