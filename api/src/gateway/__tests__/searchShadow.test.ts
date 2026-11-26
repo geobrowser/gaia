@@ -830,3 +830,266 @@ describe("word leg owned by geo-db (wordLeg: engine)", () => {
 		)
 	})
 })
+
+describe("every_space typeahead concurrency cap", () => {
+	const MANY_SPACES = Array.from({length: 1579}, (_, i) => i.toString(16).padStart(32, "0"))
+	const NO_SPACE_SEARCH = SEARCH.replace("spaceId: $spaceId, ", "")
+	const NO_SPACE_CONNECTION = CONNECTION.replace("spaceId: $spaceId, ", "")
+
+	function deferred<T>() {
+		let resolve!: (value: T) => void
+		let reject!: (reason?: unknown) => void
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res
+			reject = rej
+		})
+		return {promise, resolve, reject}
+	}
+
+	it("lets both search and searchConnection every_space typeahead calls pass while under the cap", async () => {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const first = deferred<string[]>()
+		const second = deferred<string[]>()
+		const entered1 = deferred<void>()
+		const entered2 = deferred<void>()
+		let calls = 0
+		const searchLexical = vi.fn(() => {
+			calls += 1
+			if (calls === 1) {
+				entered1.resolve()
+				return first.promise
+			}
+			entered2.resolve()
+			return second.promise
+		})
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => MANY_SPACES,
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+			maxEverySpaceTypeaheadInFlight: 2,
+		})
+		const pg = ids(2)
+		const p1 = run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		const p2 = run(
+			shadows,
+			"searchConnection",
+			NO_SPACE_CONNECTION,
+			{data: {searchConnection: {nodes: pg.map((id) => ({id}))}}},
+			{q: "bob"},
+		)
+		await Promise.all([entered1.promise, entered2.promise])
+		expect(searchLexical).toHaveBeenCalledTimes(2)
+		first.resolve(pg.map(geo))
+		second.resolve(pg.map(geo))
+		await Promise.all([p1, p2])
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({
+			"field=search,outcome=compared": 1,
+			"field=searchConnection,outcome=compared": 1,
+		})
+	})
+
+	it("sheds over-cap every_space typeahead calls across search and searchConnection without counting failed", async () => {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const first = deferred<string[]>()
+		const entered = deferred<void>()
+		const searchLexical = vi.fn(() => {
+			entered.resolve()
+			return first.promise
+		})
+		// Default cap is 1 per pod, shared across search and searchConnection.
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => MANY_SPACES,
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+		})
+		const pg = ids(2)
+		const inFlight = run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		await entered.promise
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+
+		// While search holds the slot, both another search and a searchConnection every_space typeahead are shed.
+		await run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "bob"})
+		await run(
+			shadows,
+			"searchConnection",
+			NO_SPACE_CONNECTION,
+			{data: {searchConnection: {nodes: pg.map((id) => ({id}))}}},
+			{q: "carol"},
+		)
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({
+			"field=search,reason=every_space_typeahead_cap": 1,
+			"field=searchConnection,reason=every_space_typeahead_cap": 1,
+		})
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_failed_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_search_failed_total")).toEqual({})
+
+		first.resolve(pg.map(geo))
+		await inFlight
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({"field=search,outcome=compared": 1})
+	})
+
+	it("releases the slot on completion and on rejection so no slots leak", async () => {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const first = deferred<string[]>()
+		const second = deferred<string[]>()
+		const third = deferred<string[]>()
+		const entered = [deferred<void>(), deferred<void>(), deferred<void>()]
+		const queue = [first.promise, second.promise, third.promise]
+		let calls = 0
+		const searchLexical = vi.fn(() => {
+			entered[calls]?.resolve()
+			calls += 1
+			return queue.shift() ?? Promise.resolve([])
+		})
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => MANY_SPACES,
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+		})
+		const pg = ids(1)
+
+		// 1) Normal completion releases slot.
+		const p1 = run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		await entered[0]?.promise
+		first.resolve(pg.map(geo))
+		await p1
+
+		// 2) Rejection releases slot.
+		const p2 = run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "bob"})
+		await entered[1]?.promise
+		second.reject(new GeoDbError("timeout", "slow"))
+		await p2
+
+		// 3) Next call acquires the slot cleanly.
+		const p3 = run(
+			shadows,
+			"searchConnection",
+			NO_SPACE_CONNECTION,
+			{data: {searchConnection: {nodes: pg.map((id) => ({id}))}}},
+			{q: "carol"},
+		)
+		await entered[2]?.promise
+		third.resolve(pg.map(geo))
+		await p3
+
+		expect(searchLexical).toHaveBeenCalledTimes(3)
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({
+			"field=search,outcome=compared": 1,
+			"field=searchConnection,outcome=compared": 1,
+		})
+	})
+
+	it("does not shed scoped (non-every_space) or bm25 shadow calls", async () => {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const held = deferred<string[]>()
+		const enteredHeld = deferred<void>()
+		const searchLexical = vi.fn((args: {everySpace?: boolean; mode: string}) => {
+			if (args.everySpace && args.mode === "typeahead") {
+				enteredHeld.resolve()
+				return held.promise
+			}
+			return Promise.resolve(ids(1).map(geo))
+		})
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => MANY_SPACES,
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+		})
+		const pg = ids(1)
+
+		// Occupy the single every_space typeahead slot.
+		const p1 = run(shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		await enteredHeld.promise
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+
+		// Scoped search is NOT shed even while the every_space typeahead slot is full.
+		await run(shadows, "search", SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada", spaceId: SPACE})
+		expect(searchLexical).toHaveBeenCalledTimes(2)
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({})
+
+		held.resolve(pg.map(geo))
+		await p1
+
+		// Unscoped search with <= MAX_LISTED_SPACES (not every_space) is also NOT subject to the cap.
+		const listed1 = deferred<string[]>()
+		const listed2 = deferred<string[]>()
+		const enteredListed1 = deferred<void>()
+		const enteredListed2 = deferred<void>()
+		let listedCalls = 0
+		const listedSearchLexical = vi.fn(() => {
+			listedCalls += 1
+			if (listedCalls === 1) {
+				enteredListed1.resolve()
+				return listed1.promise
+			}
+			enteredListed2.resolve()
+			return listed2.promise
+		})
+		const listedShadows = createSearchShadows({
+			search: {searchLexical: listedSearchLexical},
+			allGeoSpaces: async () => [GEO_SPACE, GEO_SPACE_2],
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+		})
+		const lp1 = run(listedShadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		const lp2 = run(
+			listedShadows,
+			"searchConnection",
+			NO_SPACE_CONNECTION,
+			{data: {searchConnection: {nodes: pg.map((id) => ({id}))}}},
+			{q: "bob"},
+		)
+		await Promise.all([enteredListed1.promise, enteredListed2.promise])
+		expect(listedSearchLexical).toHaveBeenCalledTimes(2)
+		listed1.resolve(pg.map(geo))
+		listed2.resolve(pg.map(geo))
+		await Promise.all([lp1, lp2])
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({})
+
+		// bm25 every_space shadow calls are NOT subject to the every_space typeahead cap.
+		const b1 = deferred<string[]>()
+		const b2 = deferred<string[]>()
+		const enteredBm25_1 = deferred<void>()
+		const enteredBm25_2 = deferred<void>()
+		let bm25Calls = 0
+		const bm25SearchLexical = vi.fn(() => {
+			bm25Calls += 1
+			if (bm25Calls === 1) {
+				enteredBm25_1.resolve()
+				return b1.promise
+			}
+			enteredBm25_2.resolve()
+			return b2.promise
+		})
+		const bm25Shadows = createSearchShadows({
+			search: {searchLexical: bm25SearchLexical},
+			allGeoSpaces: async () => MANY_SPACES,
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+			mode: "bm25",
+		})
+		const bp1 = run(bm25Shadows, "search", NO_SPACE_SEARCH, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		const bp2 = run(
+			bm25Shadows,
+			"searchConnection",
+			NO_SPACE_CONNECTION,
+			{data: {searchConnection: {nodes: pg.map((id) => ({id}))}}},
+			{q: "bob"},
+		)
+		await Promise.all([enteredBm25_1.promise, enteredBm25_2.promise])
+		expect(bm25SearchLexical).toHaveBeenCalledTimes(2)
+		b1.resolve(pg.map(geo))
+		b2.resolve(pg.map(geo))
+		await Promise.all([bp1, bp2])
+		expect(metric("gaia_api_gateway_shadow_skipped_total")).toEqual({})
+	})
+})

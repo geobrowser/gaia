@@ -55,8 +55,8 @@ export const UNSUPPORTED_REASONS = [
 	"cooling_down",
 ] as const
 
-/** Why a sampled shadow was not run at all: the gateway's own cap on shadows at once, or the geo-db pool already saturated. */
-export const SKIPPED_REASONS = ["in_flight", "pool_busy"] as const
+/** Why a sampled shadow was not run at all: the gateway's own cap on shadows at once, the geo-db pool already saturated, or the per-pod every-Space typeahead concurrency cap reached. */
+export const SKIPPED_REASONS = ["in_flight", "pool_busy", "every_space_typeahead_cap"] as const
 export type SkippedReason = (typeof SKIPPED_REASONS)[number]
 
 /**
@@ -318,7 +318,7 @@ export function renderGatewayMetrics(): string {
 	for (const field of fields)
 		lines.push(`gaia_api_gateway_shadow_requests_total{field="${field}"} ${requests.get(field) ?? 0}`)
 	lines.push(
-		"# HELP gaia_api_gateway_shadow_skipped_total Sampled operations not compared by root field and reason: in_flight (the gateway already ran GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT shadows at once) or pool_busy (the geo-db pool's queue was at GRAPHQL_GATEWAY_SHADOW_SHED_QUEUE, so the read was not sent).",
+		"# HELP gaia_api_gateway_shadow_skipped_total Sampled operations not compared by root field and reason: in_flight (the gateway already ran GRAPHQL_GATEWAY_SHADOW_MAX_IN_FLIGHT shadows at once), pool_busy (the geo-db pool's queue was at GRAPHQL_GATEWAY_SHADOW_SHED_QUEUE, so the read was not sent) or every_space_typeahead_cap (the per-pod cap on concurrent every-Space typeahead shadow searches was reached).",
 		"# TYPE gaia_api_gateway_shadow_skipped_total counter",
 	)
 	for (const field of fields)
