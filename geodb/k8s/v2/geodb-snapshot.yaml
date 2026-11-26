@@ -94,6 +94,12 @@ spec:
                   value: "7" # pairs kept; the newest KEEP stamps survive a successful run
                 - name: READY_TIMEOUT
                   value: "600s" # per snapshot (measured: 4 s each, so this is 150x headroom)
+                - name: SNAPSHOT_CAP
+                  value: "25" # DigitalOcean per-volume VolumeSnapshot limit
+                - name: SNAPSHOT_KIND
+                  value: "scheduled"
+                - name: NAME_PREFIX
+                  value: "sched"
                 - name: NAMESPACE
                   valueFrom:
                     fieldRef:
@@ -102,21 +108,22 @@ spec:
               args:
                 - |
                   set -o pipefail
-                  SEL="app=geodb-snapshot,snapshot-kind=scheduled"
+                  SEL="app=geodb-snapshot,snapshot-kind=${SNAPSHOT_KIND}"
                   STAMP="$(date -u +%Y%m%dt%H%M%Sz)"
                   STATE_PVC=geodb-feeder-state
                   DATA_PVC=data-geodb-0
+                  CAP="${SNAPSHOT_CAP:-25}"
 
                   snap() { # <pvc>: create the VolumeSnapshot, labelled so retention can find it and nothing else
                     cat <<YAML | kubectl create -f -
                   apiVersion: snapshot.storage.k8s.io/v1
                   kind: VolumeSnapshot
                   metadata:
-                    name: sched-${STAMP}-$1
+                    name: ${NAME_PREFIX}-${STAMP}-$1
                     namespace: ${NAMESPACE}
                     labels:
                       app: geodb-snapshot
-                      snapshot-kind: scheduled
+                      snapshot-kind: ${SNAPSHOT_KIND}
                       snapshot-stamp: "${STAMP}"
                       snapshot-pvc: $1
                   spec:
@@ -126,13 +133,28 @@ spec:
                   YAML
                   }
                   ready() { # <pvc>: block until readyToUse, or fail
-                    kubectl wait volumesnapshot/sched-${STAMP}-$1 --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
+                    kubectl wait "volumesnapshot/${NAME_PREFIX}-${STAMP}-$1" --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
                   }
+
+                  STATE_CREATED=0
+                  STATE_READY=0
+                  DATA_CREATED=0
+                  DATA_READY=0
                   CLEAN=0
-                  cleanup_this_run() { # EXIT trap: any failure, timeout or SIGTERM before the pair is complete lands here
+                  cleanup_this_run() { # EXIT trap: remove incomplete snapshots; preserve a clean data-geodb-0 snapshot
                     [ "${CLEAN}" = 1 ] && return 0
-                    echo "FAILED: removing this run's snapshots (stamp ${STAMP}); older ones are untouched" >&2
-                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${STAMP}" --ignore-not-found --wait=false || true
+                    if [ "${STATE_CREATED}" = 1 ] && [ "${STATE_READY}" = 0 ]; then
+                      echo "FAILED: removing incomplete snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    if [ "${DATA_CREATED}" = 1 ] && [ "${DATA_READY}" = 0 ]; then
+                      echo "FAILED: removing incomplete snapshot ${NAME_PREFIX}-${STAMP}-${DATA_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${DATA_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    if [ "${DATA_READY}" = 0 ] && [ "${STATE_READY}" = 1 ]; then
+                      echo "FAILED: removing unpaired snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC} because ${DATA_PVC} did not succeed" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
                   }
                   trap cleanup_this_run EXIT
 
@@ -141,21 +163,92 @@ spec:
                     [ "${phase}" = Bound ] || { echo "pvc ${pvc} is ${phase}, not Bound" >&2; false; }
                   done
 
+                  # 0. Pre-create per-PVC VolumeSnapshot count diagnostic vs DigitalOcean's per-volume cap.
+                  all_snaps="$(kubectl get volumesnapshot -o jsonpath='{range .items[*]}{.spec.source.persistentVolumeClaimName}{"|"}{.metadata.name}{"|"}{.metadata.labels.app}{"|"}{.metadata.labels.snapshot-kind}{"\n"}{end}')"
+
+                  count_pvc_snaps() { # <pvc>: logs per-PVC count + manual snapshot names to stderr, prints total to stdout
+                    local pvc="$1" total=0 sched=0 manual=0 manual_list=""
+                    local row_pvc row_name row_app row_kind
+                    while IFS='|' read -r row_pvc row_name row_app row_kind; do
+                      [ -z "${row_pvc}" ] && continue
+                      [ "${row_pvc}" = "${pvc}" ] || continue
+                      total=$((total + 1))
+                      if [ "${row_app}" = "geodb-snapshot" ] && [ -n "${row_kind}" ]; then
+                        sched=$((sched + 1))
+                      else
+                        manual=$((manual + 1))
+                        if [ -n "${manual_list}" ]; then
+                          manual_list="${manual_list}, ${row_name}"
+                        else
+                          manual_list="${row_name}"
+                        fi
+                      fi
+                    done <<< "${all_snaps}"
+                    echo "preflight snapshot count: pvc=${pvc} total=${total}/${CAP} scheduled=${sched} manual=${manual}" >&2
+                    if [ "${manual}" -gt 0 ]; then
+                      echo "preflight manual/unlabelled snapshots on ${pvc} (${manual}): ${manual_list}" >&2
+                    fi
+                    printf '%s\n' "${total}"
+                  }
+
+                  STATE_COUNT="$(count_pvc_snaps "${STATE_PVC}")"
+                  DATA_COUNT="$(count_pvc_snaps "${DATA_PVC}")"
+
                   # 1. feeder state first, and wait for it, so its offsets are older than anything in the data snapshot.
-                  snap "${STATE_PVC}"; ready "${STATE_PVC}"
-                  # 2. then the store.
-                  snap "${DATA_PVC}"; ready "${DATA_PVC}"
-                  CLEAN=1
-                  echo "OK: pair ${STAMP} ready"
+                  #    A cap refusal or timeout on feeder-state must not prevent data-geodb-0 from taking its snapshot.
+                  if [ "${STATE_COUNT}" -ge "${CAP}" ]; then
+                    echo "ERROR: pvc=${STATE_PVC} is at/over cap (${STATE_COUNT}/${CAP}); skipping create for ${STATE_PVC} and continuing to ${DATA_PVC}" >&2
+                  else
+                    STATE_CREATED=1
+                    if snap "${STATE_PVC}" && ready "${STATE_PVC}"; then
+                      STATE_READY=1
+                    else
+                      echo "ERROR: snapshot failed or timed out for pvc=${STATE_PVC} (stamp ${STAMP}); removing failed ${STATE_PVC} snapshot only and continuing to ${DATA_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                      STATE_CREATED=0
+                    fi
+                  fi
+
+                  # 2. then the store. Always attempted even if feeder-state failed.
+                  if [ "${DATA_COUNT}" -ge "${CAP}" ]; then
+                    echo "ERROR: pvc=${DATA_PVC} is at/over cap (${DATA_COUNT}/${CAP}); skipping create for ${DATA_PVC}" >&2
+                  else
+                    DATA_CREATED=1
+                    if snap "${DATA_PVC}" && ready "${DATA_PVC}"; then
+                      DATA_READY=1
+                    else
+                      echo "ERROR: snapshot failed or timed out for pvc=${DATA_PVC} (stamp ${STAMP}); removing failed ${DATA_PVC} snapshot" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${DATA_PVC}" --ignore-not-found --wait=false || true
+                      DATA_CREATED=0
+                    fi
+                  fi
+
+                  if [ "${STATE_READY}" = 1 ] && [ "${DATA_READY}" = 1 ]; then
+                    CLEAN=1
+                    echo "OK: pair ${STAMP} ready"
+                  else
+                    if [ "${DATA_READY}" = 0 ] && [ "${STATE_READY}" = 1 ]; then
+                      echo "FAILED: removing unpaired snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC} because ${DATA_PVC} failed" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    CLEAN=1
+                    if [ "${STATE_READY}" = 0 ] && [ "${DATA_READY}" = 1 ]; then
+                      echo "FAILED: partial run (stamp ${STAMP}): ${STATE_PVC}=FAILED ${DATA_PVC}=OK; preserved ${NAME_PREFIX}-${STAMP}-${DATA_PVC}; retention skipped" >&2
+                    else
+                      echo "FAILED: snapshot run incomplete (stamp ${STAMP}): ${STATE_PVC}=$([ "${STATE_READY}" = 1 ] && echo OK || echo FAILED) ${DATA_PVC}=FAILED; retention skipped" >&2
+                    fi
+                    exit 1
+                  fi
 
                   # 3. retention, only after the new pair is ready: keep the newest KEEP stamps, delete the rest.
-                  # A failed run never reaches here, so it never costs a good pair.
+                  # A failed or partial run never reaches here, so it never costs a good pair.
                   stamps="$(kubectl get volumesnapshot -l "${SEL}" -o jsonpath='{range .items[*]}{.metadata.labels.snapshot-stamp}{"\n"}{end}' | sort -u)"
                   old="$(printf '%s\n' "${stamps}" | grep -v '^$' | awk -v k="${KEEP}" '{a[NR]=$0} END{for(i=1;i<=NR-k;i++)print a[i]}')"
-                  for s in ${old}; do
+                  while IFS= read -r s; do
+                    [ -z "${s}" ] && continue
                     echo "pruning pair ${s}"
                     kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${s}" --wait=false
-                  done
+                  done <<< "${old}"
                   kubectl get volumesnapshot -l "${SEL}" --sort-by=.metadata.creationTimestamp
               securityContext:
                 allowPrivilegeEscalation: false
@@ -220,6 +313,12 @@ spec:
                   value: "6" # pairs kept: 24 h of 4-hourly pairs; the newest KEEP stamps of THIS kind survive a successful run
                 - name: READY_TIMEOUT
                   value: "600s" # per snapshot (measured: 4 s each, so this is 150x headroom)
+                - name: SNAPSHOT_CAP
+                  value: "25" # DigitalOcean per-volume VolumeSnapshot limit
+                - name: SNAPSHOT_KIND
+                  value: "scheduled-4h"
+                - name: NAME_PREFIX
+                  value: "sched4h"
                 - name: NAMESPACE
                   valueFrom:
                     fieldRef:
@@ -228,21 +327,22 @@ spec:
               args:
                 - |
                   set -o pipefail
-                  SEL="app=geodb-snapshot,snapshot-kind=scheduled-4h"
+                  SEL="app=geodb-snapshot,snapshot-kind=${SNAPSHOT_KIND}"
                   STAMP="$(date -u +%Y%m%dt%H%M%Sz)"
                   STATE_PVC=geodb-feeder-state
                   DATA_PVC=data-geodb-0
+                  CAP="${SNAPSHOT_CAP:-25}"
 
                   snap() { # <pvc>: create the VolumeSnapshot, labelled so retention can find it and nothing else
                     cat <<YAML | kubectl create -f -
                   apiVersion: snapshot.storage.k8s.io/v1
                   kind: VolumeSnapshot
                   metadata:
-                    name: sched4h-${STAMP}-$1
+                    name: ${NAME_PREFIX}-${STAMP}-$1
                     namespace: ${NAMESPACE}
                     labels:
                       app: geodb-snapshot
-                      snapshot-kind: scheduled-4h
+                      snapshot-kind: ${SNAPSHOT_KIND}
                       snapshot-stamp: "${STAMP}"
                       snapshot-pvc: $1
                   spec:
@@ -252,13 +352,28 @@ spec:
                   YAML
                   }
                   ready() { # <pvc>: block until readyToUse, or fail
-                    kubectl wait volumesnapshot/sched4h-${STAMP}-$1 --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
+                    kubectl wait "volumesnapshot/${NAME_PREFIX}-${STAMP}-$1" --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
                   }
+
+                  STATE_CREATED=0
+                  STATE_READY=0
+                  DATA_CREATED=0
+                  DATA_READY=0
                   CLEAN=0
-                  cleanup_this_run() { # EXIT trap: any failure, timeout or SIGTERM before the pair is complete lands here
+                  cleanup_this_run() { # EXIT trap: remove incomplete snapshots; preserve a clean data-geodb-0 snapshot
                     [ "${CLEAN}" = 1 ] && return 0
-                    echo "FAILED: removing this run's snapshots (stamp ${STAMP}); older ones are untouched" >&2
-                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${STAMP}" --ignore-not-found --wait=false || true
+                    if [ "${STATE_CREATED}" = 1 ] && [ "${STATE_READY}" = 0 ]; then
+                      echo "FAILED: removing incomplete snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    if [ "${DATA_CREATED}" = 1 ] && [ "${DATA_READY}" = 0 ]; then
+                      echo "FAILED: removing incomplete snapshot ${NAME_PREFIX}-${STAMP}-${DATA_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${DATA_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    if [ "${DATA_READY}" = 0 ] && [ "${STATE_READY}" = 1 ]; then
+                      echo "FAILED: removing unpaired snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC} because ${DATA_PVC} did not succeed" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
                   }
                   trap cleanup_this_run EXIT
 
@@ -267,21 +382,92 @@ spec:
                     [ "${phase}" = Bound ] || { echo "pvc ${pvc} is ${phase}, not Bound" >&2; false; }
                   done
 
+                  # 0. Pre-create per-PVC VolumeSnapshot count diagnostic vs DigitalOcean's per-volume cap.
+                  all_snaps="$(kubectl get volumesnapshot -o jsonpath='{range .items[*]}{.spec.source.persistentVolumeClaimName}{"|"}{.metadata.name}{"|"}{.metadata.labels.app}{"|"}{.metadata.labels.snapshot-kind}{"\n"}{end}')"
+
+                  count_pvc_snaps() { # <pvc>: logs per-PVC count + manual snapshot names to stderr, prints total to stdout
+                    local pvc="$1" total=0 sched=0 manual=0 manual_list=""
+                    local row_pvc row_name row_app row_kind
+                    while IFS='|' read -r row_pvc row_name row_app row_kind; do
+                      [ -z "${row_pvc}" ] && continue
+                      [ "${row_pvc}" = "${pvc}" ] || continue
+                      total=$((total + 1))
+                      if [ "${row_app}" = "geodb-snapshot" ] && [ -n "${row_kind}" ]; then
+                        sched=$((sched + 1))
+                      else
+                        manual=$((manual + 1))
+                        if [ -n "${manual_list}" ]; then
+                          manual_list="${manual_list}, ${row_name}"
+                        else
+                          manual_list="${row_name}"
+                        fi
+                      fi
+                    done <<< "${all_snaps}"
+                    echo "preflight snapshot count: pvc=${pvc} total=${total}/${CAP} scheduled=${sched} manual=${manual}" >&2
+                    if [ "${manual}" -gt 0 ]; then
+                      echo "preflight manual/unlabelled snapshots on ${pvc} (${manual}): ${manual_list}" >&2
+                    fi
+                    printf '%s\n' "${total}"
+                  }
+
+                  STATE_COUNT="$(count_pvc_snaps "${STATE_PVC}")"
+                  DATA_COUNT="$(count_pvc_snaps "${DATA_PVC}")"
+
                   # 1. feeder state first, and wait for it, so its offsets are older than anything in the data snapshot.
-                  snap "${STATE_PVC}"; ready "${STATE_PVC}"
-                  # 2. then the store.
-                  snap "${DATA_PVC}"; ready "${DATA_PVC}"
-                  CLEAN=1
-                  echo "OK: pair ${STAMP} ready"
+                  #    A cap refusal or timeout on feeder-state must not prevent data-geodb-0 from taking its snapshot.
+                  if [ "${STATE_COUNT}" -ge "${CAP}" ]; then
+                    echo "ERROR: pvc=${STATE_PVC} is at/over cap (${STATE_COUNT}/${CAP}); skipping create for ${STATE_PVC} and continuing to ${DATA_PVC}" >&2
+                  else
+                    STATE_CREATED=1
+                    if snap "${STATE_PVC}" && ready "${STATE_PVC}"; then
+                      STATE_READY=1
+                    else
+                      echo "ERROR: snapshot failed or timed out for pvc=${STATE_PVC} (stamp ${STAMP}); removing failed ${STATE_PVC} snapshot only and continuing to ${DATA_PVC}" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                      STATE_CREATED=0
+                    fi
+                  fi
+
+                  # 2. then the store. Always attempted even if feeder-state failed.
+                  if [ "${DATA_COUNT}" -ge "${CAP}" ]; then
+                    echo "ERROR: pvc=${DATA_PVC} is at/over cap (${DATA_COUNT}/${CAP}); skipping create for ${DATA_PVC}" >&2
+                  else
+                    DATA_CREATED=1
+                    if snap "${DATA_PVC}" && ready "${DATA_PVC}"; then
+                      DATA_READY=1
+                    else
+                      echo "ERROR: snapshot failed or timed out for pvc=${DATA_PVC} (stamp ${STAMP}); removing failed ${DATA_PVC} snapshot" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${DATA_PVC}" --ignore-not-found --wait=false || true
+                      DATA_CREATED=0
+                    fi
+                  fi
+
+                  if [ "${STATE_READY}" = 1 ] && [ "${DATA_READY}" = 1 ]; then
+                    CLEAN=1
+                    echo "OK: pair ${STAMP} ready"
+                  else
+                    if [ "${DATA_READY}" = 0 ] && [ "${STATE_READY}" = 1 ]; then
+                      echo "FAILED: removing unpaired snapshot ${NAME_PREFIX}-${STAMP}-${STATE_PVC} because ${DATA_PVC} failed" >&2
+                      kubectl delete volumesnapshot "${NAME_PREFIX}-${STAMP}-${STATE_PVC}" --ignore-not-found --wait=false || true
+                    fi
+                    CLEAN=1
+                    if [ "${STATE_READY}" = 0 ] && [ "${DATA_READY}" = 1 ]; then
+                      echo "FAILED: partial run (stamp ${STAMP}): ${STATE_PVC}=FAILED ${DATA_PVC}=OK; preserved ${NAME_PREFIX}-${STAMP}-${DATA_PVC}; retention skipped" >&2
+                    else
+                      echo "FAILED: snapshot run incomplete (stamp ${STAMP}): ${STATE_PVC}=$([ "${STATE_READY}" = 1 ] && echo OK || echo FAILED) ${DATA_PVC}=FAILED; retention skipped" >&2
+                    fi
+                    exit 1
+                  fi
 
                   # 3. retention, only after the new pair is ready: keep the newest KEEP stamps, delete the rest.
-                  # A failed run never reaches here, so it never costs a good pair.
+                  # A failed or partial run never reaches here, so it never costs a good pair.
                   stamps="$(kubectl get volumesnapshot -l "${SEL}" -o jsonpath='{range .items[*]}{.metadata.labels.snapshot-stamp}{"\n"}{end}' | sort -u)"
                   old="$(printf '%s\n' "${stamps}" | grep -v '^$' | awk -v k="${KEEP}" '{a[NR]=$0} END{for(i=1;i<=NR-k;i++)print a[i]}')"
-                  for s in ${old}; do
+                  while IFS= read -r s; do
+                    [ -z "${s}" ] && continue
                     echo "pruning pair ${s}"
                     kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${s}" --wait=false
-                  done
+                  done <<< "${old}"
                   kubectl get volumesnapshot -l "${SEL}" --sort-by=.metadata.creationTimestamp
               securityContext:
                 allowPrivilegeEscalation: false
