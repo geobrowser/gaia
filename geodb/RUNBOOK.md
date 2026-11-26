@@ -2407,6 +2407,15 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 | `GeoDbFeederMemoryHeadroom` | the feeder container's working set over 90% of its memory limit for 15m (warning, never pages) | see "Feeder memory headroom" below |
 
+### geo-db data volume (monitoring/k8s/v2/geodb-data-volume-alerts.yaml)
+
+`GeoDbDataVolumeUsedHigh` (PVC `data-geodb-0` over 75% used for 15m, warning) and `GeoDbDataVolumeUsedCritical` (over 90%
+for 10m, critical). At the rev-10 roll (11-26) the volume was 100Gi (105.36 GB) with 50.40 GB used (47.8%): the live
+rev-10 store plus the kept `store-rev9`. First look: `K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"`, then a read
+of `kubelet_volume_stats_used_bytes{persistentvolumeclaim="data-geodb-0"}` and, in a one-shot pod on the volume, `du -sh`
+of each `store*` directory. Free space by deleting a kept rollback store only after its rollback window is over (the
+migrate sections above name it), or grow the PVC (DigitalOcean volumes grow online, never shrink). Do not restart `geodb-0`.
+
 ### Feeder memory headroom (GeoDbFeederMemoryHeadroom)
 
 The rule is `container_memory_working_set_bytes` (cAdvisor) divided by `kube_pod_container_resource_limits{resource="memory"}`

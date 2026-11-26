@@ -1,0 +1,95 @@
+rule_files:
+  - __RULES__
+evaluation_interval: 1m
+tests:
+  - name: 80% used fires the warning after 15m, not the critical
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '50x10 80x50'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 20m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
+      - eval_time: 30m
+        alertname: GeoDbDataVolumeUsedHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, persistentvolumeclaim: data-geodb-0}
+            exp_annotations:
+              summary: The geo-db data volume is over 75% used
+              description: >-
+                data-geodb-0 has been over 75% used for 15m. Read the usage and what holds it (kept store-rev*
+                directories, the live store), then delete a rollback store that is no longer needed or grow the PVC;
+                see geodb/RUNBOOK.md section 6 (geo-db data volume). Never restart geodb-0 (serve) to free space.
+      - {eval_time: 50m, alertname: GeoDbDataVolumeUsedCritical, exp_alerts: []}
+
+  - name: today's 48% stays silent
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '50402750464x60'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '105358065664x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
+      - {eval_time: 50m, alertname: GeoDbDataVolumeUsedCritical, exp_alerts: []}
+
+  - name: a spike shorter than 15m stays silent
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '50x10 80x10 50x40'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
+      - {eval_time: 55m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
+
+  - name: recovery resolves the warning once usage drops under 75%
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '80x30 50x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '100x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: GeoDbDataVolumeUsedHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia, persistentvolumeclaim: data-geodb-0}
+            exp_annotations:
+              summary: The geo-db data volume is over 75% used
+              description: >-
+                data-geodb-0 has been over 75% used for 15m. Read the usage and what holds it (kept store-rev*
+                directories, the live store), then delete a rollback store that is no longer needed or grow the PVC;
+                see geodb/RUNBOOK.md section 6 (geo-db data volume). Never restart geodb-0 (serve) to free space.
+      - {eval_time: 40m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
+
+  - name: 95% used fires the critical after 10m
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '50x5 95x40'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}'
+        values: '100x45'
+    alert_rule_test:
+      - {eval_time: 12m, alertname: GeoDbDataVolumeUsedCritical, exp_alerts: []}
+      - eval_time: 20m
+        alertname: GeoDbDataVolumeUsedCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, service: geodb, namespace: gaia, persistentvolumeclaim: data-geodb-0}
+            exp_annotations:
+              summary: The geo-db data volume is over 90% used
+              description: >-
+                data-geodb-0 has been over 90% used for 10m, so serve writes and a migrate Job can hit ENOSPC. Free
+                space or grow the PVC now; see geodb/RUNBOOK.md section 6 (geo-db data volume).
+
+  - name: a different PVC over 75% stays silent
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="geodb-feeder-state"}'
+        values: '90x60'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="geodb-feeder-state"}'
+        values: '100x60'
+    alert_rule_test:
+      - {eval_time: 50m, alertname: GeoDbDataVolumeUsedHigh, exp_alerts: []}
