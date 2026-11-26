@@ -52,6 +52,9 @@
 #   GeoDbHostPoolHeadroomLow  geodb_host_pool_priced_peak above 80% of geodb_host_pool_records_max for 15m
 #   GeoDbHostPoolRefused      geodb_host_pool_refused_total rose in the last 15m (an Edit priced past every
 #                             slot of the host pool: owner=identity_table row=none)
+#   GeoDbLexicalTypeaheadShareRefusalsHigh
+#                             geodb_requests_refused_by_code_total{op="lexical_search", code="ResourceExhausted"}
+#                             above 60 in 15m (4/min) for 15m (every_typeahead_share or pool-busy overload)
 #
 #   Pod health (kube-state-metrics; no serve metric needed, so these work while serve is down):
 #   GeoDbServeNotReady        sts/geodb wants replicas > 0 but fewer are Ready, for 20m. Silent by
@@ -606,6 +609,27 @@ spec:
               commitSerial Branch fold before any log write or shared mutation, so the store did not fence
               (geodb_store_fenced remains 0; see ISS-837 and ISS-838-417). Inspect serve logs and
               owner-capacity metrics to find why staging refused the fold.
+
+        - alert: GeoDbLexicalTypeaheadShareRefusalsHigh
+          # Normal post-rev-10 baseline on testnet is ~15/15m median (~22/15m max sustained 15m, ~53/15m
+          # single-window burst). Requiring >60/15m (4/min) for 15m ignores transient bursts while
+          # catching sustained every_typeahead_share or worker-pool saturation on lexical_search.
+          expr: |
+            sum(increase(geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", op="lexical_search", code="ResourceExhausted"}[15m])) > 60
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db is refusing lexical_search requests with ResourceExhausted (>60/15m for 15m)
+            description: >-
+              Sustained lexical_search ResourceExhausted refusals above 60 per 15m (4/min) for 15m, well above
+              the post-rev-10 baseline (~15/15m median, ~22/15m max sustained 15m). Check
+              geodb_requests_refused_by_reason_total{reason="every_typeahead_share"} to separate every-Space
+              typeahead share caps (half the worker pool already running every-Space typeahead) from general
+              worker-pool or claim-region saturation (geodb_workers_busy_max, geodb_worker_queue_depth_max,
+              geodb_claims_refused_total).
 
     # Pod health from kube-state-metrics. serve's own series vanish when the pod is down, so every other rule here goes
     # quiet exactly when this matters. sts/geodb is scaled to 0 on purpose for a migrate window; a spec of 0 replicas

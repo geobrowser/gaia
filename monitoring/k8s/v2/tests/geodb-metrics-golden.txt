@@ -7,6 +7,7 @@
 # geodb_host_pool_* added by hand from geo-db 602d1badb7 (on final; not yet in the live pin d939fd08b5).
 # geodb_sessions_by_wire_payload and geodb_handshakes_by_wire_payload_total added by hand from geo-db docs/api/13 (on final, in the roll image 4728254ce5; not in the live pin d939fd08b5).
 # geodb_aura_sync_wait_ns_total, geodb_store_aura_warm_jobs_total (geo-db a6f582fbc3) and geodb_store_fold_refused_total (geo-db 734a950889) added by hand (on final; not yet in the live pin 727c925f8e).
+# geodb_requests_refused_by_code_total and geodb_requests_refused_by_reason_total added by hand from geo-db tests/server/metrics_names.txt (live on rev-10 serve).
 # Used only by lint-series.sh (label values for each series: geodb-label-values.txt). To refresh: copy the file again and update the commit above.
 geodb_aura_sync_wait_ns_total
 geodb_claim_bytes_held{class,session}
@@ -68,6 +69,8 @@ geodb_requests_parked_now{class,session}
 geodb_requests_parked_now{class}
 geodb_requests_parked_total{class,session}
 geodb_requests_parked_total{class}
+geodb_requests_refused_by_code_total{class,code,op}
+geodb_requests_refused_by_reason_total{reason}
 geodb_requests_refused_total{class,session}
 geodb_requests_refused_total{class}
 geodb_rooms_max
