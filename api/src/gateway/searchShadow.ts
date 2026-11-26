@@ -59,7 +59,12 @@ import {
 	Unsupported,
 } from "./entityShadow"
 import type {FieldShadow} from "./gateway"
-import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
+import {
+	activateGatewayMetrics,
+	recordGatewayShadow,
+	recordGatewayShadowSkipped,
+	recordGatewayUnsupported,
+} from "./metrics"
 import {
 	activateSearchMetrics,
 	GEODB_LIMIT,
@@ -80,6 +85,12 @@ const MAX_FRAGMENT_DEPTH = 8
 const SAMPLE = 5
 /** A query's words searched one by one when the whole query fills too little of the window. */
 export const MAX_QUERY_TOKENS = 4
+/**
+ * Default per-pod cap on concurrent shadow `every_space` typeahead calls, shared across `search` and
+ * `searchConnection`. Keeps shadow bursts from saturating geo-db's `every_typeahead_share` half-pool while
+ * leaving scoped and `bm25` shadow calls uncapped by it.
+ */
+export const DEFAULT_EVERY_SPACE_TYPEAHEAD_MAX_CONCURRENT = 1
 
 export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	/** Every geo-db Space id (32 hex digits) in the space map, for a search without `spaceId`. */
@@ -99,6 +110,12 @@ export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	 */
 	excludeTypes?: boolean
 	readCards?: GeoDbCardClient["readCards"]
+	/**
+	 * Most concurrent `every_space` typeahead shadow calls allowed across `search` and `searchConnection` in one
+	 * pod (default DEFAULT_EVERY_SPACE_TYPEAHEAD_MAX_CONCURRENT). Calls past the cap are shed without hitting
+	 * geo-db and counted under `gaia_api_gateway_shadow_skipped_total{reason="every_space_typeahead_cap"}`.
+	 */
+	maxEverySpaceTypeaheadInFlight?: number
 }
 
 /** Type ids Postgres's search leaves out, in geo-db's id space. */
@@ -264,10 +281,16 @@ export async function searchWithWordFallback(
 	return [...hits].slice(0, args.limit)
 }
 
-function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldShadow {
+function createSearchShadow(
+	deps: SearchShadowDeps,
+	field: SearchField,
+	everySpaceTypeaheadInFlight: {count: number},
+	maxEverySpaceTypeaheadInFlight: number,
+): FieldShadow {
 	activateGatewayMetrics(field)
 	activateSearchMetrics(field)
 	const label = `gateway ${field} shadow`
+	const mode = deps.mode ?? "typeahead"
 	return async ({params, document, classification, response}) => {
 		try {
 			const analysis = analyzeSearchOperation(field, document, classification.operationName, params.variables)
@@ -315,17 +338,35 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					geoSpaceIds = [geoSpaceId]
 				}
 				searched = geoSpaceIds
-				geodb = await searchWithWordFallback(
-					deps.search,
-					{
-						geoSpaceIds,
-						text: plan.query,
-						mode: deps.mode ?? "typeahead",
-						limit: typeFilter ? GEODB_OVERFETCH : GEODB_LIMIT,
-						...(plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES ? {everySpace: true} : {}),
-					},
-					deps.wordLeg,
-				)
+				const everySpace = plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES
+				const capped = everySpace && mode === "typeahead"
+				if (capped && everySpaceTypeaheadInFlight.count >= maxEverySpaceTypeaheadInFlight) {
+					recordGatewayShadowSkipped(field, "every_space_typeahead_cap")
+					deps.log.info(`${label} skipped: every-Space typeahead concurrency cap reached`, {
+						spaceId: plan.spaceId,
+						spaces,
+						reason: "every_space_typeahead_cap",
+						inFlight: everySpaceTypeaheadInFlight.count,
+						cap: maxEverySpaceTypeaheadInFlight,
+					})
+					return
+				}
+				if (capped) everySpaceTypeaheadInFlight.count += 1
+				try {
+					geodb = await searchWithWordFallback(
+						deps.search,
+						{
+							geoSpaceIds,
+							text: plan.query,
+							mode,
+							limit: typeFilter ? GEODB_OVERFETCH : GEODB_LIMIT,
+							...(everySpace ? {everySpace: true} : {}),
+						},
+						deps.wordLeg,
+					)
+				} finally {
+					if (capped) everySpaceTypeaheadInFlight.count -= 1
+				}
 			} catch (error) {
 				if (lexicalDefiniteRefusal(error)) {
 					recordGatewayShadow(field, "unsupported_selection")
@@ -403,5 +444,15 @@ export function createSearchShadows(
 	deps: SearchShadowDeps,
 	fields: Iterable<SearchField> = SEARCH_FIELDS,
 ): Map<string, FieldShadow> {
-	return new Map([...fields].map((field) => [field, createSearchShadow(deps, field)]))
+	const everySpaceTypeaheadInFlight = {count: 0}
+	const rawCap = deps.maxEverySpaceTypeaheadInFlight ?? DEFAULT_EVERY_SPACE_TYPEAHEAD_MAX_CONCURRENT
+	const maxEverySpaceTypeaheadInFlight = Number.isFinite(rawCap)
+		? Math.max(0, Math.floor(rawCap))
+		: DEFAULT_EVERY_SPACE_TYPEAHEAD_MAX_CONCURRENT
+	return new Map(
+		[...fields].map((field) => [
+			field,
+			createSearchShadow(deps, field, everySpaceTypeaheadInFlight, maxEverySpaceTypeaheadInFlight),
+		]),
+	)
 }
