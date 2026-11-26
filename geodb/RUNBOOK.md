@@ -2753,7 +2753,7 @@ is 1.7 to 9.6 % smaller than its source, so ≥ 1.2x the store free (20.4 GB) ho
 (~28 seals/s); live has ~420k now (389k + 11,955 sealed since 11-20 01:23Z + the days between). Serial: ~4 h 10 min.
 `--threaded --jobs 4`: ~1.9x on m4, so ~2 h 15 min. `--jobs 8` hit a retry assert in an earlier run; do not use it.
 Budget 2.5 h of serve downtime, 4.5 h worst case.
-**Measured 11-25 (§8e): about 7 h for the rev-9 to rev-10 run, so the 2.5 h budget above was wrong; budget 8 h.**
+**Measured 11-25 (§8e): 90 min 40 s of wall time for the rev-9 to rev-10 run (the `replay_ms`/`commit_ms` figures in its log are summed thread time, not wall); budget 2 h of serve downtime, 3 h worst case.**
 
 **The feeder during the downtime: leave it running.** `apply.ts` retries a transient failure (geo-db down) forever with
 backoff and never dead-letters it (`main.ts`: "message failed, retrying (never skipped)"); `/health/liveness` always
@@ -2905,7 +2905,7 @@ differs from a §8d estimate, this section wins. Everything here was read off th
 | -- | -- |
 | migrate Job | `geodb-migrate-rev10`, image `geodb:9fb1312796`, `persistent_revision` 9 to 10 |
 | result | `DONE migrate spaces=1632 versions=497334`, then the swap, finished 23:45:21Z |
-| time | `replay_ms=5418073` (1 h 30 min) + `commit_ms=20227260` (5 h 37 min): **about 7 h** of serve downtime, against the 2.5 h §8d budgeted at ~28 seals/s |
+| time | Job wall **90 min 40 s** (`geodb-migrate-rev10`, 22:14:41Z to 23:45:21Z, `kubectl -n gaia get job`). The log's `replay_ms=5418073` + `commit_ms=20227260` (about 7.1 h) is thread time summed across `--jobs` workers, not wall; do not read it as downtime |
 | volume | `data-geodb-0` grown to **99 Gi before the Job** (the §8d 50 Gi no longer held); 31 G used after, `store-rev9` kept on it as the rollback source |
 | rollback points | VolumeSnapshots `premigrate-rev10-<pvc>` (`data-geodb-0` and `geodb-feeder-state`), taken after serve stopped and before the Job |
 | serve on the new root | opened in **7.4 s**; `geodb-space-map` node and sealer ids byte-identical before and after |
@@ -2916,10 +2916,11 @@ differs from a §8d estimate, this section wins. Everything here was read off th
 
 What to change from §8d next time:
 
-- **Budget 8 h, not 2.5 h.** The cost is the commit phase (one commit per seal), not the replay: 497k versions took 7 h.
-  Size the silences and the on-call window to match: silence for 9 h, and re-check at the 8 h mark.
-  `GeoDbMigrateJobRunningLong` now warns at 9 h of an active `geodb-migrate-*` Job (it was 4 h on a "1.5-2 h" estimate and
-  would have paged during this healthy 7 h run); it matches the `--timeout=9h` wait above.
+- **Budget from the wall time, not the log's phase figures.** The measured run was 90 min 40 s of wall (497k versions, 1632
+  Spaces, 15 G). Budget 2 h of serve downtime for a store of that size, silence for 3 h, and re-check at the 2 h mark.
+  `GeoDbMigrateJobRunningLong` warns at 3 h of an active `geodb-migrate-*` Job (twice the measured wall; it was 4 h on a
+  "1.5-2 h" estimate, then briefly 9 h on the mistaken 7 h summed-thread figure); it matches the `--timeout=3h` wait above.
+  A larger store will run longer, so scale the budget with the store and re-read the wall time of the Job, not `*_ms`.
 - **Grow the volume first.** Required free space is the new root plus the kept old root. Check `df` on `data-geodb-0` before
   quiescing; a Job that fills the disk stops mid-migrate with `store` untouched, but you have lost the window.
 - **Add `GeoDbOutboxMirrorErrors` to the silence list** (already named in §8a step 2) and expect it anyway if a
@@ -2985,7 +2986,7 @@ spec:
             limits: {memory: 7Gi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
 YAML
-K wait --for=condition=complete job/geodb-migrate-rev$TO_REV --timeout=9h
+K wait --for=condition=complete job/geodb-migrate-rev$TO_REV --timeout=3h
 K logs job/geodb-migrate-rev$TO_REV      # DONE migrate spaces=<n> versions=<m>, then "swapped"
 ```
 
