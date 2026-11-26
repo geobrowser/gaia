@@ -1,9 +1,11 @@
 # Alerts for the scheduled geo-db snapshots (CronJob geodb-snapshot, geodb/k8s/v2/geodb-snapshot.yaml).
 # Series come from kube-state-metrics. Runbook: geodb/RUNBOOK.md §9.
 #
-#   GeoDbSnapshotJobFailed  a geodb-snapshot Job failed (it stays a week, so this holds until the Job is deleted
-#                           or a later run is read and understood)
-#   GeoDbSnapshotStale      no successful run for 36h (a missed day, a suspended CronJob, a Job that never started)
+#   GeoDbSnapshotJobFailed  a geodb-snapshot or geodb-snapshot-4h Job failed (it stays a week, so this holds
+#                           until the Job is deleted or a later run is read and understood)
+#   GeoDbSnapshot4hStale    no successful geodb-snapshot-4h run for 6h (independent of the daily CronJob, so a
+#                           daily run at 09:17 UTC cannot mask a broken 4-hourly CronJob)
+#   GeoDbSnapshotStale      no successful daily run for 36h (a missed day, a suspended CronJob, a Job that never started)
 #   GeoDbSnapshotNewestOld  the newest successful run of either CronJob (daily geodb-snapshot, 4-hourly geodb-snapshot-4h)
 #                           is over 5 h old; over 26 h while the 4-hourly CronJob does not exist yet, so this rule can be
 #                           applied before or after it. The only rule that watches the 4-hourly RPO.
@@ -35,7 +37,32 @@ spec:
             description: >-
               kubectl -n gaia logs job/{{ $labels.job_name }}. The run removes its own partial snapshots and never
               prunes, so the older pairs are intact. A readyToUse timeout is the usual cause: check
-              kubectl -n gaia get volumesnapshot and the DigitalOcean volume snapshot quota.
+              kubectl -n gaia get volumesnapshot and the DigitalOcean 25-per-volume snapshot cap on
+              geodb-feeder-state and data-geodb-0.
+
+        - alert: GeoDbSnapshot4hStale
+          expr: |
+            (
+              time() - kube_cronjob_status_last_successful_time{namespace="gaia", cronjob="geodb-snapshot-4h"} > 6 * 3600
+            )
+            or
+            (
+              absent(kube_cronjob_status_last_successful_time{namespace="gaia", cronjob="geodb-snapshot-4h"})
+              and on(namespace, cronjob)
+              kube_cronjob_info{namespace="gaia", cronjob="geodb-snapshot-4h"}
+            )
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb-snapshot
+            namespace: gaia
+          annotations:
+            summary: No successful 4-hourly geo-db snapshot for over 6h
+            description: >-
+              CronJob geodb-snapshot-4h has not succeeded for over 6h (independent of the daily geodb-snapshot
+              run). Check kubectl -n gaia get cronjob,job -l app=geodb-snapshot and kubectl -n gaia get
+              volumesnapshot (suspended? failed on readyToUse timeout against the DigitalOcean 25-per-volume
+              snapshot cap on geodb-feeder-state or data-geodb-0?). RUNBOOK §9.
 
         - alert: GeoDbSnapshotStale
           expr: |
