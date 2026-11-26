@@ -1126,6 +1126,9 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							// On unless GEODB_SEARCH_TYPE_FILTER=off: geo-db's hits lose the types Postgres excludes.
 							excludeTypes: process.env.GEODB_SEARCH_TYPE_FILTER?.trim().toLowerCase() !== "off",
 							readCards: sharedGeoDb.geoDb.readCards?.bind(sharedGeoDb.geoDb),
+							...(geoDbCardConfig.everySpaceTimeoutMs
+								? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
+								: {}),
 						},
 						SEARCH_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),

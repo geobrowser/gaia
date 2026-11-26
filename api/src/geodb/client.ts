@@ -125,6 +125,8 @@ export type GeoDbCardClient = {
 		 * property's detached value. A caller that inspects one property must pass it.
 		 */
 		property?: string
+		/** This read's timeout in ms, in place of the pool's: a shadow read wider than the serving path's budget. */
+		timeoutMs?: number
 	}): Promise<GeoCardRow[]>
 	/**
 	 * The Spaces among `geoSpaceIds` that hold at least one active statement of `entityId` (`.args.holders = true`, geo-db
@@ -1157,7 +1159,7 @@ export function createPipeGeoDbClient(
 				timeoutMs,
 			)
 		},
-		async readCards({geoSpaceIds, entityIds, names = false, property}) {
+		async readCards({geoSpaceIds, entityIds, names = false, property, timeoutMs}) {
 			const scope = scopeCell(geoSpaceIds)
 			if (entityIds.length === 0) throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
 			if (scope instanceof GeoDbError) throw scope
@@ -1179,6 +1181,7 @@ export function createPipeGeoDbClient(
 						false,
 						false,
 						true,
+						timeoutMs,
 					),
 				),
 			)
