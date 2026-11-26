@@ -303,6 +303,7 @@ tests:
       - {eval_time: 380m, alertname: GeoDbWorkerQueueGrowing, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolHeadroomLow, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbHostPoolRefused, exp_alerts: []}
+      - {eval_time: 380m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
       - {eval_time: 380m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
 
   - name: spaces at 80% stay silent, at 95% fire after 15m
@@ -1125,3 +1126,47 @@ tests:
         values: '5x40'
     alert_rule_test:
       - {eval_time: 30m, alertname: GeoDbStoreFoldRefused, exp_alerts: []}
+
+  - name: lexical_search ResourceExhausted refusals fire after 15m above 60/15m and clear on recovery
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", class="live", op="lexical_search", code="ResourceExhausted"}'
+        values: '0x10 0+6x35 210x30'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
+      - eval_time: 40m
+        alertname: GeoDbLexicalTypeaheadShareRefusalsHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb, namespace: gaia}
+            exp_annotations:
+              summary: geo-db is refusing lexical_search requests with ResourceExhausted (>60/15m for 15m)
+              description: >-
+                Sustained lexical_search ResourceExhausted refusals above 60 per 15m (4/min) for 15m, well above
+                the post-rev-10 baseline (~15/15m median, ~22/15m max sustained 15m). Check
+                geodb_requests_refused_by_reason_total{reason="every_typeahead_share"} to separate every-Space
+                typeahead share caps (half the worker pool already running every-Space typeahead) from general
+                worker-pool or claim-region saturation (geodb_workers_busy_max, geodb_worker_queue_depth_max,
+                geodb_claims_refused_total).
+      - {eval_time: 65m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
+
+  - name: lexical_search refusals below threshold, wrong op, or wrong code stay silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", class="live", op="lexical_search", code="ResourceExhausted"}'
+        values: '0+3x60'
+      - series: 'geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", class="live", op="execute_query", code="ResourceExhausted"}'
+        values: '0+20x60'
+      - series: 'geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", class="live", op="lexical_search", code="VersionNotFound"}'
+        values: '0+20x60'
+    alert_rule_test:
+      - {eval_time: 45m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
+
+  - name: a transient lexical_search ResourceExhausted burst shorter than 15m stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_requests_refused_by_code_total{namespace="gaia", job="geodb", class="live", op="lexical_search", code="ResourceExhausted"}'
+        values: '0x10 0+15x6 90x50'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
+      - {eval_time: 30m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
+      - {eval_time: 45m, alertname: GeoDbLexicalTypeaheadShareRefusalsHigh, exp_alerts: []}
