@@ -1,0 +1,58 @@
+# Alerts for the geo-db data volume (PVC data-geodb-0, mounted by StatefulSet geodb). Series come from the kubelet
+# (kubelet_volume_stats_*), so they carry the PVC name, not the pod. Runbook: geodb/RUNBOOK.md section 6
+# ("geo-db data volume").
+#
+# The volume was grown to 100Gi for the rev-10 migrate and holds the live store plus the kept previous-revision store
+# (store-rev9) and, until deleted, the premigrate snapshots' source data. The stock KubePersistentVolumeFillingUp
+# fires only under 15% free with a four-day fill forecast (and 3% free outright), too late to plan a store deletion
+# or a resize, so these two fire earlier on the plain used ratio.
+#
+#   GeoDbDataVolumeUsedHigh      over 75% used for 15m (warning): time to delete a kept rollback store or grow the PVC
+#   GeoDbDataVolumeUsedCritical  over 90% used for 10m (critical): serve and a migrate Job are close to ENOSPC
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-data-volume-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-data-volume
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.data-volume
+      rules:
+        - alert: GeoDbDataVolumeUsedHigh
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}
+              / kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}
+            ) > 0.75
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: The geo-db data volume is over 75% used
+            description: >-
+              data-geodb-0 has been over 75% used for 15m. Read the usage and what holds it (kept store-rev*
+              directories, the live store), then delete a rollback store that is no longer needed or grow the PVC;
+              see geodb/RUNBOOK.md section 6 (geo-db data volume). Never restart geodb-0 (serve) to free space.
+
+        - alert: GeoDbDataVolumeUsedCritical
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              kubelet_volume_stats_used_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}
+              / kubelet_volume_stats_capacity_bytes{namespace="gaia", persistentvolumeclaim="data-geodb-0"}
+            ) > 0.90
+          for: 10m
+          labels:
+            severity: critical
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: The geo-db data volume is over 90% used
+            description: >-
+              data-geodb-0 has been over 90% used for 10m, so serve writes and a migrate Job can hit ENOSPC. Free
+              space or grow the PVC now; see geodb/RUNBOOK.md section 6 (geo-db data volume).
