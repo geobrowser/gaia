@@ -13,7 +13,7 @@ relations_dash="${here}/../geodb-relations-shadow-dashboard.yaml"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
-serve_required="geodb_store_fold_refused_total geodb_aura_sync_wait_ns_total geodb_store_aura_warm_jobs_total"
+serve_required="geodb_store_fold_refused_total geodb_aura_sync_wait_ns_total geodb_store_aura_warm_jobs_total geodb_store_fenced geodb_wire_refused_total kube_statefulset_status_replicas_ready kube_pod_container_status_restarts_total"
 relations_required="gaia_api_gateway_shadow_total gaia_api_gateway_shadow_unsupported_total gaia_api_gateway_shadow_failed_total gaia_api_gateway_shadow_mismatch_total gaia_api_gateway_shadow_geodb_seconds_bucket gaia_api_gateway_shadow_postgres_seconds_bucket relationsConnection"
 
 # check_json FILE REQUIRED_TOKENS: prints problems, returns non-zero on any.
@@ -63,6 +63,7 @@ expect_fail() {
 expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "unparsable PromQL" '.panels[2].targets[0].expr = "sum(rate(geodb_aura_sync_wait_ns_total[5m])"'
 expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "series not in the golden list" '.panels[2].targets[0].expr = "sum(geodb_no_such_series_total)"'
 expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "duplicate panel id" '.panels[3].id = .panels[2].id'
-expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "U5 series dropped" '.panels |= map(select(.id != 5))'
+expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "U5 series dropped" '.panels |= map(select(.id != 5 and .id != 14))'
+expect_fail "${work}/geodb-serve-u5.json" "${serve_required}" "post-roll fenced panels dropped" '.panels |= map(select(.id != 7 and .id != 13))'
 expect_fail "${work}/geodb-relations-shadow.json" "${relations_required}" "relations shadow unparsable PromQL" '.panels[1].targets[0].expr = "sum(rate(gaia_api_gateway_shadow_total[5m])"'
 expect_fail "${work}/geodb-relations-shadow.json" "${relations_required}" "relations shadow latency panel dropped" '.panels |= map(select(.id != 5 and .id != 9))'

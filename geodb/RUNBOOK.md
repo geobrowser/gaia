@@ -2895,6 +2895,101 @@ done
 Open caveats on 11-24: ISS-781-472 (the supervisor's `--allow-plaintext` detection) is still unproved on live; the
 commits after the candidate manifest are not N-1 tested; the pin's `geodb-e2e` is not a gate.
 
+### 8e. 2026-11-25: roll to `9fb1312796` (revision 9 → 10, migrate), what it cost, and the template for the next one
+
+§8d is the procedure; this section is its record for the revision 9 → 10 roll and the reusable Job. Where a number below
+differs from a §8d estimate, this section wins. Everything here was read off the live roll on 2026-11-25.
+
+| | measured on 11-25 |
+| -- | -- |
+| migrate Job | `geodb-migrate-rev10`, image `geodb:9fb1312796`, `persistent_revision` 9 to 10 |
+| result | `DONE migrate spaces=1632 versions=497334`, then the swap, finished 23:45:21Z |
+| time | `replay_ms=5418073` (1 h 30 min) + `commit_ms=20227260` (5 h 37 min): **about 7 h** of serve downtime, against the 2.5 h §8d budgeted at ~28 seals/s |
+| volume | `data-geodb-0` grown to **99 Gi before the Job** (the §8d 50 Gi no longer held); 31 G used after, `store-rev9` kept on it as the rollback source |
+| rollback points | VolumeSnapshots `premigrate-rev10-<pvc>` (`data-geodb-0` and `geodb-feeder-state`), taken after serve stopped and before the Job |
+| serve on the new root | opened in **7.4 s**; `geodb-space-map` node and sealer ids byte-identical before and after |
+| client roll | 12 clients through `deploy-v2`, each with the image tag it already ran, `api` last |
+| after the roll | `geodb_wire_refused_total` stayed 0 (every reason); `geodb_sessions_by_wire_payload` showed every session on `rev23`; feeder consumer lag 0 |
+| alerts that fired | one `GeoDbOutboxMirrorErrors` (warning), from the notification-indexer restarting while serve was down. It resolves once serve is back; it is on the silence list for the next roll |
+| alerts in place | the `geodb-serve` PrometheusRule (36 alerts, `monitoring/k8s/v2/geodb-serve-alerts.yaml`) was merged and applied before the roll |
+
+What to change from §8d next time:
+
+- **Budget 8 h, not 2.5 h.** The cost is the commit phase (one commit per seal), not the replay: 497k versions took 7 h.
+  Size the silences and the on-call window to match: silence for 9 h, and re-check at the 8 h mark.
+- **Grow the volume first.** Required free space is the new root plus the kept old root. Check `df` on `data-geodb-0` before
+  quiescing; a Job that fills the disk stops mid-migrate with `store` untouched, but you have lost the window.
+- **Add `GeoDbOutboxMirrorErrors` to the silence list** (already named in §8a step 2) and expect it anyway if a
+  notification-indexer pod restarts during the downtime.
+- **Watch the roll on the dashboard.** The `geo-db serve: U5 fold and Aura warm` Grafana dashboard
+  (`monitoring/k8s/v2/geodb-serve-dashboard.yaml`) has a post-roll row: store fenced, `sts/geodb` ready replicas and serve
+  restarts, wire refusals by reason, Aura warm jobs. After the serve step: fenced 0, ready 1, restarts +1, refusals 0.
+
+The Job (a template: set `NEW`, `FROM_REV`, `TO_REV`, the log name and the PVC size check; the image tag must exist in the
+registry and carry `/usr/local/bin/geodb-migrate`). It checks the source revision, refuses to start over a leftover
+`store-rev$FROM_REV`, migrates into `store-rev$TO_REV`, checks the `DONE` line against the Space count and the new FORMAT,
+and swaps only then. Add `--threaded --jobs 4` as in §8d if the run should be shorter; `--jobs 8` hit a retry assert.
+
+```bash
+K(){ kubectl --context do-nyc2-geo-testnet-k8s -n gaia "$@"; }
+NEW=9fb1312796 FROM_REV=9 TO_REV=10
+K get pvc data-geodb-0 -o jsonpath='{.status.capacity.storage}{"\n"}'     # 99Gi on 11-25; df it: free >= the store's size
+cat <<YAML | K apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata: {name: geodb-migrate-rev$TO_REV, namespace: gaia}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001}
+      imagePullSecrets: [{name: geo}]
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: data-geodb-0}}
+        - {name: serve-config, configMap: {name: geodb-serve-config}}
+        - {name: store-secret, secret: {secretName: geodb-store-secret, defaultMode: 0440}}
+      containers:
+        - name: migrate
+          image: registry.digitalocean.com/geo/geodb:$NEW
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cd /data
+              [ ! -e store-rev$FROM_REV ] || { echo "store-rev$FROM_REV exists: an earlier attempt was not cleaned up"; exit 1; }
+              grep -q '^persistent $FROM_REV ' store/FORMAT
+              rm -rf store-rev$TO_REV
+              geodb-migrate --from /data/store --to /data/store-rev$TO_REV \\
+                --secret-file /etc/geodb/store-secret/secret.hex --config /etc/geodb/serve.cfg > migrate-rev$TO_REV.log 2>&1 \\
+                || { tail -n 5 migrate-rev$TO_REV.log; exit 1; }
+              tail -n 2 migrate-rev$TO_REV.log
+              n=\$(ls store/ops | wc -l)
+              grep -q "^DONE migrate spaces=\$((n)) " migrate-rev$TO_REV.log
+              grep -q '^persistent $TO_REV ' store-rev$TO_REV/FORMAT
+              mv store store-rev$FROM_REV && mv store-rev$TO_REV store
+              echo swapped
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: serve-config, mountPath: /etc/geodb/serve.cfg, subPath: serve.cfg, readOnly: true}
+            - {name: store-secret, mountPath: /etc/geodb/store-secret, readOnly: true}
+          resources:
+            requests: {memory: 5Gi, cpu: "500m"}   # the serve's figures (geodb.yaml); a 2Gi limit is refused
+            limits: {memory: 7Gi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+YAML
+K wait --for=condition=complete job/geodb-migrate-rev$TO_REV --timeout=9h
+K logs job/geodb-migrate-rev$TO_REV      # DONE migrate spaces=<n> versions=<m>, then "swapped"
+```
+
+Rollback and cleanup are §8d steps 6 and 7 with the revision numbers swapped: keep `store-rev9` and `premigrate-rev10-*` for
+a day, clients back to the old image first, then swap `store-rev9` back and redeploy serve; a typed `Unsupported` or
+`DefiniteRefusal` leaves `store` at revision 9 and creates no swap.
+
 ## 9. Snapshots: the only recovery source
 
 geo-db has no replica, and a rebuild is not a recovery path. `testnet.knowledge.edits` keeps 7 days
