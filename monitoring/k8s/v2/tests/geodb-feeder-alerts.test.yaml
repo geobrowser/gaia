@@ -90,3 +90,128 @@ tests:
                 kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
                 is a card that can differ in shadow mode.
       - {eval_time: 70m, alertname: GeoDbFeederDeadLetters, exp_alerts: []}
+
+  - name: stalled behind ready serve fires at 15m for boundary and recovers when advancing
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", partition="0"}'
+        values: '10x25 0x20'
+      - series: 'geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb-feeder"}'
+        values: '1000x20 1000+60x25'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x45'
+    alert_rule_test:
+      - {eval_time: 14m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+      - eval_time: 15m
+        alertname: GeoDbFeederStalledBehindReadyServe
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: The geo-db feeder is stalled or erroring while sts/geodb is Ready
+              description: >-
+                sts/geodb reports Ready 1/1, but geodb-feeder has either stopped advancing with edits lag waiting
+                or sustained write retries, dead letters, or checkpoint put failures for more than 15m. After a
+                serve roll, this catches a feeder wedged on a refused write or checkpoint loop while staying silent
+                when sts/geodb is scaled to 0/0 for a planned migrate. Inspect kubectl -n gaia logs deploy/geodb-feeder
+                and /data/feeder/errors.jsonl.
+      - {eval_time: 22m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+
+  - name: stalled and erroring feeder stays silent while sts/geodb is 0/0 during a planned migrate
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", partition="0"}'
+        values: '25x40'
+      - series: 'geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb-feeder"}'
+        values: '1000x40'
+      - series: 'geodb_feeder_chunks_total{namespace="gaia", job="geodb-feeder", result="retry"}'
+        values: '0+5x40'
+      - series: 'geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder", kind="intent"}'
+        values: '0+2x40'
+      - series: 'geodb_feeder_applied_block_puts_total{namespace="gaia", job="geodb-feeder", result="failed"}'
+        values: '0+1x40'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '0x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+
+  - name: quiet topic or actively catching-up feeder behind ready serve stays silent
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder", partition="0"}'
+        values: '0x20 50x25'
+      - series: 'geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb-feeder"}'
+        values: '1000x20 1000+60x25'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x45'
+    alert_rule_test:
+      - {eval_time: 19m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+      - {eval_time: 40m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+
+  - name: refused-write retry loop behind ready serve fires after 15m and recovers
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_chunks_total{namespace="gaia", job="geodb-feeder", result="retry"}'
+        values: '0x5 0+5x20 100x30'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x55'
+    alert_rule_test:
+      - {eval_time: 21m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+      - eval_time: 22m
+        alertname: GeoDbFeederStalledBehindReadyServe
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: The geo-db feeder is stalled or erroring while sts/geodb is Ready
+              description: >-
+                sts/geodb reports Ready 1/1, but geodb-feeder has either stopped advancing with edits lag waiting
+                or sustained write retries, dead letters, or checkpoint put failures for more than 15m. After a
+                serve roll, this catches a feeder wedged on a refused write or checkpoint loop while staying silent
+                when sts/geodb is scaled to 0/0 for a planned migrate. Inspect kubectl -n gaia logs deploy/geodb-feeder
+                and /data/feeder/errors.jsonl.
+      - {eval_time: 45m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+
+  - name: sustained dead letters behind ready serve fire after 15m and recover
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder", kind="intent"}'
+        values: '0x5 0+2x20 40x30'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x55'
+    alert_rule_test:
+      - {eval_time: 21m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+      - eval_time: 22m
+        alertname: GeoDbFeederStalledBehindReadyServe
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: The geo-db feeder is stalled or erroring while sts/geodb is Ready
+              description: >-
+                sts/geodb reports Ready 1/1, but geodb-feeder has either stopped advancing with edits lag waiting
+                or sustained write retries, dead letters, or checkpoint put failures for more than 15m. After a
+                serve roll, this catches a feeder wedged on a refused write or checkpoint loop while staying silent
+                when sts/geodb is scaled to 0/0 for a planned migrate. Inspect kubectl -n gaia logs deploy/geodb-feeder
+                and /data/feeder/errors.jsonl.
+      - {eval_time: 45m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+
+  - name: sustained checkpoint put failures behind ready serve fire after 15m and recover
+    interval: 1m
+    input_series:
+      - series: 'geodb_feeder_applied_block_puts_total{namespace="gaia", job="geodb-feeder", result="failed"}'
+        values: '0x5 0+1x20 20x30'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}'
+        values: '1x55'
+    alert_rule_test:
+      - {eval_time: 21m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
+      - eval_time: 22m
+        alertname: GeoDbFeederStalledBehindReadyServe
+        exp_alerts:
+          - exp_labels: {severity: warning, service: geodb-feeder, namespace: gaia}
+            exp_annotations:
+              summary: The geo-db feeder is stalled or erroring while sts/geodb is Ready
+              description: >-
+                sts/geodb reports Ready 1/1, but geodb-feeder has either stopped advancing with edits lag waiting
+                or sustained write retries, dead letters, or checkpoint put failures for more than 15m. After a
+                serve roll, this catches a feeder wedged on a refused write or checkpoint loop while staying silent
+                when sts/geodb is scaled to 0/0 for a planned migrate. Inspect kubectl -n gaia logs deploy/geodb-feeder
+                and /data/feeder/errors.jsonl.
+      - {eval_time: 45m, alertname: GeoDbFeederStalledBehindReadyServe, exp_alerts: []}
