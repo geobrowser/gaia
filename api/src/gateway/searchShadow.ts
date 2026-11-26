@@ -99,6 +99,8 @@ export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	 */
 	excludeTypes?: boolean
 	readCards?: GeoDbCardClient["readCards"]
+	/** Timeout in ms of an every-Space type-filter card read, in place of the pool's (`GEODB_EVERY_SPACE_TIMEOUT_MS`). */
+	everySpaceTimeoutMs?: number
 }
 
 /** Type ids Postgres's search leaves out, in geo-db's id space. */
@@ -115,12 +117,19 @@ export async function withoutExcludedTypes(
 	geoSpaceIds: string[],
 	hits: string[],
 	limit: number,
+	everySpaceTimeoutMs?: number,
 ): Promise<string[]> {
 	// Nothing to read: readCards refuses an empty id list (bad_request), which would abort an empty answer's comparison.
 	if (hits.length === 0) return []
 	// Past one line's Spaces the search ran in every Space, so the cards are read in the `every_space` scope (one read,
 	// not two lines holding two claims: geo-db DR-177-583).
-	const answer = await readCards({geoSpaceIds: scopeOfSpaces(geoSpaceIds), entityIds: hits, property: TYPES_PROPERTY})
+	const scope = scopeOfSpaces(geoSpaceIds)
+	const answer = await readCards({
+		geoSpaceIds: scope,
+		entityIds: hits,
+		property: TYPES_PROPERTY,
+		...(scope === "every" && everySpaceTimeoutMs ? {timeoutMs: everySpaceTimeoutMs} : {}),
+	})
 	const excluded = new Set<string>()
 	for (const row of answer)
 		if (row.prop === TYPES_PROPERTY && row.entity !== undefined && EXCLUDED_TYPES.has(row.raw))
@@ -360,14 +369,20 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 			}
 			if (typeFilter && deps.readCards) {
 				try {
-					geodb = await withoutExcludedTypes(deps.readCards, searched, geodb, GEODB_LIMIT)
+					geodb = await withoutExcludedTypes(
+						deps.readCards,
+						searched,
+						geodb,
+						GEODB_LIMIT,
+						deps.everySpaceTimeoutMs,
+					)
 					recordTypeFilter(field, "applied")
 				} catch (error) {
 					const unavailable = error instanceof GeoDbError && error.reason === "bad_request"
 					recordTypeFilter(field, unavailable ? "unavailable" : "error")
 					deps.log.warn(`${label} type filter read failed`, {
 						reason: error instanceof GeoDbError ? error.reason : "error",
-						message: String(error),
+						error: String(error),
 					})
 					return
 				}

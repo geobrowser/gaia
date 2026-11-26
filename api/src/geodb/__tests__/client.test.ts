@@ -805,6 +805,30 @@ lines((line) => {
 			await expect(client.readCards?.(args)).rejects.toMatchObject({reason: "bad_request"})
 		expect(starts()).toBe(0)
 	})
+
+	it("gives a batch card read its own timeout in place of the pool's", async () => {
+		const script = `
+process.stdout.write("ready\\n")
+lines((line) => {
+	const ids = [...line.split("\\t")[1].matchAll(/"([0-9a-f]{32})"/g)].map((m) => m[1])
+	setTimeout(() => frame("+", ids.map((id) => ["${PROP}", "slow", "${SPACE}:stmt", id, "1"].join("\\t")).join("\\n") + "\\n"), 600)
+})
+`
+		const slow = fakePipe(script, {timeoutMs: 300, poolSize: 1})
+		await expect(slow.client.readCards?.({geoSpaceIds: "every", entityIds: [ENTITY]})).rejects.toMatchObject({
+			reason: "timeout",
+			message: expect.stringContaining("300 ms"),
+		})
+		slow.client.close()
+		const own = fakePipe(script, {timeoutMs: 300, poolSize: 1})
+		const rows = await own.client.readCards?.({
+			geoSpaceIds: "every",
+			entityIds: [ENTITY],
+			timeoutMs: 2500,
+		})
+		expect(rows).toHaveLength(1)
+		own.client.close()
+	})
 })
 
 describe("createPipeGeoDbClient, the Spaces holding an entity", () => {

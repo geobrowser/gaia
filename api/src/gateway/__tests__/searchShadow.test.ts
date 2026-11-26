@@ -584,6 +584,18 @@ describe("type exclusion", () => {
 		expect(readCards.mock.calls.map(([a]) => a.geoSpaceIds)).toEqual([spaces])
 	})
 
+	it("passes timeoutMs to readCards only for an every_space read", async () => {
+		const manySpaces = Array.from({length: 1580}, (_, i) => i.toString(16).padStart(32, "0"))
+		const readCards = vi.fn(
+			async (_: {geoSpaceIds: string[] | "every"; entityIds: string[]; timeoutMs?: number}) => [],
+		)
+		await withoutExcludedTypes(readCards, manySpaces, [geo(ids(1)[0] as string)], 20, 1500)
+		expect(readCards).toHaveBeenLastCalledWith(expect.objectContaining({geoSpaceIds: "every", timeoutMs: 1500}))
+
+		await withoutExcludedTypes(readCards, [GEO_SPACE], [geo(ids(1)[0] as string)], 20, 1500)
+		expect(readCards.mock.calls[1]?.[0]).not.toHaveProperty("timeoutMs")
+	})
+
 	function setupFilter(
 		readCards: (() => Promise<never[] | {prop: string; raw: string; entity: string}[]>) | undefined,
 	) {
@@ -620,7 +632,35 @@ describe("type exclusion", () => {
 		expect(typeMetric()["field=search,result=error"]).toBe(1)
 		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
 		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({})
-		expect(log.warn).toHaveBeenCalled()
+		expect(log.warn).toHaveBeenCalledWith(
+			expect.stringContaining("type filter read failed"),
+			expect.objectContaining({reason: "timeout", error: expect.stringContaining("slow")}),
+		)
+		expect(log.warn.mock.calls[0]?.[1]).not.toHaveProperty("message")
+	})
+
+	it("forwards everySpaceTimeoutMs only to an every-Space type-filter card read", async () => {
+		const manySpaces = Array.from({length: 1580}, (_, i) => i.toString(16).padStart(32, "0"))
+		const readCards = vi.fn(
+			async (_args: {geoSpaceIds: string[] | "every"; entityIds: string[]; timeoutMs?: number}) => [],
+		)
+		const shadows = createSearchShadows({
+			search: {searchLexical: vi.fn(async () => ids(4).map(geo))},
+			allGeoSpaces: async () => manySpaces,
+			geoSpaceOf: async () => GEO_SPACE,
+			log: {info: vi.fn(), warn: vi.fn()},
+			excludeTypes: true,
+			readCards,
+			everySpaceTimeoutMs: 1500,
+		})
+		await run(shadows, "search", `query S($q: String!) { search(query: $q, first: 10) { id } }`, {
+			data: {search: ids(4).map((id) => ({id}))},
+		})
+		expect(readCards).toHaveBeenLastCalledWith(expect.objectContaining({geoSpaceIds: "every", timeoutMs: 1500}))
+		await compare(shadows)
+		expect(readCards.mock.calls[1]?.[0]).toMatchObject({geoSpaceIds: [GEO_SPACE]})
+		expect(readCards.mock.calls[1]?.[0]).not.toHaveProperty("timeoutMs")
+		expect(typeMetric()["field=search,result=applied"]).toBe(2)
 	})
 
 	it("counts a refused Space list as unavailable, and a missing reader as unavailable (compares unfiltered)", async () => {
