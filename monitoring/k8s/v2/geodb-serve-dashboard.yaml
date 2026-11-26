@@ -1,5 +1,7 @@
 # Grafana dashboard for the geo-db serve's Plan 10.35 U5 counters: geodb_store_fold_refused_total,
-# geodb_aura_sync_wait_ns_total and geodb_store_aura_warm_jobs_total. Alert: ./geodb-serve-alerts.yaml (GeoDbStoreFoldRefused).
+# geodb_aura_sync_wait_ns_total and geodb_store_aura_warm_jobs_total, plus a post-roll watch row (geodb_store_fenced,
+# sts/geodb ready replicas and serve restarts from kube-state-metrics, geodb_wire_refused_total by reason; geodb/RUNBOOK.md 8e).
+# Alerts: ./geodb-serve-alerts.yaml (GeoDbStoreFoldRefused, GeoDbStoreFenced, GeoDbWireRevisionRefused).
 # Loaded by the Grafana sidecar via the grafana_dashboard label. Checked by tests/dashboard-check.sh (run.sh).
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-dashboard.yaml
 apiVersion: v1
@@ -253,6 +255,469 @@ data:
                 "mean",
                 "max"
               ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Post-roll watch: serve health after a pin or revision roll (RUNBOOK 8e)",
+          "id": 6,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 17
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Store fenced",
+          "description": "geodb_store_fenced: 1 means the store fenced and every write is refused StoreFenced until it reopens. Must be 0. Alert: GeoDbStoreFenced.",
+          "id": 7,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 18
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "max(geodb_store_fenced{namespace=\"gaia\", job=\"geodb\"}) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "open"
+                    },
+                    "1": {
+                      "text": "FENCED"
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "sts/geodb ready replicas",
+          "description": "kube_statefulset_status_replicas_ready for StatefulSet geodb. 1 in service; 0 while serve is stopped for a migrate or a roll.",
+          "id": 8,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 6,
+            "y": 18
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(kube_statefulset_status_replicas_ready{namespace=\"gaia\", statefulset=\"geodb\"}) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Serve restarts (24h)",
+          "description": "Increase of kube_pod_container_status_restarts_total for the serve container of geodb-0. One restart per planned roll is expected; a rise outside a roll is a crash loop (OOMKilled, store that will not open).",
+          "id": 9,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 12,
+            "y": 18
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"gaia\", pod=~\"geodb-[0-9]+\", container=\"serve\"}[24h])) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 3
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Wire refusals (24h)",
+          "description": "Increase of geodb_wire_refused_total, every reason. 0 after a roll: any row means a client or a frame was refused. Alerts: GeoDbWireRevisionRefused, GeoDbWireRefusedOther.",
+          "id": 10,
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 18,
+            "y": 18
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(increase(geodb_wire_refused_total{namespace=\"gaia\", job=\"geodb\"}[24h])) or vector(0)",
+              "refId": "A",
+              "instant": true
+            }
+          ],
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "none",
+            "textMode": "value"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "sts/geodb ready replicas and serve restarts",
+          "description": "Ready replicas of StatefulSet geodb (left) and the running count of serve container restarts (right). A roll shows as one dip to 0 and one restart step.",
+          "id": 11,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(kube_statefulset_status_replicas_ready{namespace=\"gaia\", statefulset=\"geodb\"})",
+              "refId": "A",
+              "legendFormat": "ready replicas"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"gaia\", pod=~\"geodb-[0-9]+\", container=\"serve\"})",
+              "refId": "B",
+              "legendFormat": "serve restarts"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Wire refusals by reason",
+          "description": "Increase of geodb_wire_refused_total per interval, by reason. During a pin roll, reason=revision is the signal that a client is ahead of or behind serve; it must stay 0.",
+          "id": 12,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum by (reason) (increase(geodb_wire_refused_total{namespace=\"gaia\", job=\"geodb\"}[$__rate_interval]))",
+              "refId": "A",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 1,
+                "fillOpacity": 40,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Store fenced over time",
+          "description": "geodb_store_fenced per serve pod. Any 1 is a fenced store; read serve's stderr line for the cause.",
+          "id": 13,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "max by (pod) (geodb_store_fenced{namespace=\"gaia\", job=\"geodb\"})",
+              "refId": "A",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Aura warm jobs (cumulative)",
+          "description": "geodb_store_aura_warm_jobs_total (the series is geodb_store_aura_warm_jobs_total, not geodb_aura_warm_jobs_total). Steps up when serve runs an Aura warm job, for example after a restart.",
+          "id": 14,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "$datasource"
+              },
+              "expr": "sum(geodb_store_aura_warm_jobs_total{namespace=\"gaia\", job=\"geodb\"})",
+              "refId": "A",
+              "legendFormat": "warm jobs"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
             },
             "tooltip": {
               "mode": "multi"
