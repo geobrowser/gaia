@@ -3,6 +3,9 @@
 #
 #   GeoDbFeederDown        no feeder series, or serve/consumer reported down, for 10m
 #   GeoDbFeederStalled     messages are waiting but none has been applied for 15m
+#   GeoDbFeederStalledBehindReadyServe
+#                          feeder stopped advancing with lag waiting or sustained retries/dead-letters/checkpoint
+#                          failures for >15m while sts/geodb reports Ready 1/1 (silent when sts/geodb is 0/0)
 #   GeoDbFeederLagHigh     more than 5000 messages behind for 30m (a first catch-up from the start of
 #                          the topic trips this once; it should clear)
 #   GeoDbFeederDeadLetters the feeder skipped a message or intent (errors.jsonl on the volume)
@@ -344,3 +347,45 @@ spec:
               /data/feeder/errors.jsonl and skipped. Read it with
               kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
               is a card that can differ in shadow mode.
+
+        - alert: GeoDbFeederStalledBehindReadyServe
+          # Catches a post-roll feeder wedged on a refused write, dead-letter spike, or checkpoint loop while
+          # sts/geodb already reports Ready 1/1. Gated on kube_statefulset_status_replicas_ready == 1 so a planned
+          # migrate window with sts/geodb scaled to 0/0 stays silent.
+          expr: |
+            (
+              (
+                sum(geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 0
+                and
+                max(changes(geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb-feeder"}[5m])) == 0
+              )
+              or
+              (
+                sum(increase(geodb_feeder_chunks_total{namespace="gaia", job="geodb-feeder", result=~"retry|pool_refused|dead_letter"}[15m])) > 0
+              )
+              or
+              (
+                sum(increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[15m])) > 0
+              )
+              or
+              (
+                sum(increase(geodb_feeder_applied_block_puts_total{namespace="gaia", job="geodb-feeder", result="failed"}[15m])) > 0
+              )
+            )
+            and
+            (
+              max(kube_statefulset_status_replicas_ready{namespace="gaia", statefulset="geodb"}) == 1
+            )
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: The geo-db feeder is stalled or erroring while sts/geodb is Ready
+            description: >-
+              sts/geodb reports Ready 1/1, but geodb-feeder has either stopped advancing with edits lag waiting
+              or sustained write retries, dead letters, or checkpoint put failures for more than 15m. After a
+              serve roll, this catches a feeder wedged on a refused write or checkpoint loop while staying silent
+              when sts/geodb is scaled to 0/0 for a planned migrate. Inspect kubectl -n gaia logs deploy/geodb-feeder
+              and /data/feeder/errors.jsonl.
